@@ -5,6 +5,7 @@ import { RelationclassInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { globalStateObject } from "@/engine/global-state-object";
 import { rayHelper } from "@/engine/ray-helper";
+import { mechanismUtility } from "@/resources/services/mechanism-utility";
 
 /**
  * Port of the old `resources/animator.ts` (the 416-line modeling animator — the
@@ -12,12 +13,12 @@ import { rayHelper } from "@/engine/ray-helper";
  * DI-stripping recipe: GlobalDefinition / GlobalStateObject / RayHelper become
  * module-singleton imports.
  *
- * Four injected collaborators from later phases are inline-stubbed with markers
- * (the plan's deferred pattern — un-stub them when those phases land):
+ * Injected collaborators from later phases are inline-stubbed with markers (the
+ * plan's deferred pattern — un-stub them when those phases land):
  *   - `instanceUtility.getTabContextSceneInstance()` (P3) — the fetched value was
  *     unused in the original loop, so it is simply dropped here.
- *   - `mechanismUtility.executeAllMechanisms()` (P3) — the `runMechanism` reset is
- *     kept so the ThreeCanvas heartbeat flag does not accumulate.
+ *   - `mechanismUtility.executeAllMechanisms()` — UN-STUBBED in P3 (mechanism-utility
+ *     now exists); runs the `mechanism` code strings each render tick.
  *   - `coordinatesUpdater.update{Coordinates2D,Rotation,Scale}OnClassAndPortInstance()`
  *     (P4) — only reachable once a scene is open (`tabContext.length > 0`), i.e.
  *     never before P7.
@@ -29,6 +30,7 @@ export class Animator {
   private globalObjectInstance = globalObject;
   private globalStateObject = globalStateObject;
   private rayHelper = rayHelper;
+  private mechanismUtility = mechanismUtility;
 
   async animate() {
     // P3: `instanceUtility.getTabContextSceneInstance()` was fetched here into a
@@ -38,7 +40,7 @@ export class Animator {
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);
       //hook to check mechanisms
       if (this.globalObjectInstance.runMechanism) {
-        // P3: await this.mechanismUtility.executeAllMechanisms();
+        await this.mechanismUtility.executeAllMechanisms();
         this.globalObjectInstance.runMechanism = false;
       }
       this.globalObjectInstance.render = false;
@@ -51,7 +53,7 @@ export class Animator {
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);
 
       if (this.globalObjectInstance.runMechanism) {
-        // P3: await this.mechanismUtility.executeAllMechanisms();
+        await this.mechanismUtility.executeAllMechanisms();
         this.globalObjectInstance.runMechanism = false;
       }
 

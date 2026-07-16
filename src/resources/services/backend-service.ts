@@ -94,17 +94,29 @@ export class BackendService {
     }
   }
 
-  /** GET /metamodel/independent_procedures -> Procedure (fetchHelper.getProcedures:4403). */
-  async getProcedures(): Promise<Procedure | undefined> {
+  /**
+   * GET /metamodel/independent_procedures -> Procedure[] (fetchHelper.getProcedures:4403).
+   *
+   * P3 FIX: the generated fetchHelper mistyped this `Promise<Procedure>`, but at
+   * runtime `processGetProcedures` does `Procedure.fromJS(parsedBody)` where the body
+   * is an ARRAY (`/independent_procedures` is plural) — so `plainToInstance` returns a
+   * `Procedure[]`. The only consumer, `procedure-utility.getGeneralProcedures`, does
+   * `Array.isArray(response).map(...)`, i.e. it expects an array. P1 ported the wrong
+   * (single) shape; corrected here to match the server + consumer. Non-array bodies
+   * yield `[]`, exactly like the old code's `Array.isArray` guard did.
+   */
+  async getProcedures(): Promise<Procedure[]> {
     try {
       const response = await apiFetch("metamodel/independent_procedures", {
         method: "GET",
         headers: authHeaders(),
       });
       if (!response.ok) throw new Error(`Failed to get procedures (${response.status})`);
-      return Procedure.fromJS(await response.json()) as Procedure;
+      const data = await response.json();
+      return Array.isArray(data) ? data.map((item) => Procedure.fromJS(item) as Procedure) : [];
     } catch (error) {
       log(`Error getting procedures: ${error}`, "error");
+      return [];
     }
   }
 
