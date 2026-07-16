@@ -2,11 +2,11 @@ import { useEffect } from "react";
 import { Box, Switch, Tooltip, Typography } from "@mui/material";
 import { globalObject } from "@/engine";
 import { logger } from "@/resources/services/logger";
+import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { useUiStore } from "@/resources/store/uiStore";
 
 // Port of `views/auto-save/auto-save.{ts,html}`. Owns the 5-second auto-save loop
-// and the auto-save toggle. Two dependencies are not ported yet and are stubbed:
-//   - persistencyHandler.persistSceneInstanceToDB() — P7 (persistency-handler).
+// and the auto-save toggle. One dependency is not ported yet and is stubbed:
 //   - sharedDocService.forTab() — P10 (collaboration). Until then there is never a
 //     shared session, so `sharedSessionForTab()` always returns null and only the
 //     non-shared branch runs (plan §9 P6: "shared-mode branch behind a collab stub
@@ -40,7 +40,7 @@ export default function AutoSave() {
           }
           if (globalObject.doSceneInstancePatchLocal && session!.access !== "read") {
             logger.log("AutoSave (shared): saving local changes", "info");
-            // P7: await persistencyHandler.persistSceneInstanceToDB();
+            await persistencyHandler.persistSceneInstanceToDB();
             globalObject.doSceneInstancePatchLocal = false;
           } else if (globalObject.doSceneInstancePatchLocal && session!.access === "read") {
             window.alert("You don't have enough authorization to edit this scene instance.");
@@ -50,7 +50,7 @@ export default function AutoSave() {
           // Non-shared: save when auto-save is on and a local patch is pending.
           if (globalObject.autoSave && globalObject.doSceneInstancePatch) {
             logger.log("AutoSave: " + globalObject.autoSave, "info");
-            // P7: await persistencyHandler.persistSceneInstanceToDB();
+            await persistencyHandler.persistSceneInstanceToDB();
             globalObject.doSceneInstancePatch = false;
           }
         }

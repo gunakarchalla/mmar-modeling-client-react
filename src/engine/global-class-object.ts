@@ -1,15 +1,20 @@
 import { UUID } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { logger } from "@/resources/services/logger";
+import { metaUtility } from "@/resources/services/meta-utility";
 
 /**
  * Port of the old `resources/global_class_object.ts` (DI-stripping recipe):
  * GlobalDefinition / Logger injections become module-singleton imports. The old
  * class also injected MetaUtility + FileUtility; FileUtility was unused and is
- * dropped. MetaUtility is only touched in `getIcon` (used by the P7 palette
- * button-groups, not before), so its single use is inline-stubbed with a `// P7`
- * marker — un-stub it when meta-utility (P3) + the palette (P7) land. Bodies are
- * otherwise unchanged.
+ * dropped. MetaUtility is used in `getIcon` (the P7 palette button-groups) to
+ * resolve a `getImageByUUID(...)`-referenced icon file from the `Files` cache.
+ * Bodies are otherwise unchanged.
+ *
+ * P7 UN-STUB: the `getImageByUUID(` branch below now reads the referenced file's
+ * data-URL from `metaUtility.Files.get(uuid)[1]`, matching the old
+ * `this.metaUtility.Files.get(...)[1]`. (The engine now imports a service — an
+ * edge that already exists via animator -> mechanism-utility; verified no cycle.)
  */
 export class GlobalClassObject {
   classUUID: UUID[];
@@ -79,10 +84,10 @@ export class GlobalClassObject {
         } else if (string.endsWith("getImageByUUID(")) {
           next = true;
         } else if (next) {
-          // P7: resolve the referenced file via metaUtility.Files.get(string)[1].
-          // meta-utility (P3) + its Files cache are not wired yet; the data-URI
-          // branch above covers the common case. Leave empty until P7.
-          map = "";
+          // Resolve the referenced file's data-URL from the meta-utility Files cache
+          // (populated by metaUtility.getFiles() before the tree is built).
+          const entry = metaUtility.Files.get(string);
+          map = entry ? entry[1] : "";
           break;
         }
       }

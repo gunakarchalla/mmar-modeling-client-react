@@ -12,6 +12,8 @@ import ThreeCanvas from "@/views/three-canvas/ThreeCanvas";
 import AppFooter from "@/views/footer/AppFooter";
 import SignInDialog from "@/views/auth/SignInDialog";
 import AppSnackbar from "@/views/common/AppSnackbar";
+import LoadingWindow from "@/views/dialogs/LoadingWindow";
+import CreateNewSceneDialog from "@/views/dialogs/CreateNewSceneDialog";
 import { useAuthStore } from "@/resources/store/authStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { eventBus } from "@/resources/services/event-bus";
@@ -105,6 +107,10 @@ export default function AppLayout() {
       {/* Non-dismissable sign-in dialog: opens whenever nobody is authenticated. */}
       <SignInDialog open={!currentUser} onClose={() => undefined} />
       <AppSnackbar />
+
+      {/* P7 dialogs: loading window (driven by uiStore.loading) + create-new-scene. */}
+      <LoadingWindow />
+      <CreateNewSceneDialog />
     </Box>
   );
 }

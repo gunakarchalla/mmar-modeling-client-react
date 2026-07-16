@@ -1,0 +1,463 @@
+import * as THREE from "three";
+import { Class, Relationclass, SceneInstance } from "@gds";
+import { globalObject } from "@/engine/global-definition";
+import { globalStateObject } from "@/engine/global-state-object";
+import { GraphicContext, graphicContext } from "@/engine/graphic-context";
+import { metaUtility } from "./meta-utility";
+import { instanceUtility } from "./instance-utility";
+import { snapshotService } from "./snapshot-service";
+import { backendService } from "./backend-service";
+import { eventBus } from "./event-bus";
+import { logger } from "./logger";
+
+/**
+ * Port of the old modeling `resources/persistency_handler.ts` (plan §10: ★
+ * modeling-unique — the metamodeling twin has no equivalent). DI stripped: every
+ * injection becomes a module-singleton import.
+ *
+ * DROPPED INJECTIONS (unused in the source, same treatment as P5's handlers):
+ *   - `instanceCreationHandler` — only appeared in the ctor, never called.
+ *   - `expression` (ExpressionUtility) — only fed into the per-port
+ *     `new GraphicContext(...)`, whose ctor is no-arg in this repo.
+ * The per-port GraphicContext is therefore built with the no-arg `new
+ * GraphicContext()` (all its deps are module singletons on the class), exactly as
+ * P5's interaction-handler does.
+ *
+ * This is a SERVICE (resources/services), not an engine singleton, so it is NOT
+ * registered in engine/index.ts. It is evaluated the first time a consumer (SceneGroup,
+ * CreateNewSceneDialog, AutoSave) imports `persistencyHandler`; that import is what
+ * registers the two remote-add subscriptions in the constructor (dormant until P10
+ * publishes those channels).
+ *
+ * gds revival rule (P3): all responses come back already revived via `X.fromJS` from
+ * backendService — never re-run the app's `plainToInstance` here.
+ */
+export class PersistencyHandler {
+  private globalObjectInstance = globalObject;
+  private globalStateObject = globalStateObject;
+  private gc = graphicContext;
+  private metaUtility = metaUtility;
+  private instanceUtility = instanceUtility;
+  private snapshotService = snapshotService;
+  private logger = logger;
+  private eventAggregator = eventBus;
+
+  constructor() {
+    // When a remote peer adds a class instance, render it in the local Three.js scene.
+    // (P10 channel — dormant until shared-doc-service publishes it.) Non-async wrapper
+    // per plan §3.1: the bus never awaits handlers.
+    this.eventAggregator.subscribe("remoteClassInstanceAdded", ({ tabIndex }) => {
+      const savedTab = this.globalObjectInstance.selectedTab;
+      this.globalObjectInstance.selectedTab = tabIndex;
+      void this.checkIfClassinstanceInScene()
+        .catch((err) => this.logger.log(`remoteClassInstanceAdded failed: ${err}`, "error"))
+        .finally(() => {
+          this.globalObjectInstance.selectedTab = savedTab;
+        });
+    });
+
+    // When a remote peer adds a relation class instance, render it in the local scene.
+    this.eventAggregator.subscribe("remoteRelationInstanceAdded", ({ tabIndex }) => {
+      const savedTab = this.globalObjectInstance.selectedTab;
+      this.globalObjectInstance.selectedTab = tabIndex;
+      void this.checkIfRelationclassinstanceInScene()
+        .catch((err) => this.logger.log(`remoteRelationInstanceAdded failed: ${err}`, "error"))
+        .finally(() => {
+          this.globalObjectInstance.selectedTab = savedTab;
+        });
+    });
+  }
+
+  async checkIfClassinstanceInScene() {
+    //get scene of tabContext
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) return;
+
+    for (const class_instance of sceneInstance.class_instances) {
+      const drag_object_uuids: string[] = [];
+      //create array with only uuids of all dragObjects (classes only)
+      for (const object of this.globalObjectInstance.dragObjects) {
+        drag_object_uuids.push(object.uuid);
+      }
+
+      //true if already in drag_objects, false if not
+      const found_object_in_dragObjects = drag_object_uuids.includes(class_instance.uuid);
+
+      //if already in scene do nothing, else call everything to draw visualization
+      if (found_object_in_dragObjects) {
+        this.logger.log("object already in scene: " + class_instance.uuid, "info");
+      } else {
+        //point to insert object
+        const point = new THREE.Vector3(
+          class_instance.coordinates_2d.x,
+          class_instance.coordinates_2d.y,
+          class_instance.coordinates_2d.z,
+        );
+        let classObject3D: THREE.Mesh | undefined;
+
+        // Prefer URDF-provided mesh if present; fall back to metamodel vizRep otherwise.
+        // `urdfVizRep` is populated by the P12 robotics algorithms; undefined until then.
+        const customVizRep = (class_instance as any).urdfVizRep as
+          | { format: string; data: string | ArrayBuffer; scale?: number[] }
+          | undefined;
+
+        if (customVizRep) {
+          await this.gc.resetInstance();
+          this.globalObjectInstance.current_class_instance = class_instance;
+          this.gc.current_instance_object = class_instance;
+
+          if (customVizRep.format === "stl") {
+            await this.gc.graphic_stl(customVizRep.data as ArrayBuffer, customVizRep.scale);
+          } else {
+            await this.gc.graphic_gltf(customVizRep.data, 0, 0, 0, customVizRep.scale);
+          }
+
+          // we call the function for drawing the information in the gc
+          classObject3D = await this.gc.drawVizRep(point, class_instance);
+          this.globalObjectInstance.render = true;
+          await this.gc.resetInstance();
+        }
+
+        if (!classObject3D) {
+          //get parent metaClass of the instance from the metamodel
+          const meta_class: Class | undefined = await this.metaUtility.getMetaClass(
+            class_instance.uuid_class,
+          );
+          //parse metafunction
+          const metaFunction = await this.metaUtility.parseMetaFunction(
+            meta_class!.geometry as unknown as string,
+          );
+
+          //reset this.gc instance
+          this.gc.resetInstance();
+          //set this.globalObjectInstance.current_class_instance (we need this in other functions)
+          this.globalObjectInstance.current_class_instance = class_instance;
+          this.gc.current_instance_object = class_instance;
+
+          //we set the metafunction to the "geometry" property of the class_instance
+          await this.gc.runVizRepFunction(metaFunction);
+          classObject3D = await this.gc.drawVizRep(point, class_instance);
+          this.globalObjectInstance.render = true;
+          this.gc.resetInstance();
+        }
+
+        if (!classObject3D) {
+          continue;
+        }
+
+        //------------------------------------
+        //for each port_instance of the class_instance we create a port_object
+        for (const port_instance of class_instance.port_instance) {
+          //set current port_instance in global object
+          this.globalObjectInstance.current_port_instance = port_instance;
+
+          //store position from port_instance
+          const oldPosition = new THREE.Vector3(
+            port_instance.coordinates_2d.x,
+            port_instance.coordinates_2d.y,
+            port_instance.coordinates_2d.z,
+          );
+
+          const newGC = new GraphicContext();
+
+          //we define the geometry of the port_object
+          const metaPort = await this.metaUtility.getMetaPort(port_instance.uuid_port);
+          const geometry_string = metaPort!.geometry;
+          //parse the string function from the metamodel to a js function
+          const metaFunctionPort = await this.metaUtility.parseMetaFunction(
+            geometry_string.toString(),
+          );
+
+          //reset gc instance
+          await newGC.resetInstance();
+
+          //we call the function that is stored in the metamodel
+          await newGC.runVizRepFunction(metaFunctionPort);
+          // we call the function for drawing the information in the newGC
+          const portObject3D = await newGC.drawVizRepPort(new THREE.Vector3(0, 0, 0), port_instance);
+          //we add the portObject to the classObject
+          newGC.attachPort(portObject3D, classObject3D);
+
+          //we set the position of the portObject according to the stored position in the port_instance
+          portObject3D.position.set(oldPosition.x, oldPosition.y, oldPosition.z);
+
+          //reset current_port_instance
+          this.globalObjectInstance.current_port_instance = undefined as any;
+          this.globalObjectInstance.render = true;
+        }
+      }
+    }
+  }
+
+  async checkIfRelationclassinstanceInScene() {
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) return;
+
+    for (const relationclass_instance of sceneInstance.relationclasses_instances) {
+      this.logger.log("we check the relationclass_instance: " + relationclass_instance.uuid, "info");
+
+      // Skip if this relation class instance is already rendered in the scene
+      if (this.globalObjectInstance.dragObjects.some((o) => o.uuid === relationclass_instance.uuid)) {
+        this.logger.log(
+          "relationclass_instance already in scene: " + relationclass_instance.uuid,
+          "info",
+        );
+        continue;
+      }
+
+      const metaclass: Relationclass | undefined = await this.metaUtility.getMetaRelationclass(
+        relationclass_instance.uuid_class,
+      );
+      const linePoints: object[] = relationclass_instance.line_points;
+
+      this.gc.current_instance_object = relationclass_instance;
+      this.globalObjectInstance.current_class_instance = relationclass_instance;
+
+      const metaFunction = await this.metaUtility.parseMetaFunction(
+        metaclass!.geometry as unknown as string,
+      );
+
+      //we call the function that is stored in the metamodel
+      await this.gc.runVizRepFunction(metaFunction);
+      // we call the function for drawing the information in the gc
+      await this.gc.drawVizRep_rel();
+      this.globalObjectInstance.render = true;
+
+      //also set the uuid for old uuid for the children
+      //otherwise there is an error in the animationloop of the line
+      // (activeStateLine is a Line2; dragObjects is typed Mesh[] — the old client
+      // pushed the line here too, so cast to keep the faithful behaviour.)
+      const line = this.globalStateObject.activeStateLine!;
+      line.uuid = relationclass_instance.uuid;
+      for (const child of line.children) {
+        child.uuid = relationclass_instance.uuid;
+      }
+
+      this.globalObjectInstance.scene.add(line);
+
+      //push each linepoint to the relObj
+      for (const element of linePoints) {
+        const object = this.globalObjectInstance.dragObjects.find(
+          (object) => object.uuid == (element as any)["UUID"],
+        );
+        line.userData.relObj.push(object);
+      }
+      this.globalObjectInstance.dragObjects.unshift(line as unknown as THREE.Mesh);
+    }
+
+    this.globalStateObject.activeStateLine = undefined as any;
+  }
+
+  async mapClassInstancetoClass() {
+    //get sceneInstance from TabContext
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) return;
+    const allPortInstances = await this.instanceUtility.getAllPortInstancesOfTabContext();
+
+    for (const class_instance of sceneInstance.class_instances) {
+      //-------------------------------------------------------------
+      //clean instantiation of attribute_instance in array of class
+      const attribute_instances = class_instance.attribute_instance;
+      for (const attribute_instance of attribute_instances) {
+        this.globalObjectInstance.attribute_instances.push(attribute_instance);
+      }
+
+      // push the attribute_instances of all port_instances which are attached to the class_instance
+      for (const port_instance of class_instance.port_instance) {
+        const port_attribute_instances = port_instance.attribute_instances;
+        for (const attribute_instance of port_attribute_instances) {
+          this.globalObjectInstance.attribute_instances.push(attribute_instance);
+        }
+
+        //push the port_instance to the global array
+        allPortInstances.push(port_instance);
+      }
+    }
+  }
+
+  async mapRelationclassInstancetoClass() {
+    //get sceneInstance from TabContext
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) return;
+    for (const relationclass_instance of sceneInstance.relationclasses_instances) {
+      //clean instantiation of attribute_instance in array of relationclass
+      const attribute_instances = relationclass_instance.attribute_instance;
+      for (const attribute_instance of attribute_instances) {
+        this.globalObjectInstance.attribute_instances.push(attribute_instance);
+      }
+
+      // push roles to global array
+      this.globalObjectInstance.role_instances.push(relationclass_instance.role_instance_from);
+      this.globalObjectInstance.role_instances.push(relationclass_instance.role_instance_to);
+    }
+  }
+
+  async classifyRoleInstance() {
+    //get sceneInstance from TabContext
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) return;
+    for (const role_instance of sceneInstance.role_instances) {
+      // add role instance to global object array role_instances[]
+      this.globalObjectInstance.role_instances.push(role_instance);
+    }
+  }
+
+  async classifyPortInstance() {
+    //get sceneInstance from TabContext
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) return;
+    for (const port_instance of sceneInstance.port_instances) {
+      this.globalObjectInstance.scene.traverse(async (object3d: THREE.Object3D) => {
+        if (object3d.uuid == port_instance.uuid) {
+          await this.gc.setScale(object3d, port_instance);
+        }
+      });
+    }
+  }
+
+  async mapAttributeInstancetoClass() {
+    //get sceneInstance from TabContext
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) return;
+    for (const attribute_instance of sceneInstance.attribute_instances) {
+      this.globalObjectInstance.attribute_instances.push(attribute_instance);
+    }
+  }
+
+  async persistSceneInstanceToDB() {
+    //get sceneInstance from TabContext
+    const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (!sceneInstance) {
+      this.logger.log("No active scene instance found to persist.", "error");
+      return;
+    }
+
+    //check first if post or patch
+    //get SceneType of the sceneInstance
+    const sceneType = await this.metaUtility.getTabContextSceneType();
+    if (sceneType) {
+      try {
+        await backendService.sceneInstancesPATCH(sceneInstance.uuid, sceneInstance);
+        this.snapshotService.setSceneInstanceSnapshot(sceneInstance);
+        this.logger.log("SceneInstance patched", "info");
+      } catch (error) {
+        const patchError = error as any;
+        const statusCode = Number(patchError?.status);
+        this.logger.log(
+          `SceneInstance patch failed: ${patchError?.message || JSON.stringify(patchError)}`,
+          "error",
+        );
+
+        // Continue with POST only when PATCH failed because the scene is not there yet.
+        if (statusCode === 404) {
+          this.logger.log(
+            "PATCH failed with status 404. Scene instance not found. Trying to post instead.",
+            "info",
+          );
+          try {
+            await backendService.sceneInstancesPOST(sceneType.uuid, sceneInstance);
+            this.snapshotService.setSceneInstanceSnapshot(sceneInstance);
+            this.logger.log("SceneInstance posted", "info");
+          } catch (postError) {
+            const scenePostError = postError as any;
+            this.logger.log(
+              `SceneInstance post failed: ${scenePostError?.message || JSON.stringify(scenePostError)}`,
+              "error",
+            );
+          }
+          return;
+        }
+
+        if (statusCode === 403) {
+          window.alert("You don't have enough authorization to edit this scene instance.");
+          this.snapshotService.restoreSceneInstanceToCurrentTab();
+          await this.importInstances();
+          return;
+        }
+
+        this.logger.log(
+          `SceneInstance patch failed with status ${statusCode}. POST fallback skipped.`,
+          "error",
+        );
+      }
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async loadPersistedModel(modelToLoad: SceneInstance) {
+    await this.importInstances();
+  }
+
+  //function to import stored instances to the model
+  async importInstances() {
+    //map class_instances to class_pattern and push to globalObjectInstance.attribute_instances
+    await this.mapClassInstancetoClass();
+    await this.gc.resetInstance();
+
+    //map relationclass_instances
+    await this.mapRelationclassInstancetoClass();
+    await this.gc.resetInstance();
+
+    //map attribute_instances
+    await this.mapAttributeInstancetoClass();
+    await this.gc.resetInstance();
+
+    //for each class instance check if already in scene
+    await this.checkIfClassinstanceInScene();
+    await this.gc.resetInstance();
+
+    //for each relationclass instance check if already in scene
+    await this.checkIfRelationclassinstanceInScene();
+    await this.gc.resetInstance();
+
+    //classify role_instances
+    await this.classifyRoleInstance();
+    await this.gc.resetInstance();
+
+    //classify port instances
+    await this.classifyPortInstance();
+    await this.gc.resetInstance();
+  }
+
+  //function to save the model to a textfile
+  async saveToTextfile() {
+    this.logger.log("save", "info");
+    if (this.globalObjectInstance.tabContext.length > 0) {
+      const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+      const blob = new Blob([JSON.stringify(sceneInstance)], {
+        type: "text/plain;charset=utf-8",
+      });
+      const url = window.URL.createObjectURL(blob);
+
+      this.downloadURL(url, sceneInstance!.name + ".json");
+    }
+  }
+
+  async saveAllOpenModelInstancesToTextfile() {
+    this.logger.log("save", "info");
+    if (this.globalObjectInstance.tabContext.length > 0) {
+      const sceneInstances = await this.instanceUtility.getAllOpenSceneInstances();
+      const json: Record<string, SceneInstance> = {};
+      for (const sceneInstance of sceneInstances) {
+        json[sceneInstance.uuid] = sceneInstance;
+      }
+      const blob = new Blob([JSON.stringify(json)], { type: "json/plain;charset=utf-8" });
+      const url = window.URL.createObjectURL(blob);
+
+      this.downloadURL(url, "allOpenModels.json");
+    }
+  }
+
+  downloadURL(url: string, fileName: string) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+}
+
+// Module singleton (replaces the Aurelia @singleton() DI registration).
+export const persistencyHandler = new PersistencyHandler();
