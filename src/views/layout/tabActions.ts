@@ -1,0 +1,93 @@
+import * as THREE from "three";
+import {
+  engine,
+  globalObject,
+  globalSelectedObject,
+  globalClassObject,
+  globalRelationclassObject,
+  sceneInitiator,
+} from "@/engine";
+import { eventBus } from "@/resources/services/event-bus";
+import { logger } from "@/resources/services/logger";
+import { useTabsStore } from "@/resources/store/tabsStore";
+
+/**
+ * Tab select/close operations — the "single mutation path" for tab *selection* and
+ * *closing* (opening lives in instance-utility.createTabContextSceneInstance, P3).
+ * Ported from `views/main-body-tab-bar/main-body-tab-bar.ts` (clickedTab / closeTab).
+ * Each operation mutates BOTH `globalObject.tabContext`/`selectedTab` (the engine)
+ * and the reactive `tabsStore`, keeping the two in lockstep.
+ *
+ * The old `closeTab` always jumped selection to `index-1`/`0`. Here the store's
+ * `closeTab` owns the selection-clamp rules (which preserve the current selection
+ * where possible — the P1 improvement); the engine is then reconciled to whatever
+ * index the store settled on, so the two never drift.
+ *
+ * The engine work (scene swap, transform controls) is only valid after the canvas
+ * has mounted; every operation is a no-op on the engine side until then (tabs can
+ * only exist post-mount anyway), but the store side always runs.
+ */
+
+// Engine half of clickedTab: swap the active THREE.Scene to the tab's scene and
+// re-add the shared helpers (mousePointer3d, transformControls, intersection plane).
+// No store write — callers decide when to update tabsStore.
+async function applyEngineTabSelection(index: number): Promise<void> {
+  // Remove the selection box helper from the previously-active scene.
+  globalSelectedObject.removeObject();
+  globalObject.selectedTab = index;
+  eventBus.publish("tabChanged");
+
+  if (!engine.isInitialized) return;
+  const tab = globalObject.tabContext[index];
+  if (!tab) return;
+
+  const threeScene = tab.threeScene;
+  globalObject.scene = threeScene;
+  logger.log(`Current Tab ${index}: name: ${tab.sceneInstance.name}`, "info");
+
+  globalClassObject.initClasses();
+  globalRelationclassObject.initRelationClasses();
+
+  globalObject.dragObjects = tab.contextDragObjects;
+  globalObject.scene.add(globalObject.mousePointer3d);
+  await sceneInitiator.initTransformControls();
+  globalObject.scene.add(globalObject.plane);
+}
+
+/** Activate the tab at `index` (clickedTab): engine scene swap + store selection. */
+export async function switchToTab(index: number): Promise<void> {
+  await applyEngineTabSelection(index);
+  useTabsStore.getState().selectTab(index);
+}
+
+/** Close the tab at `index` (closeTab): tear down the engine tab, reconcile selection. */
+export async function closeTab(index: number): Promise<void> {
+  const tabContext = globalObject.tabContext;
+  if (index < 0 || index >= Math.max(tabContext.length, useTabsStore.getState().tabs.length)) {
+    return;
+  }
+
+  // P10: tear down any shared session for this tab before removing it
+  // (remoteCursorRenderer.clearForTab / remoteSelectionRenderer.clearForTab /
+  // sharedDocService.detach). No shared sessions exist until collaboration lands.
+
+  // Remove the tab from the engine's tabContext (same position the store removes).
+  if (index < tabContext.length) tabContext.splice(index, 1);
+
+  // Let the store apply its selection-clamp rules, then read the resulting index.
+  useTabsStore.getState().closeTab(index);
+  const newSelected = useTabsStore.getState().selectedTab;
+
+  if (newSelected < 0) {
+    // No tabs left: reset the engine to an empty scene (mirrors closeTab's else).
+    globalObject.selectedTab = -1;
+    globalObject.scene = new THREE.Scene();
+    globalObject.dragObjects = [];
+    eventBus.publish("tabChanged");
+    return;
+  }
+
+  // Reconcile the engine to the store's chosen selection.
+  await applyEngineTabSelection(newSelected);
+  logger.log("close tab", "info");
+}
