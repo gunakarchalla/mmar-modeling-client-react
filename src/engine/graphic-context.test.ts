@@ -1,0 +1,170 @@
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as THREE from "three";
+import { Text } from "troika-three-text";
+import { ClassInstance } from "@gds";
+
+/**
+ * P4 headless vizRep-evaluation tests (plan §9 P4 "Verify").
+ *
+ * `@/engine/global-definition` is mocked with a plain mutable fake (the P3 test
+ * pattern): importing the real one constructs a WebGLRenderer + OrbitControls at
+ * module scope, which needs a real GPU context. Everything else is REAL — a real
+ * THREE.Scene, real geometries, the real `new Function(...)` vizRep eval through
+ * metaUtility.parseMetaFunction, and real gds ClassInstances (built via `fromJS`
+ * so `instanceof` works — see P3's class-transformer discovery).
+ *
+ * jsdom is required: troika-three-text's `Text` touches DOM/canvas APIs on sync().
+ */
+
+const fakeGlobal = vi.hoisted(() => ({
+  globalObject: {
+    scene: null as unknown as THREE.Scene,
+    dragObjects: [] as THREE.Mesh[],
+    buttonObjects: [] as THREE.Mesh[],
+    updateLinesArray: [] as unknown[],
+    current_class_instance: null as unknown,
+    current_port_instance: null as unknown,
+    readyForVizRepUpdate: true,
+    selectedTab: 0,
+    tabContext: [] as unknown[],
+    render: false,
+  },
+}));
+
+vi.mock("@/engine/global-definition", () => fakeGlobal);
+
+// The gc maps three.js object uuids onto the class-instance uuid being drawn.
+const CURRENT_UUID = "11111111-1111-4111-8111-111111111111";
+vi.mock("@/resources/services/instance-utility", () => ({
+  instanceUtility: {
+    get_current_class_instance_uuid: vi.fn(async () => CURRENT_UUID),
+  },
+}));
+
+const { graphicContext } = await import("@/engine/graphic-context");
+
+/** A real vizRep pulled from the live demo metamodel: e3-Value Model -> class "e3-Value_bendpoint". */
+const REAL_BENDPOINT_VIZREP = `/** @param {GraphicContext} gc */
+ async function vizRep(gc) { await gc.graphic_sphere(0.05, 10, 10, 'black');}`;
+
+/** Exercises the primitive + label + button surface a class vizRep typically uses. */
+const CUBE_WITH_LABEL_VIZREP = `async function vizRep(gc) {
+  const box = await gc.graphic_cube(1, 1, 1, 'red');
+  await gc.graphic_text(0.5, 0.2, 0, 0.1, 'black', 'hello', 'x_rel', 'y_rel', 'z_rel');
+  const btn = await gc.graphic_cube(0.2, 0.2, 0.2, 'blue');
+  await gc.graphic_button(btn, 'someExpression');
+  return box;
+}`;
+
+function makeClassInstance(uuid = CURRENT_UUID): ClassInstance {
+  return ClassInstance.fromJS({
+    uuid,
+    name: "test-instance",
+    uuid_class: "22222222-2222-4222-8222-222222222222",
+    coordinates_2d: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0, w: 1 },
+    custom_variables: {},
+    attribute_instances: [],
+    port_instances: [],
+  }) as ClassInstance;
+}
+
+beforeEach(async () => {
+  fakeGlobal.globalObject.scene = new THREE.Scene();
+  fakeGlobal.globalObject.dragObjects = [];
+  fakeGlobal.globalObject.buttonObjects = [];
+  fakeGlobal.globalObject.updateLinesArray = [];
+  fakeGlobal.globalObject.current_class_instance = null;
+  fakeGlobal.globalObject.current_port_instance = null;
+  await graphicContext.resetInstance();
+  graphicContext.custom_variables = {};
+});
+
+describe("runVizRepFunction", () => {
+  it("evaluates a real vizRep string from the demo metamodel into a mesh", async () => {
+    await graphicContext.runVizRepFunction(REAL_BENDPOINT_VIZREP);
+
+    const produced = Object.values(graphicContext.object3D) as THREE.Mesh[];
+    expect(produced).toHaveLength(1);
+    expect(produced[0].geometry.type).toBe("SphereGeometry");
+  });
+
+  it("collects primitives, labels and buttons into their separate gc buckets", async () => {
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+
+    // The button was moved out of object3D and into button3D by graphic_button.
+    expect(Object.values(graphicContext.object3D)).toHaveLength(1);
+    expect(Object.values(graphicContext.button3D)).toHaveLength(1);
+    expect(Object.values(graphicContext.labels)).toHaveLength(1);
+
+    const button = Object.values(graphicContext.button3D)[0] as THREE.Mesh;
+    expect(button.userData.isButton).toBe(true);
+    expect(button.userData.expression).toBe("someExpression");
+
+    // troika `Text` is a Mesh subclass; `text` lives on the subclass.
+    const label = Object.values(graphicContext.labels)[0] as Text;
+    expect(label.text).toBe("hello");
+    // graphic_text seeds the positional custom_variables the label is placed by.
+    expect(label.userData.custom_variables.x_rel.value).toBe(0.5);
+    expect(label.userData.custom_variables.rw.value).toBe(1);
+  });
+});
+
+describe("drawVizRep", () => {
+  it("draws a class instance into the scene under the instance uuid", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(1, 2, 3), classInstance);
+
+    // three.js object uuid is remapped onto the gds class-instance uuid — this
+    // mapping is what lets the rest of the engine find meshes by instance uuid.
+    expect(object.uuid).toBe(classInstance.uuid);
+    expect(fakeGlobal.globalObject.scene.getObjectByProperty("uuid", classInstance.uuid)).toBe(object);
+    expect(object.position.toArray()).toEqual([1, 2, 3]);
+
+    // The mesh is draggable and its label is attached as a child.
+    expect(fakeGlobal.globalObject.dragObjects).toContain(object);
+    expect(object.userData.Label).toHaveLength(1);
+    expect(object.children.some((c) => c.userData.isButton)).toBe(true);
+    expect(fakeGlobal.globalObject.buttonObjects).toHaveLength(1);
+  });
+
+  it("resets the gc buckets after drawing so the next vizRep starts clean", async () => {
+    const classInstance = makeClassInstance();
+    await graphicContext.runVizRepFunction(REAL_BENDPOINT_VIZREP);
+    await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+
+    expect(Object.values(graphicContext.object3D)).toHaveLength(0);
+    expect(Object.values(graphicContext.labels)).toHaveLength(0);
+    expect(Object.values(graphicContext.button3D)).toHaveLength(0);
+    expect(graphicContext.current_instance_object).toBeNull();
+  });
+
+  it("writes instance_adaptable variables back onto the class instance", async () => {
+    const classInstance = makeClassInstance();
+    await graphicContext.setVariable("width", 42, true);
+    await graphicContext.runVizRepFunction(REAL_BENDPOINT_VIZREP);
+    await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+
+    const vars = classInstance.custom_variables as Record<string, { value: number }>;
+    expect(vars.width.value).toBe(42);
+  });
+});
+
+describe("deleteObject", () => {
+  it("removes the mesh from the scene and from the drag/button arrays", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+
+    await graphicContext.deleteObject(object);
+
+    expect(fakeGlobal.globalObject.scene.getObjectByProperty("uuid", classInstance.uuid)).toBeUndefined();
+    expect(fakeGlobal.globalObject.dragObjects).not.toContain(object);
+    expect(fakeGlobal.globalObject.buttonObjects).toHaveLength(0);
+  });
+});

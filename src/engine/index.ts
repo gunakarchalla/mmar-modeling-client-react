@@ -9,9 +9,14 @@
  * deterministic order. Cross-singleton wiring that would otherwise risk a circular
  * import is funnelled through this file (plan §3.1).
  *
- * Two engine members are P2 STUBS replaced later: `interaction-handler` (P5) and
- * `transform-control-events` (P4). The animator's mechanism / coordinate-update /
- * remote-selection calls are inline-stubbed (P3/P4/P11) — see its header.
+ * One engine member is still a P2 STUB: `interaction-handler` (P5 replaces it).
+ * `transform-control-events` was the other; P4 replaced it with the real port.
+ * The animator's remote-selection call stays inline-stubbed (P11) — see its header.
+ *
+ * P4 added `graphic-context` (the vizRep `gc` API), `coordinates-updater` and
+ * `vizrep-update-checker`. Importing `vizrep-update-checker` here is load-bearing,
+ * not cosmetic: its constructor is what subscribes the `checkForVizRepUpdate*` bus
+ * channels, so the module must be evaluated for vizrep refreshes to work at all.
  *
  * The `engine` facade exposes `mount(container)` / `unmount(token)` / `whenReady()`
  * for the React `ThreeCanvas`: it replaces the old `my-app.attached()` flow
@@ -31,6 +36,9 @@ import { rayHelper } from "@/engine/ray-helper";
 import { mouseObject } from "@/engine/mouse-object";
 import { resize } from "@/engine/resize";
 import { intervalHandler } from "@/engine/interval-handler";
+import { graphicContext } from "@/engine/graphic-context";
+import { coordinatesUpdater } from "@/engine/coordinates-updater";
+import { vizrepUpdateChecker } from "@/engine/vizrep-update-checker";
 import { transformControlsEvents } from "@/engine/transform-control-events";
 import { interactionHandler } from "@/engine/interaction-handler";
 import { animator } from "@/engine/animator";
@@ -48,6 +56,9 @@ export {
   mouseObject,
   resize,
   intervalHandler,
+  graphicContext,
+  coordinatesUpdater,
+  vizrepUpdateChecker,
   transformControlsEvents,
   interactionHandler,
   animator,

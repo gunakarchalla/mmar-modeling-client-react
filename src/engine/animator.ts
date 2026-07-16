@@ -6,6 +6,7 @@ import { globalObject } from "@/engine/global-definition";
 import { globalStateObject } from "@/engine/global-state-object";
 import { rayHelper } from "@/engine/ray-helper";
 import { mechanismUtility } from "@/resources/services/mechanism-utility";
+import { coordinatesUpdater } from "@/engine/coordinates-updater";
 
 /**
  * Port of the old `resources/animator.ts` (the 416-line modeling animator — the
@@ -20,8 +21,9 @@ import { mechanismUtility } from "@/resources/services/mechanism-utility";
  *   - `mechanismUtility.executeAllMechanisms()` — UN-STUBBED in P3 (mechanism-utility
  *     now exists); runs the `mechanism` code strings each render tick.
  *   - `coordinatesUpdater.update{Coordinates2D,Rotation,Scale}OnClassAndPortInstance()`
- *     (P4) — only reachable once a scene is open (`tabContext.length > 0`), i.e.
- *     never before P7.
+ *     — UN-STUBBED in P4; writes three.js transforms back onto the gds instances.
+ *     Only reachable once a scene is open (`tabContext.length > 0`), i.e. never
+ *     before P7.
  *   - `remoteSelectionRenderer.refreshBoxes()` (P11) — collaboration presence.
  * The `setPos` / `calculateMiddlePoint` line-geometry maths are ported verbatim
  * (they use only rayHelper + THREE).
@@ -31,6 +33,7 @@ export class Animator {
   private globalStateObject = globalStateObject;
   private rayHelper = rayHelper;
   private mechanismUtility = mechanismUtility;
+  private coordinatesUpdater = coordinatesUpdater;
 
   async animate() {
     // P3: `instanceUtility.getTabContextSceneInstance()` was fetched here into a
@@ -115,18 +118,18 @@ export class Animator {
             }
           }
           //update all positions for class_instances and port_instances
-          // P4: await this.coordinatesUpdater.updateCoordinates2DonClassAndPortInstance();
+          await this.coordinatesUpdater.updateCoordinates2DonClassAndPortInstance();
         }
 
         // Rotations (quaternion components) and scales live in a small numeric range
         // (≈ -1..1), so the coarse 0.09 position tolerance would miss real changes.
         // Use a tight tolerance so gradual rotations/scales are detected and propagated.
         if (this.arraysMatch(tempAllRotations, this.globalObjectInstance.allRotations, 1e-4) == false) {
-          // P4: await this.coordinatesUpdater.updateRotationOnClassAndPortInstance();
+          await this.coordinatesUpdater.updateRotationOnClassAndPortInstance();
         }
 
         if (this.arraysMatch(tempAllScales, this.globalObjectInstance.allScales, 1e-4) == false) {
-          // P4: await this.coordinatesUpdater.updateScaleOnClassAndPortInstance();
+          await this.coordinatesUpdater.updateScaleOnClassAndPortInstance();
         }
 
         this.globalObjectInstance.allPositions = tempAllPositions;
