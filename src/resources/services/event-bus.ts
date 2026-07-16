@@ -30,6 +30,15 @@ export interface TabIndexPayload {
 }
 
 /**
+ * Payload for `openReferenceDialog` (P8). One reference dialog is shared by every
+ * reference button, so the clicked attribute instance IS the context — that is exactly
+ * what the old `attribute-window.openDialog()` published.
+ */
+export interface OpenReferenceDialogPayload {
+  attributeInstance: AttributeInstance;
+}
+
+/**
  * Payload for `sceneInstanceMutated`. Plan §5 mandates only `sceneInstanceUuid`; the
  * modeling client's creation/deletion handlers additionally ride along the optional
  * `action`/`kind`/`instanceUuid` describing what changed, which the P12
@@ -57,8 +66,8 @@ export interface EventPayloads {
   updateAttributeGui: void;
   removeAttributeGui: void;
   tableAttributeChanged: void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  openReferenceDialog: any; // payload shape defined by attribute-window in P8
+  /** P8 firmed up the shape P1 left as `any`: attribute-window -> reference dialog. */
+  openReferenceDialog: OpenReferenceDialogPayload;
 
   // VizRep pipeline
   checkForVizRepUpdate: void;

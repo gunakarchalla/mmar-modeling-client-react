@@ -18,11 +18,13 @@ export default defineConfig({
     // Scaffold has no tests yet; keep `npm test` green until migration adds them.
     passWithNoTests: true,
     // The live-server integration tests (*.integration.test.ts) do heavy work: the
-    // in-container GET /metamodel/sceneTypes payload plus gds `Metamodel.fromJS`
-    // revive takes ~4-5s, which overran the 5s default under parallel-file load
-    // (P3 discovery). Bumped so live tests don't false-timeout; unit suites are
-    // unaffected (they finish in ms).
-    testTimeout: 20000,
-    hookTimeout: 20000,
+    // in-container GET /metamodel/sceneTypes payload (~29 MB) plus the gds
+    // `Metamodel.fromJS` revive. P3 raised this 5000 -> 20000 when that cost ~4-5s.
+    // P8 raised it again: those tests now take ~10s EACH in isolation, and the suite's
+    // growing set of jsdom component files starves them under parallel-file load, so
+    // all three false-timed-out at 20s while passing on their own. Unit suites are
+    // unaffected (they finish in ms) — only the live tests use this headroom.
+    testTimeout: 60000,
+    hookTimeout: 60000,
   },
 });

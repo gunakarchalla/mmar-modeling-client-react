@@ -366,14 +366,24 @@ export class BackendService {
     }
   }
 
-  /** PATCH /metamodel/files/:uuid (multipart) -> string (fetchHelper.patchFileByUUID:7492). */
+  /**
+   * PATCH /metamodel/files/:uuid (multipart) -> updated file JSON
+   * (fetchHelper.patchFileByUUID:7492).
+   *
+   * P8 FIX: the generated fetchHelper types this `Promise<string>`, and P1 copied that
+   * type. It is wrong the same way `getProcedures` was (P3): the body is
+   * `JSON.parse(responseText)` of a file OBJECT, and the only consumer — the upload
+   * dialog — reads `response.uuid` off it. Verified against the live server in
+   * p8-file-upload.integration.test.ts (PATCH returns `{ uuid, ... }`). Typed
+   * `Promise<unknown>` to match `postFile`, which the dialog treats identically.
+   */
   async patchFileByUUID(
     uuid: UUID,
     file: globalThis.File,
     compress = false,
     targetWidth?: number,
     quality?: number,
-  ): Promise<string | undefined> {
+  ): Promise<unknown> {
     try {
       let path = `metamodel/files/${encodeURIComponent(uuid)}`;
       if (compress) {
