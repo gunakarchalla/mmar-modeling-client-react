@@ -1,0 +1,205 @@
+/**
+ * engine/index.ts — COMPOSITION ROOT + mount facade (P2).
+ *
+ * Each engine module exports its own module singleton (the DI -> module-singleton
+ * recipe that replaced Aurelia `@singleton()`). This file imports them in dependency
+ * order — global-definition first, then the global-* state holders, then the leaf
+ * helpers (ray-helper, mouse-object, resize), then the handlers/initiators — so the
+ * import side effects (the `new ClassName()` at the bottom of each file) run in a
+ * deterministic order. Cross-singleton wiring that would otherwise risk a circular
+ * import is funnelled through this file (plan §3.1).
+ *
+ * Two engine members are P2 STUBS replaced later: `interaction-handler` (P5) and
+ * `transform-control-events` (P4). The animator's mechanism / coordinate-update /
+ * remote-selection calls are inline-stubbed (P3/P4/P11) — see its header.
+ *
+ * The `engine` facade exposes `mount(container)` / `unmount(token)` / `whenReady()`
+ * for the React `ThreeCanvas`: it replaces the old `my-app.attached()` flow
+ * (`initiator.init()` + `initiator.initEventListeners()`) and the old `#container`
+ * DOM-polling — the container element is passed in directly. The mount-token +
+ * memoized-init-promise pattern is copied from the metamodeling twin (see the long
+ * comments below): it makes StrictMode's double-mount and per-tab remounts safe and
+ * never recreates the single page-lifetime WebGLRenderer.
+ */
+import { XRButton } from "three/examples/jsm/webxr/XRButton.js";
+import { globalObject } from "@/engine/global-definition";
+import { globalSelectedObject } from "@/engine/global-selected-object";
+import { globalStateObject } from "@/engine/global-state-object";
+import { globalClassObject } from "@/engine/global-class-object";
+import { globalRelationclassObject } from "@/engine/global-relationclass-object";
+import { rayHelper } from "@/engine/ray-helper";
+import { mouseObject } from "@/engine/mouse-object";
+import { resize } from "@/engine/resize";
+import { intervalHandler } from "@/engine/interval-handler";
+import { transformControlsEvents } from "@/engine/transform-control-events";
+import { interactionHandler } from "@/engine/interaction-handler";
+import { animator } from "@/engine/animator";
+import { arInitiator } from "@/engine/ar-initiator";
+import { sceneInitiator } from "@/engine/scene-initiator";
+import { initiator } from "@/engine/initiator";
+
+export {
+  globalObject,
+  globalSelectedObject,
+  globalStateObject,
+  globalClassObject,
+  globalRelationclassObject,
+  rayHelper,
+  mouseObject,
+  resize,
+  intervalHandler,
+  transformControlsEvents,
+  interactionHandler,
+  animator,
+  arInitiator,
+  sceneInitiator,
+  initiator,
+};
+
+// init() is expensive (builds cameras / scene / controls / plane) and must run
+// exactly ONCE for the lifetime of the singleton engine.
+//
+// A plain boolean set *after* `await initiator.init()` does not hold: two mounts
+// that race the same in-flight init both observe `false` and both run the heavy
+// branch, duplicating the scene, orbit controls and the window resize listener. So
+// we memoize the init *promise* (not a boolean). Concurrent mounts await the same
+// init; only the first creates it.
+let initPromise: Promise<void> | null = null;
+let initialized = false;
+
+// Resolves once the one-time init has completed. Callers outside ThreeCanvas hold no
+// mount token and cannot await the mount promise, but must not touch engine state
+// (scene, cameras, tabContext) before init. It never rejects: a failed init leaves
+// it pending until a later mount retries and succeeds.
+let signalReady: () => void;
+const readyPromise = new Promise<void>((resolve) => {
+  signalReady = resolve;
+});
+
+// Monotonic mount token. Every mount() takes the next token and becomes the engine's
+// owner. An attach or unmount whose token is no longer current has been superseded by
+// a newer mount and must not touch the renderer. StrictMode reuses the *same*
+// container element, so ownership cannot be decided by comparing elements.
+let mountToken = 0;
+
+export const engine = {
+  /**
+   * Boot (or re-attach) the engine into `container`, and return the mount token
+   * identifying this mount. Pass that token to `unmount(token)` so a superseded
+   * cleanup becomes a no-op.
+   *
+   * Idempotent and concurrency-safe: the heavy `initiator.init()` +
+   * `initEventListeners()` run at most once per page life; every mount then ensures
+   * the singleton canvas is attached to `container` with a running render loop. The
+   * renderer is never recreated — only re-attached.
+   */
+  async mount(container: HTMLElement): Promise<number> {
+    const token = ++mountToken;
+    globalObject.elementContainer = container;
+
+    if (!initPromise) {
+      initPromise = (async () => {
+        await initiator.init();
+        await initiator.initEventListeners();
+        // Turn on WebXR + wire session start/end (harmless without XR hardware — the
+        // XRButton itself is deferred to P13). Idempotent.
+        arInitiator.enableXR();
+        initialized = true;
+        signalReady();
+      })().catch((err: unknown) => {
+        // Let a later mount retry a failed init rather than wedging the engine.
+        initPromise = null;
+        throw err;
+      });
+    }
+    await initPromise;
+
+    // Superseded while init was in flight: the newer mount owns the renderer and will
+    // attach it to its own container. Attaching here would steal the canvas.
+    if (token !== mountToken) return token;
+
+    // Re-apply the 2D/3D flag so camera + orbit controls agree on every mount (a
+    // toggle that landed while init was in flight would otherwise leave them out of
+    // sync). No-op when they already agree.
+    engine.setThreeDimensional(globalObject.threeDimensional);
+
+    // init() already appended the canvas into `elementContainer`; for every later
+    // mount this is the re-attach. Both paths converge here so there is exactly one
+    // place that starts the render loop.
+    const dom = globalObject.renderer.domElement;
+    if (dom.parentElement !== container) {
+      container.appendChild(dom);
+    }
+    globalObject.renderer.setSize(container.clientWidth, container.clientHeight, true);
+    globalObject.renderer.setAnimationLoop(arInitiator.render.bind(arInitiator));
+    globalObject.render = true;
+
+    return token;
+  },
+
+  /**
+   * Switch the world between 2D (orthographic) and 3D (perspective) — swaps the active
+   * camera + orbit controls the same way init does and flags a re-render. Cameras /
+   * controls only exist after `mount()`/`init()`, so before that we just record the
+   * flag and the next `init()` honours it. The modeling default is 2D.
+   */
+  setThreeDimensional(is3d: boolean): void {
+    globalObject.threeDimensional = is3d;
+    if (!initialized) return;
+
+    if (is3d) {
+      globalObject.normalCamera = globalObject.normalCamera3d;
+      globalObject.orbitControls = globalObject.orbitControls3d;
+    } else {
+      globalObject.normalCamera = globalObject.normalCamera2d;
+      globalObject.orbitControls = globalObject.orbitControls2d;
+    }
+    globalObject.camera = globalObject.normalCamera;
+    globalObject.render = true;
+  },
+
+  /**
+   * Create three's XRButton bound to our renderer (old client appended it to
+   * document.body with `bottom: 60px`). Exposed here for P13 to overlay onto the
+   * MiddleBody; NOT wired into the UI yet. `enableXR()` makes the session listeners
+   * live. `requiredFeatures: ['local']` + optional hand-tracking match the original.
+   */
+  createXRButton(): HTMLElement {
+    arInitiator.enableXR();
+    return XRButton.createButton(globalObject.renderer, {
+      requiredFeatures: ["local"],
+      optionalFeatures: ["hand-tracking"],
+    });
+  },
+
+  /**
+   * Stop the render loop and detach the canvas from the DOM. The singleton scene /
+   * cameras / controls / renderer are preserved so a later `mount()` is a cheap
+   * re-attach — never a recreate (a recreated WebGLRenderer would leak its context;
+   * browsers cap live contexts at ~16). Pass the token returned by the matching
+   * `mount()`; a stale token makes this a no-op. Calling with no token forces detach.
+   */
+  unmount(token?: number): void {
+    if (token !== undefined && token !== mountToken) return;
+
+    globalObject.renderer.setAnimationLoop(null);
+    const dom = globalObject.renderer.domElement;
+    if (dom.parentElement) {
+      dom.parentElement.removeChild(dom);
+    }
+  },
+
+  /**
+   * Await the one-time init. Resolves immediately once it has completed, and stays
+   * pending until some ThreeCanvas has mounted successfully. Use before reading or
+   * mutating engine state from anywhere that did not itself call mount().
+   */
+  whenReady(): Promise<void> {
+    return readyPromise;
+  },
+
+  /** Test seam: has the heavy one-time init completed? */
+  get isInitialized(): boolean {
+    return initialized;
+  },
+};
