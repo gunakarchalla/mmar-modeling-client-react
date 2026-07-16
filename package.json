@@ -30,6 +30,7 @@
     "reflect-metadata": "0.2.2",
     "three": "0.169.0",
     "troika-three-text": "0.47.2",
+    "unzipit": "1.4.3",
     "uuid": "11.0.3",
     "zustand": "4.5.5"
   },

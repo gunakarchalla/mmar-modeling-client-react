@@ -15,6 +15,8 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import { engine, globalSelectedObject, globalStateObject } from "@/engine";
 import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
+import { describeError } from "@/resources/util/describe-error";
+import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { useUiStore, DialogName } from "@/resources/store/uiStore";
 
 interface MenuItemDef {
@@ -34,9 +36,12 @@ interface MenuDef {
 
 // Menu definitions ported from top-nav-bar.ts. Disabled entries stay disabled
 // stubs (plan §9 P6: "keep menu definitions incl. disabled stubs"). Enabled
-// entries either open a uiStore dialog (rendered in P9/P12) or run an action.
-// Export Model / Export Open Models call persistency-handler.saveToTextfile,
-// ported in P7 and wired in P9 — left as logged no-ops here.
+// entries either open a uiStore dialog (rendered since P9, except `algorithm` —
+// P12) or run an action.
+//
+// The old client dispatched the two Export entries by LABEL inside
+// menu-entry.onItemClick (they carried no dialogName/eventPropagationName); here
+// they are plain onSelect actions calling the same persistency-handler methods.
 function buildMenus(openDialog: (name: DialogName) => void): MenuDef[] {
   const enterSimulation = () => {
     if (!engine.isInitialized) return;
@@ -59,7 +64,10 @@ function buildMenus(openDialog: (name: DialogName) => void): MenuDef[] {
         {
           label: "Export Model as .json",
           icon: "folder_special",
-          onSelect: () => logger.log("Export Model (P9)", "info"), // P9: persistencyHandler.saveToTextfile()
+          onSelect: () =>
+            void persistencyHandler
+              .saveToTextfile()
+              .catch((err) => logger.log(describeError(err), "error")),
         },
         { label: "Import Model", icon: "upload", dialog: "importModel" },
         { label: "Import Metamodel", icon: "upload", dialog: "importMetamodel" },
@@ -67,7 +75,10 @@ function buildMenus(openDialog: (name: DialogName) => void): MenuDef[] {
         {
           label: "Export Open Models",
           icon: "folder_special",
-          onSelect: () => logger.log("Export Open Models (P9)", "info"), // P9: persistencyHandler.saveAllOpenModelInstancesToTextfile()
+          onSelect: () =>
+            void persistencyHandler
+              .saveAllOpenModelInstancesToTextfile()
+              .catch((err) => logger.log(describeError(err), "error")),
         },
       ],
     },

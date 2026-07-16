@@ -11,11 +11,20 @@ const mocks = vi.hoisted(() => ({
   engine: { isInitialized: false },
   globalSelectedObject: { removeObject: vi.fn() },
   globalStateObject: { setState: vi.fn() },
+  persistencyHandler: {
+    saveToTextfile: vi.fn(async (): Promise<void> => undefined),
+    saveAllOpenModelInstancesToTextfile: vi.fn(async (): Promise<void> => undefined),
+  },
 }));
 vi.mock("@/engine", () => ({
   engine: mocks.engine,
   globalSelectedObject: mocks.globalSelectedObject,
   globalStateObject: mocks.globalStateObject,
+}));
+// P9 wired the two Export entries to persistency-handler, which imports the REAL
+// global-definition (a WebGLRenderer at module scope) unless it is mocked here.
+vi.mock("@/resources/services/persistency-handler", () => ({
+  persistencyHandler: mocks.persistencyHandler,
 }));
 
 import TopNavBar from "./TopNavBar";
@@ -62,6 +71,34 @@ describe("TopNavBar", () => {
     render(<TopNavBar />);
     fireEvent.click(screen.getByRole("button", { name: /Algorithms/ }));
     expect(useUiStore.getState().dialogs.algorithm).toBe(true);
+  });
+
+  // P9: the old client dispatched these two by label in menu-entry.onItemClick.
+  it("exports the open model via persistency-handler (File > Export Model as .json)", () => {
+    render(<TopNavBar />);
+    fireEvent.click(screen.getByRole("button", { name: /File/ }));
+    fireEvent.click(screen.getByText("Export Model as .json"));
+    expect(mocks.persistencyHandler.saveToTextfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("exports all open models via persistency-handler (File > Export Open Models)", () => {
+    render(<TopNavBar />);
+    fireEvent.click(screen.getByRole("button", { name: /File/ }));
+    fireEvent.click(screen.getByText("Export Open Models"));
+    expect(mocks.persistencyHandler.saveAllOpenModelInstancesToTextfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens each P9 File-menu dialog through the uiStore", () => {
+    render(<TopNavBar />);
+    for (const [label, dialog] of [
+      ["Import Model", "importModel"],
+      ["Import Metamodel", "importMetamodel"],
+      ["Map file to SceneInstance", "mapFromFile"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: /File/ }));
+      fireEvent.click(screen.getByText(label));
+      expect(useUiStore.getState().dialogs[dialog]).toBe(true);
+    }
   });
 
   it("guards Simulation entries behind engine init (no crash before mount)", () => {

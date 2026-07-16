@@ -14,6 +14,13 @@ import SignInDialog from "@/views/auth/SignInDialog";
 import AppSnackbar from "@/views/common/AppSnackbar";
 import LoadingWindow from "@/views/dialogs/LoadingWindow";
 import CreateNewSceneDialog from "@/views/dialogs/CreateNewSceneDialog";
+import SaveAsDialog from "@/views/dialogs/SaveAsDialog";
+import CopySceneDialog from "@/views/dialogs/CopySceneDialog";
+import DeleteSceneDialog from "@/views/dialogs/DeleteSceneDialog";
+import ImportModelDialog from "@/views/dialogs/ImportModelDialog";
+import ImportMetamodelDialog from "@/views/dialogs/ImportMetamodelDialog";
+import MapFromFileDialog from "@/views/dialogs/MapFromFileDialog";
+import UserInfoDialog from "@/views/dialogs/UserInfoDialog";
 import { useAuthStore } from "@/resources/store/authStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { eventBus } from "@/resources/services/event-bus";
@@ -111,6 +118,18 @@ export default function AppLayout() {
       {/* P7 dialogs: loading window (driven by uiStore.loading) + create-new-scene. */}
       <LoadingWindow />
       <CreateNewSceneDialog />
+
+      {/* P9 model-ops dialogs. All are uiStore-driven and render closed until their
+          flag opens (TopNavBar's File menu, SceneGroup's buttons, StateWindow's Info
+          button, Ctrl+S). The attribute-window dialogs deliberately live inside
+          AttributeWindow instead — see P8's dialog-ownership note. */}
+      <SaveAsDialog />
+      <CopySceneDialog />
+      <DeleteSceneDialog />
+      <ImportModelDialog />
+      <ImportMetamodelDialog />
+      <MapFromFileDialog />
+      <UserInfoDialog />
     </Box>
   );
 }
