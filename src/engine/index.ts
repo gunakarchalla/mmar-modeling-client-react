@@ -9,9 +9,12 @@
  * deterministic order. Cross-singleton wiring that would otherwise risk a circular
  * import is funnelled through this file (plan §3.1).
  *
- * One engine member is still a P2 STUB: `interaction-handler` (P5 replaces it).
- * `transform-control-events` was the other; P4 replaced it with the real port.
- * The animator's remote-selection call stays inline-stubbed (P11) — see its header.
+ * P5 replaced the last P2 STUB: `interaction-handler` is now the full 5-mode state
+ * machine, joined by `consistency-checker`, `instance-creation-handler` and
+ * `deletion-handler` (imported below in dependency order — the handlers must
+ * construct after graphic-context / the global-* holders they read at construction).
+ * `transform-control-events` was replaced by P4. The animator's remote-selection
+ * call stays inline-stubbed (P11) — see its header.
  *
  * P4 added `graphic-context` (the vizRep `gc` API), `coordinates-updater` and
  * `vizrep-update-checker`. Importing `vizrep-update-checker` here is load-bearing,
@@ -40,6 +43,9 @@ import { graphicContext } from "@/engine/graphic-context";
 import { coordinatesUpdater } from "@/engine/coordinates-updater";
 import { vizrepUpdateChecker } from "@/engine/vizrep-update-checker";
 import { transformControlsEvents } from "@/engine/transform-control-events";
+import { consistencyChecker } from "@/engine/consistency-checker";
+import { instanceCreationHandler } from "@/engine/instance-creation-handler";
+import { deletionHandler } from "@/engine/deletion-handler";
 import { interactionHandler } from "@/engine/interaction-handler";
 import { animator } from "@/engine/animator";
 import { arInitiator } from "@/engine/ar-initiator";
@@ -60,6 +66,9 @@ export {
   coordinatesUpdater,
   vizrepUpdateChecker,
   transformControlsEvents,
+  consistencyChecker,
+  instanceCreationHandler,
+  deletionHandler,
   interactionHandler,
   animator,
   arInitiator,

@@ -29,6 +29,20 @@ export interface TabIndexPayload {
   tabIndex: number;
 }
 
+/**
+ * Payload for `sceneInstanceMutated`. Plan §5 mandates only `sceneInstanceUuid`; the
+ * modeling client's creation/deletion handlers additionally ride along the optional
+ * `action`/`kind`/`instanceUuid` describing what changed, which the P12
+ * SimulationWindow uses to decide whether to refresh. The extra fields are optional
+ * so a bare `{ sceneInstanceUuid }` publish stays valid.
+ */
+export interface SceneInstanceMutatedPayload {
+  sceneInstanceUuid: string;
+  action?: "added" | "deleted" | string;
+  kind?: "class" | "relation" | "bendpoint" | string;
+  instanceUuid?: string;
+}
+
 export interface EventPayloads {
   // Auth / scenegroup lifecycle
   login: boolean;
@@ -37,7 +51,7 @@ export interface EventPayloads {
 
   // Tab / instance lifecycle
   tabChanged: void;
-  sceneInstanceMutated: { sceneInstanceUuid: string };
+  sceneInstanceMutated: SceneInstanceMutatedPayload;
 
   // Attribute window
   updateAttributeGui: void;
