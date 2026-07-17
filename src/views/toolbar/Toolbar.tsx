@@ -9,6 +9,7 @@ import { useAuthStore } from "@/resources/store/authStore";
 import { logger } from "@/resources/services/logger";
 import CameraToggle from "./CameraToggle";
 import AutoSave from "./AutoSave";
+import UserLegend from "@/views/user-legend/UserLegend";
 
 // Vertical divider matching the old `.vl` rule (1px light-grey separator).
 function VDivider() {
@@ -19,7 +20,7 @@ function VDivider() {
 // disabled stubs (the old handlers only logged). Delete drives the deletion handler.
 // Logout replaces the old localStorage-remove + reload with authStore.logout (which
 // re-shows the sign-in dialog). AutoSave + CameraToggle are separate components.
-// The user-legend (right side) arrives in P11.
+// UserLegend (right side, P11) renders itself as nothing unless the active tab is shared.
 export default function Toolbar() {
   const logout = useAuthStore((s) => s.logout);
 
@@ -80,7 +81,7 @@ export default function Toolbar() {
       <CameraToggle />
 
       <Box sx={{ flex: 1 }} />
-      {/* P11: <UserLegend /> — collaboration presence chips */}
+      <UserLegend />
     </Box>
   );
 }

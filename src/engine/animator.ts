@@ -7,6 +7,7 @@ import { globalStateObject } from "@/engine/global-state-object";
 import { rayHelper } from "@/engine/ray-helper";
 import { mechanismUtility } from "@/resources/services/mechanism-utility";
 import { coordinatesUpdater } from "@/engine/coordinates-updater";
+import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
 
 /**
  * Port of the old `resources/animator.ts` (the 416-line modeling animator — the
@@ -24,7 +25,10 @@ import { coordinatesUpdater } from "@/engine/coordinates-updater";
  *     — UN-STUBBED in P4; writes three.js transforms back onto the gds instances.
  *     Only reachable once a scene is open (`tabContext.length > 0`), i.e. never
  *     before P7.
- *   - `remoteSelectionRenderer.refreshBoxes()` (P11) — collaboration presence.
+ *   - `remoteSelectionRenderer.refreshBoxes()` — UN-STUBBED in P11; keeps remote
+ *     collaborators' selection boxes glued to objects as they drag them (awareness
+ *     only fires when a selection CHANGES, not when the selected object moves).
+ *     A cheap no-op when there are no remote selections.
  * The `setPos` / `calculateMiddlePoint` line-geometry maths are ported verbatim
  * (they use only rayHelper + THREE).
  */
@@ -34,6 +38,7 @@ export class Animator {
   private rayHelper = rayHelper;
   private mechanismUtility = mechanismUtility;
   private coordinatesUpdater = coordinatesUpdater;
+  private remoteSelectionRenderer = remoteSelectionRenderer;
 
   async animate() {
     // P3: `instanceUtility.getTabContextSceneInstance()` was fetched here into a
@@ -51,8 +56,8 @@ export class Animator {
 
     if (this.globalObjectInstance.render) {
       this.globalObjectInstance.render = false;
-      // P11: keep collaborators' selection boxes glued to objects they move.
-      // this.remoteSelectionRenderer.refreshBoxes();
+      // Keep collaborators' selection boxes glued to objects they move.
+      this.remoteSelectionRenderer.refreshBoxes();
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);
 
       if (this.globalObjectInstance.runMechanism) {

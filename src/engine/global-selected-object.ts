@@ -10,8 +10,8 @@ import { globalObject } from "@/engine/global-definition";
  * ported verbatim.
  *
  * `publishSelection` broadcasts the selection over the shared session's awareness so
- * collaborators can render a presence box. Collaboration is not wired until P10/P11,
- * so `sharedDocServiceRef` is `null` and the guard makes this a no-op for now.
+ * collaborators can render a presence box (RemoteSelectionRenderer draws it, P11).
+ * On a tab with no shared session the guard makes it a no-op.
  */
 export class GlobalSelectedObject {
   public object: THREE.Mesh = new THREE.Mesh();
@@ -45,9 +45,8 @@ export class GlobalSelectedObject {
 
   /**
    * Publish the locally-selected instance UUID over the active tab's shared-session
-   * awareness so other clients can render a presence box (see RemoteSelectionRenderer,
-   * P11). No-op when the active tab isn't part of a shared session. Live since P10 —
-   * the awareness field is broadcast; nothing renders it until P11.
+   * awareness so other clients can render a presence box (RemoteSelectionRenderer
+   * consumes this field since P11). No-op when the active tab isn't shared.
    */
   private publishSelection(uuid: string | null) {
     const sharedDocService = this.globalObjectInstance.sharedDocServiceRef;

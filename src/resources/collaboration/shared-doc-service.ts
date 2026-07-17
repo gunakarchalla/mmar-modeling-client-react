@@ -17,6 +17,7 @@ import {
   type YDocChangeResult,
 } from "./y-mapping";
 import { userColor, initials } from "./color-util";
+import { collectUsers } from "./awareness-users";
 
 /**
  * P10 port of the old `resources/collaboration/shared_doc_service.ts` (325 lines).
@@ -67,6 +68,8 @@ export interface SharedSession {
   connectionStatus: ConnectionStatus;
   /** Human-readable banner shown while disconnected. Null when connected. */
   disconnectBanner: string | null;
+  /** P11: awareness 'change' handler feeding collabStore.users (kept so detach can unsubscribe). */
+  usersHandler?: () => void;
 }
 
 interface JwtPayload {
@@ -132,13 +135,14 @@ export class SharedDocService {
     this.installConnectionLifecycle(session, tabIndex);
 
     this.sessions.set(tabIndex, session);
-    // Seed the reactive mirror React reads (users[] arrives in P11).
+    // Seed the reactive mirror React reads.
     useCollabStore.getState().setTab(tabIndex, {
       status: session.connectionStatus,
       access: session.access,
       banner: session.disconnectBanner,
-      users: [],
+      users: collectUsers(awareness),
     });
+    this.installAwarenessUsers(session, tabIndex);
     return session;
   }
 
@@ -146,6 +150,9 @@ export class SharedDocService {
   detach(tabIndex: number): void {
     const session = this.sessions.get(tabIndex);
     if (session) {
+      // provider.destroy() only unsubscribes y-websocket's OWN awareness handler, so
+      // ours has to come off explicitly (verified in y-websocket/src/y-websocket.js).
+      if (session.usersHandler) session.awareness.off("change", session.usersHandler);
       session.provider.destroy();
       session.ydoc.destroy();
       this.sessions.delete(tabIndex);
@@ -200,6 +207,20 @@ export class SharedDocService {
     } catch {
       // ignore decode errors (e.g. in test environments)
     }
+  }
+
+  /**
+   * P11: keep `collabStore.tabs[tabIndex].users` in step with the session's awareness.
+   * This replaces the old user-legend's 500 ms `setInterval` poll (plan §9 P11), which
+   * only existed because awareness callbacks fired outside Aurelia's change-detection.
+   * The store is written ONLY from this service (the one-way mirror contract, P10).
+   */
+  private installAwarenessUsers(session: SharedSession, tabIndex: number): void {
+    const handler = () => {
+      useCollabStore.getState().setUsers(tabIndex, collectUsers(session.awareness));
+    };
+    session.awareness.on("change", handler);
+    session.usersHandler = handler;
   }
 
   private installObservers(session: SharedSession, tabIndex: number): void {

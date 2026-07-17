@@ -23,6 +23,8 @@ import { logger } from "@/resources/services/logger";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService, type AccessLevel } from "@/resources/collaboration/shared-doc-service";
+import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-renderer";
+import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
 import { closeTab } from "@/views/layout/tabActions";
 
 /**
@@ -64,7 +66,8 @@ let initInFlight: Promise<void> | null = null;
  * -> stays non-shared, and a null level -> keeps the 'edit' fallback. The try/catch is
  * kept anyway for a genuinely unexpected throw (e.g. attach itself failing).
  *
- * The remote cursor/selection renderers' `bindToSession` calls land in P11.
+ * P11: the two renderers subscribe the session's awareness right after attach, so
+ * remote cursors/selection boxes start drawing as soon as peers publish them.
  */
 async function maybeAttachSharedSession(
   sceneInstance: SceneInstance,
@@ -81,7 +84,8 @@ async function maybeAttachSharedSession(
 
     const tabIndex = globalObject.tabContext.length - 1;
     sharedDocService.attach(tabIndex, sceneInstance, access);
-    // P11: remoteCursorRenderer.bindToSession(tabIndex) / remoteSelectionRenderer.bindToSession(tabIndex)
+    remoteCursorRenderer.bindToSession(tabIndex);
+    remoteSelectionRenderer.bindToSession(tabIndex);
     tabContext.isShared = true;
     useTabsStore.getState().setTabShared(tabIndex, true);
     logger.log(`Shared session attached for scene ${sceneInstance.uuid} (access: ${access})`, "info");
@@ -191,7 +195,10 @@ export default function SceneGroup() {
       const tabCtx = globalObject.tabContext[payload.tabIndex];
       const name = tabCtx?.sceneInstance?.name ?? "this scene";
       window.alert(`Your access to "${name}" was revoked. The tab will be closed.`);
-      // P11: remoteCursorRenderer.clearForTab / remoteSelectionRenderer.clearForTab.
+      // P11 NOTE: the old handler called clearForTab on both renderers here; ours does
+      // NOT need to, because tabActions.closeTab now does it (see below) — doing it in
+      // both places would just be a redundant second pass over an empty entry map.
+      //
       // DEVIATION from the old handler, which spliced globalObject.tabContext by hand
       // and left the tab bar to catch up: closing goes through tabActions.closeTab, the
       // single mutation path for tab removal (it also detaches the shared session and

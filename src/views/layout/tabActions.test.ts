@@ -28,6 +28,11 @@ const mocks = vi.hoisted(() => ({
   // keeps the real @/engine/global-definition (which it imports directly, bypassing
   // the mocked barrel) from constructing a WebGLRenderer under vitest.
   sharedDocService: { detach: vi.fn(), forTab: vi.fn(() => null) },
+  // P11: closeTab also drops the tab's remote cursor/selection helpers. Mocked for the
+  // same reason as the service above — the renderers import @/engine/global-definition
+  // directly (bypassing the mocked barrel), which builds a WebGLRenderer at module scope.
+  remoteCursorRenderer: { clearForTab: vi.fn() },
+  remoteSelectionRenderer: { clearForTab: vi.fn() },
 }));
 
 vi.mock("@/engine", () => ({
@@ -41,6 +46,10 @@ vi.mock("@/engine", () => ({
 vi.mock("@/resources/services/event-bus", () => ({ eventBus: mocks.eventBus }));
 vi.mock("@/resources/services/logger", () => ({ logger: mocks.logger }));
 vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
+vi.mock("@/resources/collaboration/remote-cursor-renderer", () => ({ remoteCursorRenderer: mocks.remoteCursorRenderer }));
+vi.mock("@/resources/collaboration/remote-selection-renderer", () => ({
+  remoteSelectionRenderer: mocks.remoteSelectionRenderer,
+}));
 
 import { switchToTab, closeTab } from "./tabActions";
 import { useTabsStore } from "@/resources/store/tabsStore";
@@ -124,5 +133,29 @@ describe("closeTab", () => {
     seedTabs(["A"]);
     await closeTab(5);
     expect(mocks.sharedDocService.detach).not.toHaveBeenCalled();
+  });
+
+  // P11: the closed tab's remote cursor arrows / selection boxes must go with it,
+  // and the renderers must unsubscribe the session's awareness BEFORE it is destroyed
+  // — hence clearForTab strictly before detach (the old main-body-tab-bar's order).
+  it("clears the closed tab's remote cursor and selection helpers before detaching", async () => {
+    seedTabs(["A", "B"]);
+    const order: string[] = [];
+    mocks.remoteCursorRenderer.clearForTab.mockImplementation(() => order.push("cursor"));
+    mocks.remoteSelectionRenderer.clearForTab.mockImplementation(() => order.push("selection"));
+    mocks.sharedDocService.detach.mockImplementation(() => order.push("detach"));
+
+    await closeTab(0);
+
+    expect(mocks.remoteCursorRenderer.clearForTab).toHaveBeenCalledWith(0);
+    expect(mocks.remoteSelectionRenderer.clearForTab).toHaveBeenCalledWith(0);
+    expect(order).toEqual(["cursor", "selection", "detach"]);
+  });
+
+  it("does not clear any renderer when the index is out of range", async () => {
+    seedTabs(["A"]);
+    await closeTab(5);
+    expect(mocks.remoteCursorRenderer.clearForTab).not.toHaveBeenCalled();
+    expect(mocks.remoteSelectionRenderer.clearForTab).not.toHaveBeenCalled();
   });
 });

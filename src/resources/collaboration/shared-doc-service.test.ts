@@ -21,14 +21,39 @@ const mocks = vi.hoisted(() => {
 
   const providers: FakeProvider[] = [];
 
+  /**
+   * Stands in for y-protocols' Awareness. P11 made this a real handler registry rather
+   * than a bag of vi.fn()s: shared-doc-service now subscribes 'change' to feed
+   * collabStore.users, so a test needs to fire that event and control getStates().
+   */
+  class FakeAwareness {
+    clientID = 1;
+    states = new Map<number, any>();
+    setLocalState = vi.fn();
+    setLocalStateField = vi.fn();
+    getStates = vi.fn(() => this.states);
+    handlers = new Map<string, ((payload: any) => void)[]>();
+
+    on(event: string, handler: (payload: any) => void) {
+      const list = this.handlers.get(event) ?? [];
+      list.push(handler);
+      this.handlers.set(event, list);
+    }
+
+    off(event: string, handler: (payload: any) => void) {
+      const list = (this.handlers.get(event) ?? []).filter((h) => h !== handler);
+      this.handlers.set(event, list);
+    }
+
+    /** Drive an awareness event the real Awareness would emit. */
+    emit(event: string, payload?: unknown) {
+      (this.handlers.get(event) ?? []).forEach((handler) => handler(payload));
+    }
+  }
+
   /** Stands in for y-websocket's WebsocketProvider: records handlers so tests can fire them. */
   class FakeProvider {
-    awareness = {
-      clientID: 1,
-      setLocalState: vi.fn(),
-      setLocalStateField: vi.fn(),
-      getStates: vi.fn(() => new Map()),
-    };
+    awareness = new FakeAwareness();
     handlers = new Map<string, ((payload: any) => void)[]>();
     destroy = vi.fn();
     disconnect = vi.fn();
@@ -193,6 +218,51 @@ describe("attach / detach / forTab", () => {
 
   it("detaching an unshared tab is a no-op", () => {
     expect(() => service.detach(7)).not.toThrow();
+  });
+});
+
+// P11: the user legend's data source. The old client polled awareness every 500 ms
+// from the component; the service now pushes awareness 'change' into collabStore, so
+// the legend is a pure store reader (plan §9 P11).
+describe("awareness -> collabStore.users", () => {
+  it("seeds the tab's user list from awareness at attach time", () => {
+    const provider = () => mocks.providers[0];
+    service.attach(0, scene, "edit");
+    provider().awareness.states.set(1, { user: { uuid: "u-1", username: "admin", initials: "AD", color: "#f00" } });
+    provider().awareness.emit("change");
+
+    expect(useCollabStore.getState().tabs[0].users).toEqual([
+      { clientId: 1, uuid: "u-1", username: "admin", color: "#f00", initials: "AD", isLocal: true },
+    ]);
+  });
+
+  it("updates the list when a peer joins and again when it leaves", () => {
+    service.attach(0, scene, "edit");
+    const { awareness } = mocks.providers[0];
+
+    awareness.states.set(1, { user: { uuid: "u-1", username: "admin" } });
+    awareness.states.set(2, { user: { uuid: "u-2", username: "test" } });
+    awareness.emit("change");
+    expect(useCollabStore.getState().tabs[0].users.map((u) => u.username)).toEqual(["admin", "test"]);
+
+    awareness.states.delete(2);
+    awareness.emit("change");
+    expect(useCollabStore.getState().tabs[0].users.map((u) => u.username)).toEqual(["admin"]);
+  });
+
+  it("stops updating the store after detach (y-websocket's destroy leaves OUR handler on)", () => {
+    service.attach(0, scene, "edit");
+    const { awareness } = mocks.providers[0];
+    awareness.states.set(1, { user: { uuid: "u-1", username: "admin" } });
+    awareness.emit("change");
+
+    service.detach(0);
+    // A late awareness event must not resurrect an entry for the closed tab.
+    awareness.states.set(2, { user: { uuid: "u-2", username: "test" } });
+    awareness.emit("change");
+
+    expect(useCollabStore.getState().tabs[0]).toBeUndefined();
+    expect(awareness.handlers.get("change")).toEqual([]);
   });
 });
 

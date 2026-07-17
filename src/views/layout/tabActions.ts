@@ -11,6 +11,8 @@ import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
+import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-renderer";
+import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
 
 /**
  * Tab select/close operations — the "single mutation path" for tab *selection* and
@@ -70,7 +72,11 @@ export async function closeTab(index: number): Promise<void> {
 
   // Tear down any shared session before removing the tab so the websocket is closed
   // gracefully and the user disappears from other clients' awareness (P10).
-  // P11 adds remoteCursorRenderer.clearForTab / remoteSelectionRenderer.clearForTab here.
+  // P11: drop this tab's remote cursor/selection helpers FIRST — clearForTab needs the
+  // session alive to unsubscribe its awareness handler, and the tabContext entry alive
+  // to remove the helpers from the right scene. Same order as the old main-body-tab-bar.
+  remoteCursorRenderer.clearForTab(index);
+  remoteSelectionRenderer.clearForTab(index);
   //
   // KNOWN LIMITATION, faithful to the old client: sessions are keyed by tab INDEX, and
   // the splice below shifts every later tab down one. Their sessions keep the old key,

@@ -13,8 +13,8 @@
  * machine, joined by `consistency-checker`, `instance-creation-handler` and
  * `deletion-handler` (imported below in dependency order — the handlers must
  * construct after graphic-context / the global-* holders they read at construction).
- * `transform-control-events` was replaced by P4. The animator's remote-selection
- * call stays inline-stubbed (P11) — see its header.
+ * `transform-control-events` was replaced by P4. P11 un-stubbed the animator's
+ * `remoteSelectionRenderer.refreshBoxes()` call — see its header.
  *
  * P4 added `graphic-context` (the vizRep `gc` API), `coordinates-updater` and
  * `vizrep-update-checker`. Importing `vizrep-update-checker` here is load-bearing,

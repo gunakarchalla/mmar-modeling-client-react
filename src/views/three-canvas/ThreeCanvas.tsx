@@ -31,9 +31,8 @@ export default function ThreeCanvas() {
     let disposed = false;
     let observer: ResizeObserver | undefined;
 
-    // Deactivate the awareness cursor when the pointer leaves the 3D canvas. This is
-    // a collaboration (P11) concern; rayHelper.clearCursor() is a no-op until the
-    // shared session exists, so wiring the listener now is safe.
+    // Deactivate the awareness cursor when the pointer leaves the 3D canvas, so peers
+    // stop drawing our arrow (P11). A no-op when the active tab has no shared session.
     const onMouseLeave = () => rayHelper.clearCursor();
     el.addEventListener("mouseleave", onMouseLeave);
 

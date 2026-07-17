@@ -39,6 +39,11 @@ const mocks = vi.hoisted(() => ({
   // the real @/engine/global-definition (which it imports directly, bypassing the
   // mocked barrel) from constructing a WebGLRenderer under vitest.
   sharedDocService: { attach: vi.fn(), detach: vi.fn(), forTab: vi.fn(() => null) },
+  // P11: maybeAttachSharedSession binds both renderers to the new session. Mocked for
+  // the same reason as the service — they import @/engine/global-definition directly
+  // (bypassing the mocked barrel), which builds a WebGLRenderer at module scope.
+  remoteCursorRenderer: { bindToSession: vi.fn(), clearForTab: vi.fn() },
+  remoteSelectionRenderer: { bindToSession: vi.fn(), clearForTab: vi.fn() },
   closeTab: vi.fn(async () => undefined),
 }));
 
@@ -55,6 +60,10 @@ vi.mock("@/resources/services/snapshot-service", () => ({ snapshotService: mocks
 vi.mock("@/resources/services/persistency-handler", () => ({ persistencyHandler: mocks.persistencyHandler }));
 vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.backendService }));
 vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
+vi.mock("@/resources/collaboration/remote-cursor-renderer", () => ({ remoteCursorRenderer: mocks.remoteCursorRenderer }));
+vi.mock("@/resources/collaboration/remote-selection-renderer", () => ({
+  remoteSelectionRenderer: mocks.remoteSelectionRenderer,
+}));
 vi.mock("@/views/layout/tabActions", () => ({ closeTab: mocks.closeTab }));
 
 import SceneGroup from "./SceneGroup";
@@ -148,6 +157,35 @@ describe("SceneGroup — maybeAttachSharedSession", () => {
 
     await waitFor(() => expect(mocks.persistencyHandler.loadPersistedModel).toHaveBeenCalled());
     expect(mocks.sharedDocService.attach).not.toHaveBeenCalled();
+  });
+
+  // P11: without these binds, peers' cursors and selection boxes never draw — and
+  // nothing throws, so only a test catches it (same hazard class as P10's load-bearing
+  // coordinates-updater import).
+  it("binds both presence renderers to the session right after attaching", async () => {
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }, { uuid_user: "u2" }]);
+    mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "edit" });
+    mocks.instanceUtility.createTabContextSceneInstance.mockImplementation(async () => {
+      const ctx = { isShared: false };
+      mocks.globalObject.tabContext.push(ctx);
+      useTabsStore.getState().openTab({ name: "My Scene", uuid: "si-1", isShared: false });
+      return ctx;
+    });
+
+    await openSceneInstance();
+
+    await waitFor(() => expect(mocks.remoteCursorRenderer.bindToSession).toHaveBeenCalledWith(0));
+    expect(mocks.remoteSelectionRenderer.bindToSession).toHaveBeenCalledWith(0);
+  });
+
+  it("binds no renderer for a scene that is not shared", async () => {
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }]);
+
+    await openSceneInstance();
+
+    await waitFor(() => expect(mocks.persistencyHandler.loadPersistedModel).toHaveBeenCalled());
+    expect(mocks.remoteCursorRenderer.bindToSession).not.toHaveBeenCalled();
+    expect(mocks.remoteSelectionRenderer.bindToSession).not.toHaveBeenCalled();
   });
 });
 

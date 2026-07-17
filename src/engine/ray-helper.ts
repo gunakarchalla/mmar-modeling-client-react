@@ -1,5 +1,8 @@
 import * as THREE from "three";
 import { globalObject } from "@/engine/global-definition";
+// TYPE-ONLY import: erased at build time, so the engine keeps its runtime distance from
+// the collaboration module (the sharedDocServiceRef indirection above is the point).
+import type { SharedDocService } from "@/resources/collaboration/shared-doc-service";
 
 /**
  * Port of the old `resources/ray_helper.ts` (DI-stripping recipe): the Aurelia
@@ -7,17 +10,19 @@ import { globalObject } from "@/engine/global-definition";
  * singleton. `shootRay` / `shootRayFromObject` are unchanged.
  *
  * The old client also injected `SharedDocService` for the collaboration cursor
- * broadcast (`broadcastCursor` / `clearCursor`). Collaboration is not wired until
- * P10/P11, so those bits reach the shared session through
- * `globalObject.sharedDocServiceRef` (null until P10) instead of a direct import —
- * the null guard makes them no-ops for now. Un-stub / verify in P11.
+ * broadcast (`broadcastCursor` / `clearCursor`). Here those bits reach the shared
+ * session through `globalObject.sharedDocServiceRef` instead of a direct import — the
+ * back-reference that breaks the old circular DI (P10). The ref is non-null from the
+ * moment `shared-doc-service` is first imported, so the cursor broadcast is LIVE since
+ * P11: it publishes the `cursor` awareness field that RemoteCursorRenderer draws.
+ * On a non-shared tab `forTab()` returns null and both methods are no-ops.
  */
 export class RayHelper {
   private lastCursorBroadcast = 0;
 
   private globalObjectInstance = globalObject;
 
-  private get sharedDocService(): any {
+  private get sharedDocService(): SharedDocService | null {
     return this.globalObjectInstance.sharedDocServiceRef;
   }
 
@@ -54,13 +59,13 @@ export class RayHelper {
     this.globalObjectInstance.raycaster.setFromCamera(this.globalObjectInstance.mouse, this.globalObjectInstance.camera);
 
     // Broadcast cursor position to awareness (throttled to ~33 ms / ~30 fps). No-op
-    // until collaboration is wired (P11).
+    // on a tab with no shared session.
     this.broadcastCursor();
 
     return this.globalObjectInstance.raycaster;
   }
 
-  /** Clear the local cursor state — call on pointer-leave of the canvas. No-op until P11. */
+  /** Clear the local cursor state — call on pointer-leave of the canvas (ThreeCanvas does). */
   clearCursor(): void {
     const session = this.sharedDocService?.forTab(this.globalObjectInstance.selectedTab);
     if (!session) return;
@@ -74,7 +79,7 @@ export class RayHelper {
    *
    * Because the unprojection runs through the active camera's inverse projection
    * matrix, this works for both the orthographic (2D) and perspective (3D) cameras
-   * without branching. Throttled to ~30 fps. No-op until collaboration is wired (P11).
+   * without branching. Throttled to ~30 fps. No-op on a tab with no shared session.
    */
   private broadcastCursor(): void {
     const now = Date.now();
