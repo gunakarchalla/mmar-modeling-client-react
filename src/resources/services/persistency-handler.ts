@@ -332,54 +332,34 @@ export class PersistencyHandler {
       return;
     }
 
-    //check first if post or patch
-    //get SceneType of the sceneInstance
+    // Only persist scenes that belong to a known SceneType (an open, valid tab).
     const sceneType = await this.metaUtility.getTabContextSceneType();
-    if (sceneType) {
-      try {
-        await backendService.sceneInstancesPATCH(sceneInstance.uuid, sceneInstance);
-        this.snapshotService.setSceneInstanceSnapshot(sceneInstance);
-        this.logger.log("SceneInstance patched", "info");
-      } catch (error) {
-        const patchError = error as any;
-        const statusCode = Number(patchError?.status);
-        this.logger.log(
-          `SceneInstance patch failed: ${patchError?.message || JSON.stringify(patchError)}`,
-          "error",
-        );
+    if (!sceneType) return;
 
-        // Continue with POST only when PATCH failed because the scene is not there yet.
-        if (statusCode === 404) {
-          this.logger.log(
-            "PATCH failed with status 404. Scene instance not found. Trying to post instead.",
-            "info",
-          );
-          try {
-            await backendService.sceneInstancesPOST(sceneType.uuid, sceneInstance);
-            this.snapshotService.setSceneInstanceSnapshot(sceneInstance);
-            this.logger.log("SceneInstance posted", "info");
-          } catch (postError) {
-            const scenePostError = postError as any;
-            this.logger.log(
-              `SceneInstance post failed: ${scenePostError?.message || JSON.stringify(scenePostError)}`,
-              "error",
-            );
-          }
-          return;
-        }
+    // A single PATCH both creates the scene on its first save and updates it on every
+    // save after that: the server PATCH is an upsert, so there is no POST-on-404
+    // fallback anymore (which is what produced the misleading 404 on scene creation).
+    try {
+      await backendService.sceneInstancesPATCH(sceneInstance.uuid, sceneInstance);
+      this.snapshotService.setSceneInstanceSnapshot(sceneInstance);
+      this.logger.log("SceneInstance saved", "info");
+    } catch (error) {
+      const patchError = error as any;
+      const statusCode = Number(patchError?.status);
 
-        if (statusCode === 403) {
-          window.alert("You don't have enough authorization to edit this scene instance.");
-          this.snapshotService.restoreSceneInstanceToCurrentTab();
-          await this.importInstances();
-          return;
-        }
-
-        this.logger.log(
-          `SceneInstance patch failed with status ${statusCode}. POST fallback skipped.`,
-          "error",
-        );
+      // 403: read-only access to a shared scene. Revert to the last snapshot and
+      // re-import so the canvas reflects the server's state rather than the rejected edit.
+      if (statusCode === 403) {
+        window.alert("You don't have enough authorization to edit this scene instance.");
+        this.snapshotService.restoreSceneInstanceToCurrentTab();
+        await this.importInstances();
+        return;
       }
+
+      this.logger.log(
+        `SceneInstance save failed: ${patchError?.message || JSON.stringify(patchError)}`,
+        "error",
+      );
     }
   }
 

@@ -77,6 +77,39 @@ describe("persistency-handler.persistSceneInstanceToDB", () => {
     expect(mocks.backendService.sceneInstancesPOST).not.toHaveBeenCalled();
   });
 
+  it("creates a freshly-created scene with a single PATCH (server upsert, no POST fallback)", async () => {
+    // The server PATCH is an upsert, so the first save of a new scene succeeds with a
+    // single PATCH — no PATCH -> 404 -> POST dance. POST must never be called.
+    const scene = makeScene("s-new", "Second Scene");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.metaUtility.getTabContextSceneType.mockResolvedValue({ uuid: "st-1" });
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue(scene);
+
+    await persistencyHandler.persistSceneInstanceToDB();
+
+    expect(mocks.backendService.sceneInstancesPATCH).toHaveBeenCalledWith("s-new", scene);
+    expect(mocks.backendService.sceneInstancesPOST).not.toHaveBeenCalled();
+    expect(mocks.snapshotService.setSceneInstanceSnapshot).toHaveBeenCalledWith(scene);
+  });
+
+  it("reverts to the last snapshot when PATCH is rejected with 403 (read-only shared scene)", async () => {
+    const scene = makeScene("s-3", "Shared Scene");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.metaUtility.getTabContextSceneType.mockResolvedValue({ uuid: "st-1" });
+    mocks.backendService.sceneInstancesPATCH.mockRejectedValue(
+      Object.assign(new Error("Failed to update scene instance (403)"), { status: 403 }),
+    );
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+
+    await persistencyHandler.persistSceneInstanceToDB();
+
+    expect(mocks.backendService.sceneInstancesPOST).not.toHaveBeenCalled();
+    expect(mocks.snapshotService.restoreSceneInstanceToCurrentTab).toHaveBeenCalled();
+    expect(mocks.snapshotService.setSceneInstanceSnapshot).not.toHaveBeenCalled();
+
+    alertSpy.mockRestore();
+  });
+
   it("logs and skips when there is no active scene instance", async () => {
     mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(undefined);
 

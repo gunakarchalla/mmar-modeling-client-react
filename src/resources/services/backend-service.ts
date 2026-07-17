@@ -189,21 +189,29 @@ export class BackendService {
     }
   }
 
-  /** PATCH /instances/sceneInstances/:uuid -> SceneInstance (fetchHelper.sceneInstancesPATCH:4711). */
+  /**
+   * PATCH /instances/sceneInstances/:uuid -> SceneInstance (fetchHelper.sceneInstancesPATCH:4711).
+   *
+   * The server PATCH is an UPSERT: a PATCH targeting a scene instance that does not
+   * exist yet creates it, so the first autosave of a freshly created scene succeeds
+   * with a single PATCH — no PATCH -> 404 -> POST fallback (which used to log a
+   * misleading "404" to the snackbar on every new scene).
+   *
+   * THROWS ApiError instead of swallowing — persistSceneInstanceToDB still branches on
+   * a 403 (no edit rights on a shared scene). No log(..., 'error') here — see
+   * sceneAccessPOST; the caller decides what is an error.
+   */
   async sceneInstancesPATCH(
     sceneInstanceUUID: string,
     body: SceneInstance,
-  ): Promise<SceneInstance | undefined> {
-    try {
-      const response = await apiFetch(
-        `instances/sceneInstances/${encodeURIComponent(sceneInstanceUUID)}`,
-        { method: "PATCH", headers: authHeaders(), body: JSON.stringify(body) },
-      );
-      if (!response.ok) throw new Error(`Failed to update scene instance (${response.status})`);
-      return SceneInstance.fromJS(await response.json()) as SceneInstance;
-    } catch (error) {
-      log(`Error updating scene instance: ${error}`, "error");
-    }
+  ): Promise<SceneInstance> {
+    const response = await apiFetch(
+      `instances/sceneInstances/${encodeURIComponent(sceneInstanceUUID)}`,
+      { method: "PATCH", headers: authHeaders(), body: JSON.stringify(body) },
+    );
+    if (!response.ok)
+      throw new ApiError(`Failed to update scene instance (${response.status})`, response.status);
+    return SceneInstance.fromJS(await response.json()) as SceneInstance;
   }
 
   /** DELETE /instances/sceneInstances/:uuid -> SceneInstance[] (fetchHelper.sceneInstancesAllDELETE2:4759). */

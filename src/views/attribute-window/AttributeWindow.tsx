@@ -125,6 +125,16 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
   const { currentClassInstance, currentPortInstance, currentRelationclassInstance } = groups;
   const hasDynamic = groups.plain.length !== 0 || groups.table.length !== 0 || groups.reference.length !== 0;
 
+  // The window is only shown while an element is selected. `buildAttributeGroups`
+  // resolves the selected THREE object back to its class / port / relationclass
+  // instance; when nothing is selected (clicking empty space, deleting an instance)
+  // all three are null, so there is nothing to display — render nothing rather than an
+  // empty panel. All hooks above run unconditionally, so this early return is safe.
+  const hasSelection = Boolean(
+    currentClassInstance || currentPortInstance || currentRelationclassInstance,
+  );
+  if (!hasSelection) return null;
+
   // `openDialog(dialog, attributeInstance)` in the old view: publish the context on the
   // bus (plan §5 `openReferenceDialog`) AND open the single shared dialog. The old
   // client did exactly this pair — one dialog view reused by every reference button.

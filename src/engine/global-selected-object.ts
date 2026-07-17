@@ -19,7 +19,14 @@ export class GlobalSelectedObject {
   private globalObjectInstance = globalObject;
 
   getObject() {
-    this.updateSelectionBoxHelper(this.object);
+    // Only refresh the box helper when there is actually something selected. After
+    // `removeObject()` (e.g. clicking empty space) both `this.object` and the
+    // boxHelper are undefined, so the old unconditional `updateSelectionBoxHelper`
+    // threw "Cannot read properties of undefined (reading 'setFromObject')" whenever a
+    // rebuild read the selection (the React selection store triggers exactly that).
+    if (this.object && this.globalObjectInstance.boxHelper) {
+      this.updateSelectionBoxHelper(this.object);
+    }
     return this.object;
   }
 
