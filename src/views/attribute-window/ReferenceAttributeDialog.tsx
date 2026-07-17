@@ -24,6 +24,7 @@ import type {
   SceneInstance,
 } from "@gds";
 import { globalObject, instanceCreationHandler } from "@/engine";
+import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { expressionUtility } from "@/resources/services/expression-utility";
@@ -206,8 +207,9 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
     // set attributeInstance value to the role_instance_from.name
     attributeInstance.value = roleInstanceFrom.name;
 
-    // P12: hybridAlgorithmsService.checkHybridAlgorithms(attributeInstance) — runs the
-    // Statechange hybrid algorithm for the new reference.
+    //run hybrid algorithm for Statechange -> reference (P12: live)
+    await hybridAlgorithmsService.checkHybridAlgorithms(attributeInstance);
+
     onChanged?.();
   }
 

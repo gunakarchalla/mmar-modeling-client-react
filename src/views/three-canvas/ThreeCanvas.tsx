@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Box } from "@mui/material";
 import { engine, resize, globalObject, rayHelper } from "@/engine";
+import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 
@@ -63,11 +64,14 @@ export default function ThreeCanvas() {
     }, 1000);
 
     // Heartbeat #2 — periodically refresh hybrid-algorithm attributes for the open
-    // scene. The hybrid-algorithms service is not ported until P12, so the call is
-    // stubbed; the guard + interval are kept so P12 only has to un-comment.
+    // scene (P12: live). Today this only does work for a Statechange scene, where it
+    // reads each Reference object's three.js pose back into its pose attributes; for
+    // every other scene type the service returns immediately.
     const hybridRefresh = setInterval(() => {
       if (globalObject.tabContext.length > 0) {
-        // P12: hybridAlgorithmsService.updateHybridAlgorithmAttributes();
+        void hybridAlgorithmsService
+          .updateHybridAlgorithmAttributes()
+          .catch((err) => logger.log(`Hybrid algorithm refresh failed: ${describeError(err)}`, "error"));
       }
     }, 1000);
 

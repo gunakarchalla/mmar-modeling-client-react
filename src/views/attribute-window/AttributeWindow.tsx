@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Button, Divider, TextField, Typography } from "@mui/material";
-import { eventBus } from "@/resources/services/event-bus";
+import type { AttributeInstance } from "@gds";
+import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
+import { eventBus, type UploadEventPayload } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { useSelectionStore } from "@/resources/store/selectionStore";
@@ -80,14 +82,32 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
     }, 10);
   }, []);
 
+  // Old `gltfUploaded(message)` / `imageUploaded(message)`: both did nothing but run the
+  // hybrid algorithms for the uploaded attribute instance — that is what swaps an
+  // ObjectSpace Augmentation's mesh for the uploaded GLTF, or re-sizes a Detectable's
+  // plane for the uploaded image. P8 subscribed these channels to rebuild the FIELDS
+  // instead (the value changed underneath us) and left the hybrid call for P12; both
+  // now run. The attributeInstance rides along in the P8 upload payload.
+  const uploaded = useCallback(
+    (payload: UploadEventPayload) => {
+      rebuild();
+      const attributeInstance = payload?.attributeInstance as AttributeInstance | undefined;
+      if (!attributeInstance) return;
+      void hybridAlgorithmsService
+        .checkHybridAlgorithms(attributeInstance)
+        .catch((err) => logger.log("hybrid algorithms failed: " + describeError(err), "error"));
+    },
+    [rebuild],
+  );
+
   useEffect(() => {
     const subs = [
       eventBus.subscribe("updateAttributeGui", rebuild),
       eventBus.subscribe("removeAttributeGui", delayedReset),
-      // The old window re-ran the hybrid algorithms on these; the redraw is what the
-      // user sees, so rebuild the fields too (the value changed underneath us).
-      eventBus.subscribe("gltfUploaded", rebuild),
-      eventBus.subscribe("imageUploaded", rebuild),
+      eventBus.subscribe("gltfUploaded", uploaded),
+      eventBus.subscribe("imageUploaded", uploaded),
+      // fileUploaded only rebuilds: the old window never subscribed it for the hybrid
+      // algorithms, and its payload carries a fileUuid rather than the instance.
       eventBus.subscribe("fileUploaded", rebuild),
       eventBus.subscribe("tableAttributeChanged", rebuild),
     ];
@@ -95,7 +115,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
       subs.forEach((s) => s.dispose());
       if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     };
-  }, [rebuild, delayedReset]);
+  }, [rebuild, delayedReset, uploaded]);
 
   // Rebuild when the P5 selection store changes (selection identity or a bump()).
   useEffect(() => {

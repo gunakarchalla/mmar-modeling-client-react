@@ -9,6 +9,10 @@ import {
   Typography,
 } from "@mui/material";
 import * as unzipit from "unzipit";
+import {
+  roboticsystemAlgorithms,
+  type ZipEntry,
+} from "@/engine/hybrid-algorithms/roboticsystem-algorithms";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
@@ -17,37 +21,16 @@ import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
 
 /**
  * P9 port of `dialogs/dialog-map-from-file/{ts,html}` — imports a `.zip` holding a
- * URDF plus its referenced meshes into the open Robotic system scene.
+ * URDF plus its referenced meshes into the open Robotic system scene. COMPLETED in P12:
+ * the URDF half (roboticsystem-algorithms) is now live, so a zip really does create
+ * Link/Joint instances.
  *
  * The dialog is only usable when the open tab's SceneInstance is of the Robotic
  * system scene type; otherwise it shows the original's status message instead of the
- * uploader. That eligibility gate, the zip parsing (unzipit — the P9 dep, and the
- * ONLY place in the client that unzips) and the UI are all live here.
- *
- * P12 STUB — the URDF half is not: `roboticsystem_algorithms` (createZipIndex /
- * processZipUrdf / meshCache) lands in P12 per plan §9. The two module-local no-ops
- * below stand in for it, mirroring the stub convention P5/P6/P8 used. P12 must:
- *   - delete both stubs and import { roboticsystemAlgorithms } from the ported module;
- *   - call roboticsystemAlgorithms.meshCache.clear() where clearMeshCache() is called;
- *   - replace createZipIndex(entries)/processZipUrdf(index) with the real calls
- *     (the old file typed entries as `Record<string, ZipEntry>`, a type re-exported
- *     from roboticsystem_algorithms).
- * Until then a zip is unzipped and its entry count logged, but no links/joints are
- * created — the dialog is inert by design, not broken.
+ * uploader. The zip parsing uses unzipit (the P9 dep, and the ONLY place in the client
+ * that unzips); its entries are indexed by roboticsystem-algorithms so the URDF's mesh
+ * references resolve against the in-memory archive rather than over HTTP.
  */
-
-// P12: roboticsystemAlgorithms.meshCache.clear()
-function clearMeshCache(): void {
-  // no-op until P12
-}
-
-// P12: roboticsystemAlgorithms.createZipIndex(entries) -> processZipUrdf(zipIndex)
-async function processZipUrdf(entries: Record<string, unknown>): Promise<void> {
-  logger.log(
-    `Zip read: ${Object.keys(entries).length} entries. URDF mapping arrives in P12.`,
-    "info",
-  );
-}
 
 export default function MapFromFileDialog() {
   const open = useUiStore((s) => s.dialogs.mapFromFile);
@@ -79,7 +62,7 @@ export default function MapFromFileDialog() {
   useEffect(() => {
     if (!open) {
       // Port of detaching()/cleanup(): release the transient import cache on close.
-      clearMeshCache();
+      roboticsystemAlgorithms.meshCache.clear();
       return;
     }
     setFile(null);
@@ -100,21 +83,23 @@ export default function MapFromFileDialog() {
 
     try {
       // Clear any previous import cache so this run only caches what it needs.
-      clearMeshCache();
+      roboticsystemAlgorithms.meshCache.clear();
 
       // Parse the zip in-memory. unzipit exposes a plain object of entries keyed by path.
       const { entries } = await unzipit.unzip(file);
 
       setFile(null);
 
-      // Discover a URDF file in the zip and instantiate links/joints.
-      await processZipUrdf(entries as unknown as Record<string, unknown>);
+      // Index the entries by path/base name, then discover a URDF file in the zip and
+      // instantiate links/joints from it.
+      const zipIndex = roboticsystemAlgorithms.createZipIndex(entries as unknown as Record<string, ZipEntry>);
+      await roboticsystemAlgorithms.processZipUrdf(zipIndex);
     } catch (e) {
       logger.log(`Mapping failed: ${describeError(e)}`, "error");
     } finally {
       // Ensure transient structures don't survive the import. Mesh data referenced by
       // created instances (urdfVizRep) stays alive as needed.
-      clearMeshCache();
+      roboticsystemAlgorithms.meshCache.clear();
     }
     closeDialog("mapFromFile");
   }

@@ -19,11 +19,12 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import type { Attribute, AttributeInstance, ClassInstance, PortInstance } from "@gds";
+import type { Attribute, AttributeInstance, Class, ClassInstance, PortInstance } from "@gds";
 // ColumnStructure is NOT re-exported from the gds barrel — deep-import it, exactly as
 // the old dialog-table-attribute.ts did.
 import type { ColumnStructure } from "@gds/models/meta/Metamodel_columns.structure";
 import { globalObject, instanceCreationHandler } from "@/engine";
+import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { eventBus } from "@/resources/services/event-bus";
@@ -92,6 +93,10 @@ export function TableAttributeDialogView({
   const [rows, setRows] = useState<AttributeInstance[][]>([]);
   const [facetsAll, setFacetsAll] = useState<string[][]>([]);
   const [currentAttribute, setCurrentAttribute] = useState<Attribute | null>(null);
+  // P12: the robotic-system hybrid algorithm is dispatched on the meta CLASS + meta
+  // ATTRIBUTE names ('joint' / 'origin'), so fieldChange needs the class too — the old
+  // dialog kept both as fields (`currentClass`, `currentAttribute`).
+  const [currentClass, setCurrentClass] = useState<Class | null>(null);
   const [nestedCell, setNestedCell] = useState<{ row: number; col: number } | null>(null);
   const bump = useSelectionStore((s) => s.bump);
 
@@ -105,6 +110,7 @@ export function TableAttributeDialogView({
     const metaAttribute =
       attribute ?? currentClass?.attributes.find((candidate) => candidate.uuid === attributeUUID);
     setCurrentAttribute(metaAttribute ?? null);
+    setCurrentClass(currentClass ?? null);
 
     //get the table cells
     const tableAttributes = attributeInstance.table_attributes ?? [];
@@ -163,15 +169,24 @@ export function TableAttributeDialogView({
     eventBus.publish("checkForVizRepUpdateByAttributeInstance", cell);
 
     // if scenetype is robotic system, check if there are changes that require a hybrid
-    // algorithm to run
+    // algorithm to run (P12: live)
     const sceneInstance = await instanceUtility.getTabContextSceneInstance();
     if (sceneInstance?.uuid_scene_type == ROBOTIC_SYSTEM_SCENETYPE_UUID) {
-      // P12: hybridAlgorithmsService.checkHybridAlgorithms(cell, [currentClassInstance],
-      // null, currentClass, currentAttribute);
+      // The original passes `[this.currentClassInstance]` unconditionally, i.e. `[null]`
+      // when nothing is selected; `null` here reaches the identical outcome (the service
+      // only reads `classInstances[0]` in this branch, then returns) without lying to
+      // the type.
+      await hybridAlgorithmsService.checkHybridAlgorithms(
+        cell,
+        currentClassInstance ? [currentClassInstance] : null,
+        null,
+        currentClass,
+        currentAttribute,
+      );
     } else if (currentClassInstance) {
-      // P12: hybridAlgorithmsService.checkHybridAlgorithms(null, [currentClassInstance]);
+      await hybridAlgorithmsService.checkHybridAlgorithms(null, [currentClassInstance]);
     } else if (currentPortInstance) {
-      // P12: hybridAlgorithmsService.checkHybridAlgorithms(null, null, [currentPortInstance]);
+      await hybridAlgorithmsService.checkHybridAlgorithms(null, null, [currentPortInstance]);
     }
 
     //patch attribute instance

@@ -6,6 +6,7 @@ import type {
   RelationclassInstance,
 } from "@gds";
 import { globalObject, globalSelectedObject } from "@/engine";
+import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { eventBus } from "@/resources/services/event-bus";
@@ -254,11 +255,11 @@ export interface AttributeOwner {
  * P8 require publishing `checkForVizRepUpdateByAttributeInstance` instead, which the
  * P4 vizrep-update-checker subscribes to. Same effect and it keeps the view out of the
  * engine's import graph, but the update is now fire-and-forget rather than awaited —
- * so the P12 hybrid-algorithms call below is no longer sequenced *after* the vizrep
- * update the way the original sequenced it. See state.json → discoveries (P8).
- *
- * Kept `async` (like the original) so P12 can `await` the hybrid-algorithms call it
- * un-stubs here without changing every call site.
+ * so the hybrid-algorithms call below is NOT sequenced after the vizrep update the way
+ * the original sequenced it; the two now run concurrently. See state.json → discoveries
+ * (P8 ordering, P12). The hybrid algorithms that draw (ObjectSpace) use their own
+ * private GraphicContext precisely so that overlap is safe — see
+ * engine/hybrid-algorithms/objectspace-algorithms.ts.
  */
 export async function applyFieldChange(attributeInstance: AttributeInstance, owner: AttributeOwner): Promise<void> {
   const session = sharedDocService.forTab(globalObject.selectedTab);
@@ -271,8 +272,12 @@ export async function applyFieldChange(attributeInstance: AttributeInstance, own
 
   eventBus.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
 
-  // P12: hybridAlgorithmsService.checkHybridAlgorithms(null, [currentClassInstance])
-  // when a class instance is selected / (null, null, [currentPortInstance]) for a port.
+  // check if there are changes that require a hybrid algorithm to run (P12: live)
+  if (owner.currentClassInstance) {
+    await hybridAlgorithmsService.checkHybridAlgorithms(null, [owner.currentClassInstance]);
+  } else if (owner.currentPortInstance) {
+    await hybridAlgorithmsService.checkHybridAlgorithms(null, null, [owner.currentPortInstance]);
+  }
 
   if (session) {
     // Shared mode: propagate attribute change through Yjs and mark local dirty flag

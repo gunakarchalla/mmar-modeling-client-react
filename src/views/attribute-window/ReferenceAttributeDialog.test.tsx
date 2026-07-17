@@ -31,8 +31,16 @@ const mocks = vi.hoisted(() => ({
     getMetaPort: vi.fn(async (): Promise<any> => undefined),
   },
   expressionUtility: { attrvalByInst: vi.fn(async (): Promise<any> => "Referenced Task") },
+  // P12: hybrid-algorithms-service imports the @/engine/global-definition LEAF directly,
+  // so it bypasses the `@/engine` barrel mock and drags in a real WebGLRenderer at module
+  // scope — this whole file fails to load without the mock below. (Same lesson as P9's
+  // persistency-handler, P10's shared-doc-service and P11's renderers.)
+  hybridAlgorithmsService: { checkHybridAlgorithms: vi.fn(async () => undefined) },
 }));
 
+vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
+  hybridAlgorithmsService: mocks.hybridAlgorithmsService,
+}));
 vi.mock("@/engine", () => ({
   globalObject: mocks.globalObject,
   instanceCreationHandler: mocks.instanceCreationHandler,
@@ -177,6 +185,13 @@ describe("ReferenceAttributeDialog", () => {
     );
     // and the attribute value becomes the resolved reference name
     expect(attributeInstance.value).toBe("Referenced Task");
+
+    // P12 un-stub: setting a reference must run the Statechange hybrid algorithm, which
+    // is what makes a Reference instance adopt the referenced object's mesh. Dropping
+    // this call leaves the reference set but the model visually unchanged.
+    await waitFor(() =>
+      expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).toHaveBeenCalledWith(attributeInstance),
+    );
   });
 
   it("unsets the reference: clears role_instance_from, drops the role instance and resets the value", async () => {

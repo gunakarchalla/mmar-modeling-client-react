@@ -8,7 +8,11 @@
 //     mount token so a superseded cleanup is a no-op.
 //
 // `@/engine` is mocked: importing it for real constructs a WebGLRenderer at module
-// scope, which jsdom cannot provide.
+// scope, which jsdom cannot provide. P12 added a SECOND module that must be mocked for
+// the same reason — hybrid-algorithms-service imports the @/engine/global-definition
+// LEAF directly, so it bypasses the `@/engine` barrel mock above and the whole file
+// dies on import. (Same lesson as P9's persistency-handler, P10's shared-doc-service
+// and P11's renderers: mock anything that transitively touches global-definition.)
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup, act } from "@testing-library/react";
 
@@ -18,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   globalObject: { render: false, runMechanism: false, tabContext: [] as unknown[] },
   rayHelper: { clearCursor: vi.fn() },
   logger: { log: vi.fn() },
+  hybridAlgorithmsService: { updateHybridAlgorithmAttributes: vi.fn(async () => undefined) },
   observe: vi.fn(),
   disconnect: vi.fn(),
 }));
@@ -27,6 +32,9 @@ vi.mock("@/engine", () => ({
   resize: mocks.resize,
   globalObject: mocks.globalObject,
   rayHelper: mocks.rayHelper,
+}));
+vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
+  hybridAlgorithmsService: mocks.hybridAlgorithmsService,
 }));
 vi.mock("@/resources/services/logger", () => ({ logger: mocks.logger }));
 
@@ -118,6 +126,34 @@ describe("ThreeCanvas — steady-render heartbeats", () => {
 
     expect(mocks.globalObject.render).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Heartbeat #2 (P2 stubbed it, P12 un-stubbed it). Worth pinning because it is the
+  // ONLY thing that refreshes a Statechange scene's Reference pose attributes, and if
+  // the call is ever dropped again nothing throws — the attributes just quietly stop
+  // updating. Same silent-regression hazard as P4's vizrep-update-checker import.
+  it("refreshes hybrid-algorithm attributes once a second, but only with a tab open", async () => {
+    vi.useFakeTimers();
+    mocks.globalObject.tabContext = [];
+    render(<ThreeCanvas />);
+
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(mocks.hybridAlgorithmsService.updateHybridAlgorithmAttributes).not.toHaveBeenCalled();
+
+    mocks.globalObject.tabContext = [{}];
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(mocks.hybridAlgorithmsService.updateHybridAlgorithmAttributes).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs, rather than unhandled-rejecting, when the hybrid refresh fails", async () => {
+    vi.useFakeTimers();
+    mocks.globalObject.tabContext = [{}];
+    mocks.hybridAlgorithmsService.updateHybridAlgorithmAttributes.mockRejectedValueOnce(new Error("hybrid boom"));
+    render(<ThreeCanvas />);
+
+    await act(async () => { vi.advanceTimersByTime(1000); });
+
+    expect(mocks.logger.log).toHaveBeenCalledWith(expect.stringContaining("hybrid boom"), "error");
   });
 });
 

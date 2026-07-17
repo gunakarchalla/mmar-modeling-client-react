@@ -57,6 +57,13 @@ const mocks = vi.hoisted(() => ({
   sharedDocService: { forTab: vi.fn(() => null) },
 }));
 
+// P12: hybrid-algorithms-service imports the @/engine/global-definition LEAF directly,
+// so it bypasses the `@/engine` barrel mock below and drags in a real WebGLRenderer at
+// module scope — this whole file fails to load without this mock. (Same lesson as P9's
+// persistency-handler, P10's shared-doc-service and P11's renderers.)
+vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
+  hybridAlgorithmsService: { checkHybridAlgorithms: vi.fn(async () => undefined) },
+}));
 vi.mock("@/engine", () => ({
   globalObject: mocks.globalObject,
   globalSelectedObject: mocks.globalSelectedObject,
@@ -174,7 +181,10 @@ describe("AttributeWindow", () => {
     expect(classInstance.attribute_instance[0].value).toBe("edited");
     expect(published).toHaveLength(1);
     expect(published[0].uuid).toBe("ai-1");
-    expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
+    // P12 made this assertion async: applyFieldChange now `await`s the hybrid algorithms
+    // before marking the scene dirty (faithful — the original awaited them there too),
+    // so the flag lands a microtask after the blur rather than synchronously with it.
+    await waitFor(() => expect(mocks.globalObject.doSceneInstancePatch).toBe(true));
   });
 
   it("renders a dropdown for a faceted attribute and commits the picked facet", async () => {

@@ -13,6 +13,7 @@ import ExpandLess from "@mui/icons-material/ExpandLess";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import { SceneInstance, SceneType } from "@gds";
 import { engine, globalObject, globalClassObject, globalRelationclassObject, sceneInitiator } from "@/engine";
+import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { snapshotService } from "@/resources/services/snapshot-service";
@@ -245,7 +246,9 @@ export default function SceneGroup() {
       globalClassObject.initClasses();
       globalRelationclassObject.initRelationClasses();
 
-      // P12: hybridAlgorithmsService.checkHybridAlgorithms(null, sceneInstance.class_instances);
+      //check hybrid algorithms -> specifically for reference attributes --> we do not
+      //give an attributeInstance as argument (P12: live)
+      await hybridAlgorithmsService.checkHybridAlgorithms(null, sceneInstance.class_instances);
     }
   }
 

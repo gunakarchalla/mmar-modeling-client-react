@@ -15,6 +15,7 @@ import {
 import type { SelectChangeEvent } from "@mui/material";
 import type { SceneInstance, SceneType } from "@gds";
 import { globalObject, globalClassObject, globalRelationclassObject, sceneInitiator } from "@/engine";
+import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { logger } from "@/resources/services/logger";
@@ -33,9 +34,8 @@ import { duplicateSceneInstance } from "@/views/dialogs/copySceneModel";
 // flattened `tree[].children` into one <mdc-select>. Selection is keyed by uuid
 // because MUI's Select compares values by identity.
 //
-// P12 STUB: the original ran hybridAlgorithmsService.checkHybridAlgorithms(null,
-// classInstances) after loading the copy, to re-resolve reference attributes in the
-// duplicate. hybrid-algorithms-service lands in P12 — see the marker below.
+// P12: the hybrid algorithms run after loading the copy, to re-resolve reference
+// attributes in the duplicate (no-op for every scene type but ObjectSpace/Statechange).
 type SceneTypeNode = SceneType & { children?: SceneInstance[] };
 
 export default function CopySceneDialog() {
@@ -79,9 +79,9 @@ export default function CopySceneDialog() {
       globalClassObject.initClasses();
       globalRelationclassObject.initRelationClasses();
 
-      // P12: check hybrid algorithms -> specifically for reference attributes --> we
-      // do not give an attributeInstance as argument
-      // await hybridAlgorithmsService.checkHybridAlgorithms(null, newSceneInstance.class_instances);
+      //check hybrid algorithms -> specifically for reference attributes --> we do not
+      //give an attributeInstance as argument (P12: live)
+      await hybridAlgorithmsService.checkHybridAlgorithms(null, newSceneInstance.class_instances);
 
       logger.log(`SceneInstance with name ${newSceneInstance.name} created`, "info");
     }

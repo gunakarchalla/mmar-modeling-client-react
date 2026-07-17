@@ -22,6 +22,7 @@ import ImportMetamodelDialog from "@/views/dialogs/ImportMetamodelDialog";
 import MapFromFileDialog from "@/views/dialogs/MapFromFileDialog";
 import UserInfoDialog from "@/views/dialogs/UserInfoDialog";
 import ShareSceneDialog from "@/views/dialogs/ShareSceneDialog";
+import AlgorithmDialog from "@/views/dialogs/AlgorithmDialog";
 import { useAuthStore } from "@/resources/store/authStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { eventBus } from "@/resources/services/event-bus";
@@ -132,6 +133,7 @@ export default function AppLayout() {
       <MapFromFileDialog />
       <UserInfoDialog />
       <ShareSceneDialog />
+      <AlgorithmDialog />
     </Box>
   );
 }

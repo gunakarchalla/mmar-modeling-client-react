@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
     rollbackSceneOpen: vi.fn(),
   },
   persistencyHandler: { loadPersistedModel: vi.fn(async () => undefined) },
+  // P12: hybrid-algorithms-service imports the @/engine/global-definition LEAF directly,
+  // so it bypasses the `@/engine` barrel mock and drags in a real WebGLRenderer at module
+  // scope — this whole file fails to load without the mock below. (Same lesson as P9's
+  // persistency-handler, P10's shared-doc-service and P11's renderers.)
+  hybridAlgorithmsService: { checkHybridAlgorithms: vi.fn(async () => undefined) },
   backendService: {
     sceneInstancesAllGET: vi.fn(async () => []),
     // P10 — maybeAttachSharedSession's two access probes.
@@ -47,6 +52,9 @@ const mocks = vi.hoisted(() => ({
   closeTab: vi.fn(async () => undefined),
 }));
 
+vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
+  hybridAlgorithmsService: mocks.hybridAlgorithmsService,
+}));
 vi.mock("@/engine", () => ({
   engine: mocks.engine,
   globalObject: mocks.globalObject,
@@ -113,10 +121,10 @@ describe("SceneGroup", () => {
 // --- P10: collaboration wiring ------------------------------------------------
 
 // Render the tree with one scene instance and double-click it to run openScene().
-async function openSceneInstance() {
+async function openSceneInstance(sceneInstanceOverrides: Record<string, unknown> = {}) {
   mocks.metaUtility.getAllSceneTypesFromDB.mockResolvedValue([{ uuid: "st-1", name: "BPMN", classes: [], children: [] }]);
   mocks.backendService.sceneInstancesAllGET.mockResolvedValue([
-    { uuid: "si-1", name: "My Scene", uuid_scene_type: "st-1" },
+    { uuid: "si-1", name: "My Scene", uuid_scene_type: "st-1", ...sceneInstanceOverrides },
   ] as never);
   render(<SceneGroup />);
   await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
@@ -126,6 +134,19 @@ async function openSceneInstance() {
 }
 
 describe("SceneGroup — maybeAttachSharedSession", () => {
+  // P12 un-stub. Opening a Statechange scene must re-resolve its Reference instances'
+  // meshes; without this call the scene loads with every Reference drawn as its own
+  // placeholder vizrep instead of the object it points at, and nothing throws.
+  it("runs the hybrid algorithms over the loaded scene's class instances on open", async () => {
+    const classInstances = [{ uuid: "ci-1", uuid_class: "c-1" }];
+    await openSceneInstance({ class_instances: classInstances });
+
+    await waitFor(() => expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).toHaveBeenCalled());
+    // No attributeInstance argument -> "check everything in this scene" (the old comment),
+    // and the scene's own class instances are what it checks.
+    expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).toHaveBeenCalledWith(null, classInstances);
+  });
+
   it("attaches a shared session when the scene has >=2 access entries", async () => {
     mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }, { uuid_user: "u2" }]);
     mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "read" });

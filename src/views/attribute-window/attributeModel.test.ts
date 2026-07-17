@@ -35,8 +35,16 @@ const mocks = vi.hoisted(() => ({
     forTab: vi.fn((_tabIndex: number) => null as null | { ydoc: unknown; localOrigin: object; applyingRemote: boolean }),
   },
   applyLocalChangeToYDoc: vi.fn(),
+  // P12: hybrid-algorithms-service imports the @/engine/global-definition LEAF directly,
+  // so it bypasses the `@/engine` barrel mock below and drags in a real WebGLRenderer at
+  // module scope — this whole file fails to load without this mock. (Same lesson as P9's
+  // persistency-handler, P10's shared-doc-service and P11's renderers.)
+  hybridAlgorithmsService: { checkHybridAlgorithms: vi.fn(async () => undefined) },
 }));
 
+vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
+  hybridAlgorithmsService: mocks.hybridAlgorithmsService,
+}));
 vi.mock("@/engine", () => ({
   globalObject: mocks.globalObject,
   globalSelectedObject: mocks.globalSelectedObject,
@@ -310,6 +318,34 @@ describe("applyFieldChange", () => {
   });
 
   // --- P10: the shared branch, now reachable ------------------------------------
+
+  // P12 un-stub. The hybrid algorithms are what redraw an ObjectSpace Augmentation /
+  // Detectable after its Object 3D or Image attribute is edited; if this call is ever
+  // dropped, the value still saves and the mesh silently stops following it.
+  it("runs the hybrid algorithms for the owning class instance", async () => {
+    const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson()) as AttributeInstance;
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentClassInstance: classInstance }));
+
+    expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).toHaveBeenCalledWith(null, [classInstance]);
+  });
+
+  it("runs the hybrid algorithms against the port slot when a port owns the attribute", async () => {
+    const portInstance = { uuid: "pi-1" } as never;
+    const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson()) as AttributeInstance;
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentPortInstance: portInstance }));
+
+    expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).toHaveBeenCalledWith(null, null, [portInstance]);
+  });
+
+  it("does not run the hybrid algorithms when neither a class nor a port is selected", async () => {
+    const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson()) as AttributeInstance;
+
+    await applyFieldChange(attributeInstance, ownerOf());
+
+    expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).not.toHaveBeenCalled();
+  });
 
   it("writes an attribute_value change to the YDoc and sets the local flag when shared", async () => {
     const session = { ydoc: { fake: "ydoc" }, localOrigin: {}, applyingRemote: false };
