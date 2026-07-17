@@ -9,6 +9,7 @@ import StateWindow from "@/views/state-window/StateWindow";
 import LeftNav from "@/views/left-nav/LeftNav";
 import RightNav from "@/views/right-nav/RightNav";
 import ThreeCanvas from "@/views/three-canvas/ThreeCanvas";
+import XrButton from "@/views/three-canvas/XrButton";
 import AppFooter from "@/views/footer/AppFooter";
 import SignInDialog from "@/views/auth/SignInDialog";
 import AppSnackbar from "@/views/common/AppSnackbar";
@@ -97,8 +98,12 @@ export default function AppLayout() {
             </Panel>
             <ResizeHandle />
             <Panel minSize={30}>
-              <Box sx={{ height: "100%", width: "100%", backgroundColor: "#ffffff" }}>
+              {/* MiddleBody: the 3D canvas fills the panel; the AR/VR XRButton is an
+                  absolutely-positioned overlay on top of it (plan §9 P13, replacing the
+                  old document.body @ bottom:60px placement). */}
+              <Box sx={{ position: "relative", height: "100%", width: "100%", backgroundColor: "#ffffff" }}>
                 <ThreeCanvas />
+                <XrButton />
               </Box>
             </Panel>
             <ResizeHandle />
