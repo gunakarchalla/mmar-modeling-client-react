@@ -29,7 +29,17 @@ const mocks = vi.hoisted(() => ({
     rollbackSceneOpen: vi.fn(),
   },
   persistencyHandler: { loadPersistedModel: vi.fn(async () => undefined) },
-  backendService: { sceneInstancesAllGET: vi.fn(async () => []) },
+  backendService: {
+    sceneInstancesAllGET: vi.fn(async () => []),
+    // P10 — maybeAttachSharedSession's two access probes.
+    sceneAccessListGET: vi.fn(async (): Promise<unknown[]> => []),
+    sceneAccessMeGET: vi.fn(async (): Promise<{ level: string | null }> => ({ level: null })),
+  },
+  // P10: SceneGroup attaches a shared session on open. Mocking the service also keeps
+  // the real @/engine/global-definition (which it imports directly, bypassing the
+  // mocked barrel) from constructing a WebGLRenderer under vitest.
+  sharedDocService: { attach: vi.fn(), detach: vi.fn(), forTab: vi.fn(() => null) },
+  closeTab: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/engine", () => ({
@@ -44,9 +54,13 @@ vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks
 vi.mock("@/resources/services/snapshot-service", () => ({ snapshotService: mocks.snapshotService }));
 vi.mock("@/resources/services/persistency-handler", () => ({ persistencyHandler: mocks.persistencyHandler }));
 vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.backendService }));
+vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
+vi.mock("@/views/layout/tabActions", () => ({ closeTab: mocks.closeTab }));
 
 import SceneGroup from "./SceneGroup";
 import { useUiStore } from "@/resources/store/uiStore";
+import { useTabsStore } from "@/resources/store/tabsStore";
+import { eventBus } from "@/resources/services/event-bus";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -54,6 +68,9 @@ beforeEach(() => {
   useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, createNewScene: false, copyScene: false } });
   Object.assign(mocks.globalObject, { selectedTab: -1, tabContext: [], sceneTypes: [], sceneTree: [], importSceneInstances: [] });
   mocks.metaUtility.getAllSceneTypesFromDB.mockResolvedValue([]);
+  mocks.backendService.sceneAccessListGET.mockResolvedValue([]);
+  mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: null });
+  useTabsStore.setState({ tabs: [], selectedTab: -1 });
 });
 
 describe("SceneGroup", () => {
@@ -81,5 +98,79 @@ describe("SceneGroup", () => {
     expect(screen.getByText(/Petri Net/)).toBeTruthy();
     expect(mocks.metaUtility.getFiles).toHaveBeenCalled();
     expect(mocks.backendService.sceneInstancesAllGET).toHaveBeenCalledTimes(2);
+  });
+});
+
+// --- P10: collaboration wiring ------------------------------------------------
+
+// Render the tree with one scene instance and double-click it to run openScene().
+async function openSceneInstance() {
+  mocks.metaUtility.getAllSceneTypesFromDB.mockResolvedValue([{ uuid: "st-1", name: "BPMN", classes: [], children: [] }]);
+  mocks.backendService.sceneInstancesAllGET.mockResolvedValue([
+    { uuid: "si-1", name: "My Scene", uuid_scene_type: "st-1" },
+  ] as never);
+  render(<SceneGroup />);
+  await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
+  fireEvent.click(screen.getByLabelText("expand"));
+  const row = await screen.findByText(/My Scene/);
+  fireEvent.doubleClick(row);
+}
+
+describe("SceneGroup — maybeAttachSharedSession", () => {
+  it("attaches a shared session when the scene has >=2 access entries", async () => {
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }, { uuid_user: "u2" }]);
+    mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "read" });
+    // createTabContextSceneInstance pushes the tab; attach targets the last index.
+    mocks.instanceUtility.createTabContextSceneInstance.mockImplementation(async () => {
+      const ctx = { isShared: false };
+      mocks.globalObject.tabContext.push(ctx);
+      useTabsStore.getState().openTab({ name: "My Scene", uuid: "si-1", isShared: false });
+      return ctx;
+    });
+
+    await openSceneInstance();
+
+    await waitFor(() => expect(mocks.sharedDocService.attach).toHaveBeenCalled());
+    const [tabIndex, sceneInstance, access] = mocks.sharedDocService.attach.mock.calls[0];
+    expect(tabIndex).toBe(0);
+    expect((sceneInstance as { uuid: string }).uuid).toBe("si-1");
+    // The caller's own level decides the session's access, not the default 'edit'.
+    expect(access).toBe("read");
+    // Both the engine tab context and the reactive store learn the tab is shared.
+    expect(mocks.globalObject.tabContext[0].isShared).toBe(true);
+    expect(useTabsStore.getState().tabs[0].isShared).toBe(true);
+  });
+
+  it("leaves a scene with a single access entry non-shared", async () => {
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }]);
+
+    await openSceneInstance();
+
+    await waitFor(() => expect(mocks.persistencyHandler.loadPersistedModel).toHaveBeenCalled());
+    expect(mocks.sharedDocService.attach).not.toHaveBeenCalled();
+  });
+});
+
+describe("SceneGroup — shared session bus subscriptions", () => {
+  it("reloads the scene when the shared session reconnects", async () => {
+    const sceneInstance = { uuid: "si-1", name: "My Scene" };
+    mocks.globalObject.tabContext = [{ sceneInstance }];
+    render(<SceneGroup />);
+
+    eventBus.publish("sharedSceneReconnected", { tabIndex: 0 });
+
+    await waitFor(() => expect(mocks.persistencyHandler.loadPersistedModel).toHaveBeenCalledWith(sceneInstance));
+  });
+
+  it("alerts and closes the tab when access is revoked", async () => {
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    mocks.globalObject.tabContext = [{ sceneInstance: { uuid: "si-1", name: "My Scene" } }];
+    render(<SceneGroup />);
+
+    eventBus.publish("sceneAccessRevoked", { tabIndex: 0 });
+
+    await waitFor(() => expect(mocks.closeTab).toHaveBeenCalledWith(0));
+    expect(alertSpy).toHaveBeenCalledWith('Your access to "My Scene" was revoked. The tab will be closed.');
+    alertSpy.mockRestore();
   });
 });

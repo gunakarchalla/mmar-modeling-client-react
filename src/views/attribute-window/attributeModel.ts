@@ -9,6 +9,8 @@ import { globalObject, globalSelectedObject } from "@/engine";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { eventBus } from "@/resources/services/event-bus";
+import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
+import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 import { FILE_ATTRIBUTE_TYPE_UUID } from "@/constants";
 
 /**
@@ -231,18 +233,21 @@ export async function buildAttributeGroups(): Promise<AttributeGroups> {
 }
 
 /**
- * P10: collaboration is not ported yet — no tab is ever shared, so `applyFieldChange`
- * below only ever takes the non-shared branch. Mirrors the identical stub in
- * views/toolbar/AutoSave.tsx; P10 replaces both with `sharedDocService.forTab()`.
- * The real session also carries `ydoc` + `localOrigin` for `applyLocalChangeToYDoc`.
+ * Which instance owns the attribute being edited. The old `attribute-window` read
+ * these off its own component state (`this.currentClassInstance` etc.); here they are
+ * passed in, because `applyFieldChange` is a free function. `AttributeGroups` is
+ * assignable to this, so callers just hand over the groups they already render.
  */
-function sharedSessionForTab(_tabIndex: number): { applyingRemote: boolean } | null {
-  return null;
+export interface AttributeOwner {
+  currentClassInstance: ClassInstance | null;
+  currentPortInstance: PortInstance | null;
+  currentRelationclassInstance: RelationclassInstance | null;
 }
 
 /**
  * Port of `attribute-window.fieldChange()`: normalise the edited value, refresh the
- * vizrep, and mark the scene dirty so the 5 s auto-save loop patches it.
+ * vizrep, propagate to collaborators, and mark the scene dirty so the 5 s auto-save
+ * loop patches it.
  *
  * DEVIATION (plan-mandated): the old method awaited
  * `vizrepUpdateChecker.checkForVizRepUpdate(attributeInstance)` directly. Plan §5/§9
@@ -255,8 +260,8 @@ function sharedSessionForTab(_tabIndex: number): { applyingRemote: boolean } | n
  * Kept `async` (like the original) so P12 can `await` the hybrid-algorithms call it
  * un-stubs here without changing every call site.
  */
-export async function applyFieldChange(attributeInstance: AttributeInstance): Promise<void> {
-  const session = sharedSessionForTab(globalObject.selectedTab);
+export async function applyFieldChange(attributeInstance: AttributeInstance, owner: AttributeOwner): Promise<void> {
+  const session = sharedDocService.forTab(globalObject.selectedTab);
 
   // Skip field changes that are being applied from a remote Yjs update
   if (session?.applyingRemote) return;
@@ -270,9 +275,30 @@ export async function applyFieldChange(attributeInstance: AttributeInstance): Pr
   // when a class instance is selected / (null, null, [currentPortInstance]) for a port.
 
   if (session) {
-    // P10: shared mode — applyLocalChangeToYDoc(session.ydoc, { type: 'attribute_value'
-    // | 'relation_attribute_value', classInstanceUuid | relationClassInstanceUuid,
-    // attributeUuid, value }, session.localOrigin) before the flag below.
+    // Shared mode: propagate attribute change through Yjs and mark local dirty flag
+    if (owner.currentClassInstance) {
+      applyLocalChangeToYDoc(
+        session.ydoc,
+        {
+          type: "attribute_value",
+          classInstanceUuid: owner.currentClassInstance.uuid,
+          attributeUuid: attributeInstance.uuid,
+          value: attributeInstance.value,
+        },
+        session.localOrigin,
+      );
+    } else if (owner.currentRelationclassInstance) {
+      applyLocalChangeToYDoc(
+        session.ydoc,
+        {
+          type: "relation_attribute_value",
+          relationClassInstanceUuid: owner.currentRelationclassInstance.uuid,
+          attributeUuid: attributeInstance.uuid,
+          value: attributeInstance.value,
+        },
+        session.localOrigin,
+      );
+    }
     globalObject.doSceneInstancePatchLocal = true;
   } else {
     globalObject.doSceneInstancePatch = true;

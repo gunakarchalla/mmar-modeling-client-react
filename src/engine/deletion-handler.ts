@@ -8,19 +8,7 @@ import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
-
-/**
- * P10 STUB — collaboration (yjs) is wired in P10. In the old client this is
- * `applyLocalChangeToYDoc`, imported from `collaboration/y_mapping`, which pushes a
- * local mutation into the tab's shared Y.Doc. Until P10, `sharedDocServiceRef` stays
- * null, so every guarded call below is unreachable; this no-op keeps the call sites
- * byte-faithful so P10 only has to swap in the real import. See state.json
- * deferred_items.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function applyLocalChangeToYDoc(_ydoc: unknown, _change: unknown, _origin: unknown): void {
-  // P10
-}
+import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 
 /**
  * P5 port of the old `resources/deletion_handler.ts` (316 lines, DI-stripping
@@ -72,7 +60,7 @@ export class DeletionHandler {
     sceneInstance.class_instances.splice(index, 1);
 
     // Propagate deletion to peers before removing from Three.js scene.
-    const session = (this.globalObjectInstance.sharedDocServiceRef as any)?.forTab(this.globalObjectInstance.selectedTab);
+    const session = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
     if (session && !session.applyingRemote) {
       applyLocalChangeToYDoc(session.ydoc, { type: "remove_class_instance", classInstanceUuid: classInstance.uuid }, session.localOrigin);
     }
@@ -172,7 +160,7 @@ export class DeletionHandler {
     sceneInstance.relationclasses_instances.splice(index, 1);
 
     // Propagate deletion to peers.
-    const relSession = (this.globalObjectInstance.sharedDocServiceRef as any)?.forTab(this.globalObjectInstance.selectedTab);
+    const relSession = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
     if (relSession && !relSession.applyingRemote) {
       applyLocalChangeToYDoc(relSession.ydoc, { type: "remove_relation_class_instance", relationClassInstanceUuid: relationclassInstance.uuid }, relSession.localOrigin);
     }

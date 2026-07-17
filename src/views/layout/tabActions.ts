@@ -10,6 +10,7 @@ import {
 import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { useTabsStore } from "@/resources/store/tabsStore";
+import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
 
 /**
  * Tab select/close operations — the "single mutation path" for tab *selection* and
@@ -67,9 +68,16 @@ export async function closeTab(index: number): Promise<void> {
     return;
   }
 
-  // P10: tear down any shared session for this tab before removing it
-  // (remoteCursorRenderer.clearForTab / remoteSelectionRenderer.clearForTab /
-  // sharedDocService.detach). No shared sessions exist until collaboration lands.
+  // Tear down any shared session before removing the tab so the websocket is closed
+  // gracefully and the user disappears from other clients' awareness (P10).
+  // P11 adds remoteCursorRenderer.clearForTab / remoteSelectionRenderer.clearForTab here.
+  //
+  // KNOWN LIMITATION, faithful to the old client: sessions are keyed by tab INDEX, and
+  // the splice below shifts every later tab down one. Their sessions keep the old key,
+  // so with two shared tabs open, closing the lower one leaves the survivor's session
+  // stranded (forTab() misses it, and its observers still write to the old index).
+  // Recorded in state.json → known_issues rather than redesigned here.
+  sharedDocService.detach(index);
 
   // Remove the tab from the engine's tabContext (same position the store removes).
   if (index < tabContext.length) tabContext.splice(index, 1);

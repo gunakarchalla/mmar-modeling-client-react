@@ -46,11 +46,11 @@ export class GlobalSelectedObject {
   /**
    * Publish the locally-selected instance UUID over the active tab's shared-session
    * awareness so other clients can render a presence box (see RemoteSelectionRenderer,
-   * P11). No-op when the active tab isn't part of a shared session — which is always
-   * the case until collaboration is wired (P10).
+   * P11). No-op when the active tab isn't part of a shared session. Live since P10 —
+   * the awareness field is broadcast; nothing renders it until P11.
    */
   private publishSelection(uuid: string | null) {
-    const sharedDocService = this.globalObjectInstance.sharedDocServiceRef as any;
+    const sharedDocService = this.globalObjectInstance.sharedDocServiceRef;
     if (!sharedDocService) return;
     const session = sharedDocService.forTab(this.globalObjectInstance.selectedTab);
     if (!session) return;

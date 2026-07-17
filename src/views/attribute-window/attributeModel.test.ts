@@ -27,6 +27,14 @@ const mocks = vi.hoisted(() => ({
     getMetaAttribute: vi.fn(),
     getMetaAttributeWithSequence: vi.fn(),
   },
+  // P10: attributeModel now imports shared-doc-service, which imports the REAL
+  // @/engine/global-definition (a WebGLRenderer at module scope). Mocking the barrel
+  // alone is not enough — mock the service too, the same way P9's TopNavBar test had
+  // to mock persistency-handler.
+  sharedDocService: {
+    forTab: vi.fn((_tabIndex: number) => null as null | { ydoc: unknown; localOrigin: object; applyingRemote: boolean }),
+  },
+  applyLocalChangeToYDoc: vi.fn(),
 }));
 
 vi.mock("@/engine", () => ({
@@ -35,8 +43,10 @@ vi.mock("@/engine", () => ({
 }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
+vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
+vi.mock("@/resources/collaboration/y-mapping", () => ({ applyLocalChangeToYDoc: mocks.applyLocalChangeToYDoc }));
 
-import { buildAttributeGroups, applyFieldChange, emptyAttributeGroups } from "./attributeModel";
+import { buildAttributeGroups, applyFieldChange, emptyAttributeGroups, type AttributeOwner } from "./attributeModel";
 import { eventBus } from "@/resources/services/event-bus";
 
 const CLASS_INSTANCE_UUID = "ci-1";
@@ -110,6 +120,8 @@ beforeEach(() => {
   mocks.instanceUtility.getSceneInstance.mockResolvedValue(undefined);
   mocks.metaUtility.getMetaAttribute.mockResolvedValue(metaAttribute());
   mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(metaAttribute());
+  // Default: the active tab is not shared (clearAllMocks drops the implementation).
+  mocks.sharedDocService.forTab.mockReturnValue(null);
 });
 
 describe("buildAttributeGroups", () => {
@@ -271,6 +283,15 @@ describe("buildAttributeGroups", () => {
 });
 
 describe("applyFieldChange", () => {
+  const classInstance = ClassInstance.fromJS({ uuid: CLASS_INSTANCE_UUID, uuid_class: CLASS_UUID }) as ClassInstance;
+
+  const ownerOf = (over: Partial<AttributeOwner> = {}): AttributeOwner => ({
+    currentClassInstance: null,
+    currentPortInstance: null,
+    currentRelationclassInstance: null,
+    ...over,
+  });
+
   it("stringifies the value, publishes the vizrep channel and flags the scene dirty", async () => {
     const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson({ value: "new value" })) as AttributeInstance;
     const received: AttributeInstance[] = [];
@@ -278,12 +299,73 @@ describe("applyFieldChange", () => {
       received.push(payload),
     );
 
-    await applyFieldChange(attributeInstance);
+    await applyFieldChange(attributeInstance, ownerOf({ currentClassInstance: classInstance }));
     sub.dispose();
 
     expect(received).toEqual([attributeInstance]);
     expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
-    // P10: no shared session yet, so the local-patch flag stays untouched.
+    // Not shared -> no Yjs write and the local-patch flag stays untouched.
+    expect(mocks.applyLocalChangeToYDoc).not.toHaveBeenCalled();
     expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(false);
+  });
+
+  // --- P10: the shared branch, now reachable ------------------------------------
+
+  it("writes an attribute_value change to the YDoc and sets the local flag when shared", async () => {
+    const session = { ydoc: { fake: "ydoc" }, localOrigin: {}, applyingRemote: false };
+    mocks.sharedDocService.forTab.mockReturnValue(session);
+    const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson({ value: "shared value" })) as AttributeInstance;
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentClassInstance: classInstance }));
+
+    expect(mocks.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      {
+        type: "attribute_value",
+        classInstanceUuid: CLASS_INSTANCE_UUID,
+        attributeUuid: attributeInstance.uuid,
+        value: "shared value",
+      },
+      session.localOrigin,
+    );
+    expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(true);
+    // The shared branch must NOT use the non-shared flag (they drive different saves).
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
+  });
+
+  it("uses relation_attribute_value when a relationclass instance owns the attribute", async () => {
+    const session = { ydoc: { fake: "ydoc" }, localOrigin: {}, applyingRemote: false };
+    mocks.sharedDocService.forTab.mockReturnValue(session);
+    const relationclassInstance = { uuid: "ri-1" } as any;
+    const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson({ value: "rel value" })) as AttributeInstance;
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentRelationclassInstance: relationclassInstance }));
+
+    expect(mocks.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      {
+        type: "relation_attribute_value",
+        relationClassInstanceUuid: "ri-1",
+        attributeUuid: attributeInstance.uuid,
+        value: "rel value",
+      },
+      session.localOrigin,
+    );
+    expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(true);
+  });
+
+  it("ignores a change that is being applied from a remote update (no echo)", async () => {
+    mocks.sharedDocService.forTab.mockReturnValue({ ydoc: {}, localOrigin: {}, applyingRemote: true });
+    const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson({ value: "echo" })) as AttributeInstance;
+    const received: AttributeInstance[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (payload) => received.push(payload));
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentClassInstance: classInstance }));
+    sub.dispose();
+
+    expect(received).toEqual([]);
+    expect(mocks.applyLocalChangeToYDoc).not.toHaveBeenCalled();
+    expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(false);
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
   });
 });

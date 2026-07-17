@@ -25,7 +25,7 @@ import {
   OBJECT_3D_ATTRIBUTE_UUID,
   OBJECT_3D_DEFAULT_VALUE,
 } from "@/constants";
-import { applyFieldChange, type EnhancedAttributeInstance } from "./attributeModel";
+import { applyFieldChange, type AttributeOwner, type EnhancedAttributeInstance } from "./attributeModel";
 
 /**
  * One row of the plain (non-table, non-reference) attribute group — the branchy part
@@ -46,11 +46,13 @@ interface PlainAttributeRowProps {
   enhanced: EnhancedAttributeInstance;
   /** True when this attribute instance's meta attribute is of the File attribute type. */
   isFileAttribute: boolean;
+  /** The instance that owns this attribute — P10 needs it to address the Yjs change. */
+  owner: AttributeOwner;
   /** Ask the window to rebuild (a file delete rewrites the value out of band). */
   onChanged: () => void;
 }
 
-export default function PlainAttributeRow({ enhanced, isFileAttribute, onChanged }: PlainAttributeRowProps) {
+export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, onChanged }: PlainAttributeRowProps) {
   const { attributeInstance, facets, uiType } = enhanced;
   const openDialog = useUiStore((s) => s.openDialog);
   const [value, setValue] = useState<string>(attributeInstance.value ?? "");
@@ -68,7 +70,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, onChanged
   function commit(next: string) {
     attributeInstance.value = next;
     setValue(next);
-    void applyFieldChange(attributeInstance).catch((err) =>
+    void applyFieldChange(attributeInstance, owner).catch((err) =>
       logger.log("attribute change failed: " + describeError(err), "error"),
     );
   }

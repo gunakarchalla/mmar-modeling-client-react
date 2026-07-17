@@ -24,6 +24,10 @@ const mocks = vi.hoisted(() => ({
   sceneInitiator: { initTransformControls: vi.fn() },
   eventBus: { publish: vi.fn() },
   logger: { log: vi.fn() },
+  // P10: closeTab now detaches the tab's shared session. Mocking the service also
+  // keeps the real @/engine/global-definition (which it imports directly, bypassing
+  // the mocked barrel) from constructing a WebGLRenderer under vitest.
+  sharedDocService: { detach: vi.fn(), forTab: vi.fn(() => null) },
 }));
 
 vi.mock("@/engine", () => ({
@@ -36,6 +40,7 @@ vi.mock("@/engine", () => ({
 }));
 vi.mock("@/resources/services/event-bus", () => ({ eventBus: mocks.eventBus }));
 vi.mock("@/resources/services/logger", () => ({ logger: mocks.logger }));
+vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
 
 import { switchToTab, closeTab } from "./tabActions";
 import { useTabsStore } from "@/resources/store/tabsStore";
@@ -105,5 +110,19 @@ describe("closeTab", () => {
     expect(store.tabs.map((t) => t.name)).toEqual(["A", "B"]);
     expect(store.selectedTab).toBe(1);
     expect(mocks.globalObject.selectedTab).toBe(1);
+  });
+
+  // P10: the old main-body-tab-bar tore the shared session down before the splice so
+  // the websocket closes and we disappear from other clients' awareness.
+  it("detaches the closed tab's shared session before removing it", async () => {
+    seedTabs(["A", "B"]);
+    await closeTab(0);
+    expect(mocks.sharedDocService.detach).toHaveBeenCalledWith(0);
+  });
+
+  it("does not detach anything when the index is out of range", async () => {
+    seedTabs(["A"]);
+    await closeTab(5);
+    expect(mocks.sharedDocService.detach).not.toHaveBeenCalled();
   });
 });

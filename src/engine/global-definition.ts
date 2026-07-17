@@ -4,6 +4,7 @@ import { AttributeInstance, ClassInstance, Port, PortInstance, RoleInstance, Sce
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { getToken } from "@/resources/services/token";
+import type { SharedDocService } from "@/resources/collaboration/shared-doc-service";
 
 /**
  * Port of the old `resources/global_definitions.ts` — the engine "god object":
@@ -15,9 +16,13 @@ import { getToken } from "@/resources/services/token";
  * Modeling-specific members kept verbatim from the original (they do NOT exist in
  * the metamodeling twin): the `isShared` flag on `tabContext`, `allScales`,
  * `runMechanism`, `localFiles`, `autoSave`, `doSceneInstancePatch[Local]`,
- * `sharedDocServiceRef` and the `currentTabAccess` getter. Collaboration is not
- * wired until P10, so `sharedDocServiceRef` is typed `unknown` and stays `null`;
- * the `currentTabAccess` getter therefore returns `null` until then.
+ * `sharedDocServiceRef` and the `currentTabAccess` getter. P10 wired collaboration:
+ * `sharedDocServiceRef` is the back-reference SharedDocService sets on itself at
+ * construction (the old client's trick for breaking its circular DI), and it stays
+ * `null` until that module is first imported. The `SharedDocService` import below is
+ * TYPE-ONLY, so it is erased at build time and no runtime cycle exists — the old
+ * client typed this field `any`; a real type makes every engine call site
+ * (interaction / deletion / transform-control-events / ray-helper) type-checked.
  *
  * accessToken: the old client stored the JWT here (`user-management` wrote it, the
  * fetchHelper + shared_doc_service read it). In the React port the single source of
@@ -85,8 +90,8 @@ export class GlobalDefinition {
   doSceneInstancePatch: boolean;
   /** Set only for local-origin mutations in a shared scene; remote Yjs updates must NOT set this. */
   doSceneInstancePatchLocal: boolean;
-  /** Back-reference to SharedDocService, set on construction to avoid circular DI. Wired in P10. */
-  sharedDocServiceRef: unknown;
+  /** Back-reference to SharedDocService, set on its construction to avoid circular DI (P10). */
+  sharedDocServiceRef: SharedDocService | null;
 
   /** Read-only mirror of the JWT held in token.ts (single source of truth, written by authStore). */
   get accessToken(): string {
@@ -96,7 +101,7 @@ export class GlobalDefinition {
   /** Returns 'read' | 'edit' | 'delete' for the active tab's shared session, or null if not shared. */
   get currentTabAccess(): string | null {
     if (!this.sharedDocServiceRef) return null;
-    return (this.sharedDocServiceRef as any).forTab(this.selectedTab)?.access ?? null;
+    return this.sharedDocServiceRef.forTab(this.selectedTab)?.access ?? null;
   }
 
   constructor() {

@@ -4,6 +4,8 @@ import { globalObject } from "@/engine/global-definition";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { mathUtility } from "@/resources/services/math-utility";
 import { logger } from "@/resources/services/logger";
+import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
+import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 
 /**
  * P4 port of the old `services/coordinates_updater.ts` (184 lines). Modeling-only
@@ -15,20 +17,24 @@ import { logger } from "@/resources/services/logger";
  * scale array stops matching the previous frame's: it writes the three.js transform
  * back onto the gds instance object graph (which auto-save then PATCHes).
  *
- * P10 STUBS — the three `sync*ToYDoc` privates are no-ops until collaboration
- * lands. In the old client they inject the local change into the tab's shared
- * Y.Doc via `sharedDocService.forTab(selectedTab)` + `applyLocalChangeToYDoc`, and
- * set `globalObject.doSceneInstancePatchLocal = true`. Note the plan (§9 P4) says
- * "the two syncToYDoc privates" — there are actually THREE (coordinates, rotation,
- * scale). Their call sites are live and pass the real arguments, so P10 only has to
- * fill in the bodies; the `doSceneInstancePatchLocal` flag is part of the stubbed
- * body and must come back with them.
+ * P10 filled in the three `sync*ToYDoc` privates (the plan §9 P4 says "the two
+ * syncToYDoc privates" — there are actually THREE: coordinates, rotation, scale).
+ * Each pushes the local delta into the tab's shared Y.Doc and marks the scene dirty
+ * so AutoSave's shared branch PATCHes it.
+ *
+ * The `sharedDocService` import mirrors the old file's `SharedDocService` DI
+ * injection — and is LOAD-BEARING beyond this file: constructing that singleton is
+ * what sets `globalObject.sharedDocServiceRef`, the back-reference the other engine
+ * handlers (interaction / deletion / transform-control-events / ray-helper) reach
+ * collaboration through. This module is in engine/index.ts's graph, so the import
+ * here guarantees the ref is wired at engine load. See state.json → P10 notes.
  */
 export class CoordinatesUpdater {
   private instanceUtility = instanceUtility;
   private mathUtility = mathUtility;
   private logger = logger;
   private globalObjectInstance = globalObject;
+  private sharedDocService = sharedDocService;
 
   /**
    * Asynchronously updates the 2D coordinates of class and port instances based on their current positions in the 3D scene.
@@ -98,25 +104,25 @@ export class CoordinatesUpdater {
     }
   }
 
-  // P10: inject { type: 'coordinates', classInstanceUuid: uuid, x, y, z } into the
-  // tab's shared Y.Doc via applyLocalChangeToYDoc + set doSceneInstancePatchLocal.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private syncCoordinatesToYDoc(uuid: string, x: number, y: number, z: number): void {
-    // P10
+    const session = this.sharedDocService.forTab(this.globalObjectInstance.selectedTab);
+    if (!session || session.applyingRemote) return;
+    applyLocalChangeToYDoc(session.ydoc, { type: "coordinates", classInstanceUuid: uuid, x, y, z }, session.localOrigin);
+    this.globalObjectInstance.doSceneInstancePatchLocal = true;
   }
 
-  // P10: inject { type: 'rotation', classInstanceUuid: uuid, x, y, z, w } into the
-  // tab's shared Y.Doc via applyLocalChangeToYDoc + set doSceneInstancePatchLocal.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private syncRotationToYDoc(uuid: string, x: number, y: number, z: number, w: number): void {
-    // P10
+    const session = this.sharedDocService.forTab(this.globalObjectInstance.selectedTab);
+    if (!session || session.applyingRemote) return;
+    applyLocalChangeToYDoc(session.ydoc, { type: "rotation", classInstanceUuid: uuid, x, y, z, w }, session.localOrigin);
+    this.globalObjectInstance.doSceneInstancePatchLocal = true;
   }
 
-  // P10: inject { type: 'scale', classInstanceUuid: uuid, x, y, z } into the tab's
-  // shared Y.Doc via applyLocalChangeToYDoc + set doSceneInstancePatchLocal.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private syncScaleToYDoc(uuid: string, x: number, y: number, z: number): void {
-    // P10
+    const session = this.sharedDocService.forTab(this.globalObjectInstance.selectedTab);
+    if (!session || session.applyingRemote) return;
+    applyLocalChangeToYDoc(session.ydoc, { type: "scale", classInstanceUuid: uuid, x, y, z }, session.localOrigin);
+    this.globalObjectInstance.doSceneInstancePatchLocal = true;
   }
 
   /**

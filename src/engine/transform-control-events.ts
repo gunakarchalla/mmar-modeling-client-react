@@ -3,6 +3,7 @@ import { ObjectInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { globalSelectedObject } from "@/engine/global-selected-object";
 import { instanceUtility } from "@/resources/services/instance-utility";
+import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 
 /**
  * P4 port of the old `services/transform_control_events.ts` (159 lines). REPLACES
@@ -23,12 +24,10 @@ import { instanceUtility } from "@/resources/services/instance-utility";
  * first and rx/ry/rz/rw last, which is what makes indices 0-2 the position vars
  * and 3-6 the rotation vars.
  *
- * P10 STUB — `syncCustomVariablesToYDoc` is a no-op until collaboration lands. In
- * the old client it pushes each moved key into the tab's shared Y.Doc via
- * `globalObject.sharedDocServiceRef.forTab(selectedTab)` + `applyLocalChangeToYDoc`
- * and sets `doSceneInstancePatchLocal = true`. Both call sites are live and pass
- * the real (instance, keys) arguments, so P10 only fills in the body. Note the plan
- * lists only coordinates-updater as needing yjs stubs in P4 — this file needs one too.
+ * P10 filled in `syncCustomVariablesToYDoc` (a yjs dependency the plan did not list
+ * for this file — it names only coordinates-updater). Like the old file, it reaches
+ * collaboration through `globalObject.sharedDocServiceRef` rather than importing the
+ * service, which is how the original broke its circular DI.
  */
 export class TransformControlsEvents {
   private globalObjectInstance = globalObject;
@@ -160,15 +159,16 @@ export class TransformControlsEvents {
    * Propagate the given custom-variable keys of an object instance to collaborators
    * editing the same shared scene. No-op when the scene is not shared or when we are
    * currently applying a remote update (avoids echoing it back).
-   *
-   * P10: restore the body — sharedDocServiceRef.forTab(selectedTab), skip when the
-   * session is null or session.applyingRemote, then applyLocalChangeToYDoc per key
-   * with { type: 'custom_variable', classInstanceUuid, key, value } and finally set
-   * doSceneInstancePatchLocal = true.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private syncCustomVariablesToYDoc(instance: ObjectInstance, keys: string[]): void {
-    // P10
+    const session = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
+    if (!session || session.applyingRemote) return;
+    const customVariables = instance.custom_variables as Record<string, unknown>;
+    for (const key of keys) {
+      if (!key || customVariables[key] === undefined) continue;
+      applyLocalChangeToYDoc(session.ydoc, { type: "custom_variable", classInstanceUuid: instance.uuid, key, value: customVariables[key] }, session.localOrigin);
+    }
+    this.globalObjectInstance.doSceneInstancePatchLocal = true;
   }
 }
 

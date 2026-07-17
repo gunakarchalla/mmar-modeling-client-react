@@ -51,6 +51,10 @@ const mocks = vi.hoisted(() => ({
     patchFileByUUID: vi.fn(async () => ({ uuid: "file-1" })),
   },
   fileUtility: { FiletoDataUrl: vi.fn(async () => "data:image/png;base64,AAA") },
+  // P10: attributeModel imports shared-doc-service, which imports the REAL
+  // @/engine/global-definition (bypassing the mocked barrel) -> WebGLRenderer at
+  // module scope. Mock the service; forTab() -> null keeps the non-shared branch.
+  sharedDocService: { forTab: vi.fn(() => null) },
 }));
 
 vi.mock("@/engine", () => ({
@@ -58,6 +62,7 @@ vi.mock("@/engine", () => ({
   globalSelectedObject: mocks.globalSelectedObject,
   instanceCreationHandler: mocks.instanceCreationHandler,
 }));
+vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("@/resources/services/expression-utility", () => ({ expressionUtility: mocks.expressionUtility }));

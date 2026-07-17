@@ -149,6 +149,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
           key={enhanced.attributeInstance.uuid}
           enhanced={enhanced}
           isFileAttribute={groups.fileTypeUuids.includes(enhanced.attributeInstance.uuid)}
+          owner={groups}
           onChanged={rebuild}
         />
       ))}

@@ -17,19 +17,7 @@ import { simulationUtility } from "@/resources/services/simulation-utility";
 import { logger } from "@/resources/services/logger";
 import { eventBus } from "@/resources/services/event-bus";
 import { useSelectionStore, type SelectionType } from "@/resources/store/selectionStore";
-
-/**
- * P10 STUB — collaboration (yjs) is wired in P10. In the old client this is
- * `applyLocalChangeToYDoc`, imported from `collaboration/y_mapping`, which pushes a
- * local mutation into the tab's shared Y.Doc. Until P10, `sharedDocServiceRef` stays
- * null so every guarded call below is unreachable; this no-op keeps the call sites
- * byte-faithful so P10 only has to swap in the real import. See state.json
- * deferred_items.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function applyLocalChangeToYDoc(_ydoc: unknown, _change: unknown, _origin: unknown): void {
-  // P10
-}
+import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 
 /**
  * P5 port of the old `resources/interaction_handler.ts` (733 lines) — REPLACES the
@@ -333,7 +321,7 @@ export class InteractionHandler {
 
         // Propagate the new class instance to all peers via Y.Doc.
         // This runs AFTER all port/attribute creation awaits so the instance is fully populated.
-        const session = (this.globalObjectInstance.sharedDocServiceRef as any)?.forTab(this.globalObjectInstance.selectedTab);
+        const session = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
         if (session && !session.applyingRemote) {
           applyLocalChangeToYDoc(session.ydoc, { type: "add_class_instance", classInstance: class_instance }, session.localOrigin);
         }
@@ -526,7 +514,7 @@ export class InteractionHandler {
       // before the relation that references it arrives — mirroring the load order
       // (class instances before relations) in PersistencyHandler.importInstances and
       // avoiding a missing-object crash in Animator.setPos.
-      const bendpointSession = (this.globalObjectInstance.sharedDocServiceRef as any)?.forTab(this.globalObjectInstance.selectedTab);
+      const bendpointSession = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
       if (bendpointSession && !bendpointSession.applyingRemote) {
         applyLocalChangeToYDoc(bendpointSession.ydoc, { type: "add_class_instance", classInstance: bendpoint_instance }, bendpointSession.localOrigin);
       }
@@ -607,7 +595,7 @@ export class InteractionHandler {
       }
 
       // Propagate the fully-formed relation class instance (both roles set) to peers.
-      const relSession = (this.globalObjectInstance.sharedDocServiceRef as any)?.forTab(this.globalObjectInstance.selectedTab);
+      const relSession = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
       if (relSession && !relSession.applyingRemote) {
         applyLocalChangeToYDoc(relSession.ydoc, { type: "add_relation_class_instance", relationClassInstance: relationclass_instance }, relSession.localOrigin);
       }

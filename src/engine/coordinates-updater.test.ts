@@ -28,8 +28,16 @@ const utils = vi.hoisted(() => ({
     getTabContextSceneInstance: vi.fn(),
     getAllPortInstancesOfTabContext: vi.fn(async () => [] as unknown[]),
   },
+  // P10: the sync*ToYDoc privates are live now. Mocked so the tests can assert the
+  // exact change payloads without a Y.Doc or a socket.
+  sharedDocService: {
+    forTab: vi.fn((_tabIndex: number) => null as null | { ydoc: unknown; localOrigin: object; applyingRemote: boolean }),
+  },
+  applyLocalChangeToYDoc: vi.fn(),
 }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: utils.instanceUtility }));
+vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: utils.sharedDocService }));
+vi.mock("@/resources/collaboration/y-mapping", () => ({ applyLocalChangeToYDoc: utils.applyLocalChangeToYDoc }));
 
 const { coordinatesUpdater } = await import("@/engine/coordinates-updater");
 
@@ -75,7 +83,10 @@ function makeMesh(): THREE.Mesh {
 beforeEach(() => {
   vi.clearAllMocks();
   fakeGlobal.globalObject.dragObjects = [];
+  fakeGlobal.globalObject.doSceneInstancePatchLocal = false;
   utils.instanceUtility.getAllPortInstancesOfTabContext.mockResolvedValue([]);
+  // Default: the tab is not shared (clearAllMocks drops the implementation).
+  utils.sharedDocService.forTab.mockReturnValue(null);
 });
 
 describe("updateCoordinates2DonClassAndPortInstance", () => {
@@ -185,5 +196,91 @@ describe("updateScaleOnClassAndPortInstance", () => {
     await coordinatesUpdater.updateScaleOnClassAndPortInstance();
 
     expect((classInstance.custom_variables as Record<string, THREE.Vector3>).scale).toEqual({ x: 3, y: 3, z: 3 });
+  });
+});
+
+// --- P10: the sync*ToYDoc privates, driven through the public updaters ------------
+
+describe("Yjs propagation (shared scenes)", () => {
+  const session = { ydoc: { fake: "ydoc" }, localOrigin: {}, applyingRemote: false };
+
+  /** Move a mesh and run the given updater with the tab shared. */
+  async function runShared(run: () => Promise<void>, prepare: (mesh: THREE.Mesh) => void, custom_variables = {}) {
+    const { sceneInstance } = makeScene(custom_variables);
+    const mesh = makeMesh();
+    prepare(mesh);
+    fakeGlobal.globalObject.dragObjects = [mesh];
+    utils.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+    utils.sharedDocService.forTab.mockReturnValue(session);
+    await run();
+  }
+
+  it("pushes a coordinates change and marks the scene locally dirty", async () => {
+    await runShared(
+      () => coordinatesUpdater.updateCoordinates2DonClassAndPortInstance(),
+      (mesh) => mesh.position.set(1, 2, 3),
+    );
+
+    expect(utils.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      { type: "coordinates", classInstanceUuid: INSTANCE_UUID, x: 1, y: 2, z: 3 },
+      session.localOrigin,
+    );
+    // AutoSave's shared branch keys off this flag (NOT doSceneInstancePatch).
+    expect(fakeGlobal.globalObject.doSceneInstancePatchLocal).toBe(true);
+  });
+
+  it("pushes a rotation change", async () => {
+    await runShared(
+      () => coordinatesUpdater.updateRotationOnClassAndPortInstance(),
+      (mesh) => mesh.quaternion.set(0, 0, 1, 0),
+    );
+
+    expect(utils.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      { type: "rotation", classInstanceUuid: INSTANCE_UUID, x: 0, y: 0, z: 1, w: 0 },
+      session.localOrigin,
+    );
+  });
+
+  it("pushes a scale change", async () => {
+    await runShared(
+      () => coordinatesUpdater.updateScaleOnClassAndPortInstance(),
+      (mesh) => mesh.scale.set(3, 3, 3),
+      { scale: { x: 2, y: 2, z: 2 } },
+    );
+
+    expect(utils.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      { type: "scale", classInstanceUuid: INSTANCE_UUID, x: 3, y: 3, z: 3 },
+      session.localOrigin,
+    );
+  });
+
+  it("writes nothing to the YDoc when the tab is not shared", async () => {
+    const { sceneInstance } = makeScene();
+    const mesh = makeMesh();
+    mesh.position.set(1, 2, 3);
+    fakeGlobal.globalObject.dragObjects = [mesh];
+    utils.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+
+    await coordinatesUpdater.updateCoordinates2DonClassAndPortInstance();
+
+    expect(utils.applyLocalChangeToYDoc).not.toHaveBeenCalled();
+    expect(fakeGlobal.globalObject.doSceneInstancePatchLocal).toBe(false);
+  });
+
+  it("does not echo a change back while a remote update is being applied", async () => {
+    utils.sharedDocService.forTab.mockReturnValue({ ...session, applyingRemote: true });
+    const { sceneInstance } = makeScene();
+    const mesh = makeMesh();
+    mesh.position.set(1, 2, 3);
+    fakeGlobal.globalObject.dragObjects = [mesh];
+    utils.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+
+    await coordinatesUpdater.updateCoordinates2DonClassAndPortInstance();
+
+    expect(utils.applyLocalChangeToYDoc).not.toHaveBeenCalled();
+    expect(fakeGlobal.globalObject.doSceneInstancePatchLocal).toBe(false);
   });
 });

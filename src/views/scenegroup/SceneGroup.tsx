@@ -21,6 +21,9 @@ import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { useUiStore } from "@/resources/store/uiStore";
+import { useTabsStore } from "@/resources/store/tabsStore";
+import { sharedDocService, type AccessLevel } from "@/resources/collaboration/shared-doc-service";
+import { closeTab } from "@/views/layout/tabActions";
 
 /**
  * Port of `views/scenegroup/scenegroup.{ts,html}` (plan §10: ★ modeling-unique).
@@ -33,9 +36,10 @@ import { useUiStore } from "@/resources/store/uiStore";
  * 500 ms double-click counter; here we use the native `onDoubleClick` and a plain
  * selection/expand state (the counter is unnecessary in React).
  *
- * COLLABORATION HOOKS -> // P10 stubs: the old ctor subscribed to
- * 'sharedSceneReconnected' / 'sceneAccessRevoked' and openScene called
- * `maybeAttachSharedSession`. Those are no-ops until P10 (shared-doc-service).
+ * COLLABORATION (P10): `maybeAttachSharedSession` attaches a shared yjs session when
+ * a scene has >=2 access entries, and the component subscribes 'sharedSceneReconnected'
+ * (reload the scene from the freshly fetched SceneInstance) / 'sceneAccessRevoked'
+ * (alert + close the tab), which the old client wired in its constructor.
  *
  * The tree is loaded once the component mounts (which only happens after login).
  * The canonical arrays live on globalObject.sceneTypes / globalObject.sceneTree (the
@@ -49,13 +53,42 @@ type SceneTypeNode = SceneType & { children?: SceneInstance[] };
 // same in-flight fetch; nulled on completion so a later login re-fetches.
 let initInFlight: Promise<void> | null = null;
 
-// P10: attaching a shared session when a scene has >=2 access entries is not ported
-// yet (shared-doc-service). No-op until collaboration lands — scenes stay non-shared.
+/**
+ * Port of `scenegroup.maybeAttachSharedSession` (P10). A scene becomes collaborative
+ * as soon as at least two users hold access to it; the caller's own level decides
+ * whether the session is read-only.
+ *
+ * The old body wrapped everything in try/catch because a fetchHelper failure threw;
+ * this port's backendService logs-and-returns `[]` / `{level:null}` instead (P1's
+ * convention), which lands on exactly the same outcomes: `[]` -> fewer than 2 entries
+ * -> stays non-shared, and a null level -> keeps the 'edit' fallback. The try/catch is
+ * kept anyway for a genuinely unexpected throw (e.g. attach itself failing).
+ *
+ * The remote cursor/selection renderers' `bindToSession` calls land in P11.
+ */
 async function maybeAttachSharedSession(
-  _sceneInstance: SceneInstance,
-  _tabContext: { isShared: boolean },
+  sceneInstance: SceneInstance,
+  tabContext: { isShared: boolean },
 ): Promise<void> {
-  // P10: sceneAccessListGET/attach/bindToSession + tabContext.isShared = true.
+  try {
+    const accessList = await backendService.sceneAccessListGET(sceneInstance.uuid);
+    if (!accessList || accessList.length < 2) return;
+
+    // Determine caller's own access level
+    let access: AccessLevel = "edit";
+    const me = await backendService.sceneAccessMeGET(sceneInstance.uuid);
+    if (me && me.level) access = me.level;
+
+    const tabIndex = globalObject.tabContext.length - 1;
+    sharedDocService.attach(tabIndex, sceneInstance, access);
+    // P11: remoteCursorRenderer.bindToSession(tabIndex) / remoteSelectionRenderer.bindToSession(tabIndex)
+    tabContext.isShared = true;
+    useTabsStore.getState().setTabShared(tabIndex, true);
+    logger.log(`Shared session attached for scene ${sceneInstance.uuid} (access: ${access})`, "info");
+  } catch (err) {
+    // Non-fatal: access check may fail for users without delete access
+    logger.log(`Access check skipped (${err}), treating scene as non-shared`, "info");
+  }
 }
 
 export default function SceneGroup() {
@@ -138,10 +171,42 @@ export default function SceneGroup() {
       "initSceneGroup",
       () => void initTree().catch((err) => logger.log(`SceneGroup re-init failed: ${err}`, "error")),
     );
+
+    // P10 — the two collaboration subscriptions the old scenegroup ctor registered.
+    // Non-async callbacks per plan §3.1 (the bus never awaits a handler).
+
+    // Reconnected after a drop: reload the Three.js scene from the freshly
+    // fetched SceneInstance that SharedDocService put in the tab context.
+    const subReconnect = eventBus.subscribe("sharedSceneReconnected", (payload) => {
+      const tabCtx = globalObject.tabContext[payload.tabIndex];
+      if (!tabCtx?.sceneInstance) return;
+      logger.log(`Reloading scene after reconnect for tab ${payload.tabIndex}`, "info");
+      void persistencyHandler
+        .loadPersistedModel(tabCtx.sceneInstance)
+        .catch((err) => logger.log(`Scene reload after reconnect failed: ${err}`, "error"));
+    });
+
+    // Access revoked while connected: show a modal and close the tab.
+    const subRevoked = eventBus.subscribe("sceneAccessRevoked", (payload) => {
+      const tabCtx = globalObject.tabContext[payload.tabIndex];
+      const name = tabCtx?.sceneInstance?.name ?? "this scene";
+      window.alert(`Your access to "${name}" was revoked. The tab will be closed.`);
+      // P11: remoteCursorRenderer.clearForTab / remoteSelectionRenderer.clearForTab.
+      // DEVIATION from the old handler, which spliced globalObject.tabContext by hand
+      // and left the tab bar to catch up: closing goes through tabActions.closeTab, the
+      // single mutation path for tab removal (it also detaches the shared session and
+      // keeps tabsStore in lockstep — the old code did neither, leaking the session).
+      void closeTab(payload.tabIndex).catch((err) =>
+        logger.log(`Closing revoked tab failed: ${err}`, "error"),
+      );
+    });
+
     return () => {
       mountedRef.current = false;
       subUpdate.dispose();
       subInit.dispose();
+      subReconnect.dispose();
+      subRevoked.dispose();
     };
   }, [initTree, updateTree]);
 
@@ -166,7 +231,7 @@ export default function SceneGroup() {
       await sceneInitiator.sceneInit();
       const tabContext = await instanceUtility.createTabContextSceneInstance(sceneInstance);
 
-      // P10: shared-session attach (no-op until collaboration lands).
+      // Check whether this scene instance has >=2 users with access -> shared mode
       await maybeAttachSharedSession(sceneInstance, tabContext);
 
       await persistencyHandler.loadPersistedModel(sceneInstance);

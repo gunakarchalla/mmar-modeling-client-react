@@ -7,7 +7,7 @@ import { SceneInstance } from "@gds/models/instance/Instance_scenes.structure";
 import { ClassInstance } from "@gds/models/instance/Instance_classes.structure";
 import { RelationclassInstance } from "@gds/models/instance/Instance_relationclasses.structure";
 import { AttributeInstance } from "@gds/models/instance/Instance_attributes.structure";
-import { apiFetch } from "./api";
+import { apiFetch, ApiError } from "./api";
 import { getToken } from "./token";
 import { useLogStore } from "@/resources/store/logStore";
 
@@ -459,54 +459,56 @@ export class BackendService {
     }
   }
 
-  /** POST /instances/sceneInstances/:uuid/access -> AccessEntry (fetchHelper.sceneAccessPOST:7705). */
+  /**
+   * POST /instances/sceneInstances/:uuid/access -> AccessEntry (fetchHelper.sceneAccessPOST:7705).
+   * THROWS ApiError instead of swallowing — the share dialog branches on 404/409. See ApiError.
+   */
   async sceneAccessPOST(
     sceneInstanceUuid: string,
     body: { uuid_user: string; access: string },
-  ): Promise<AccessEntry | undefined> {
-    try {
-      const response = await apiFetch(
-        `instances/sceneInstances/${encodeURIComponent(sceneInstanceUuid)}/access`,
-        { method: "POST", headers: authHeaders(), body: JSON.stringify(body) },
-      );
-      if (!response.ok) throw new Error(`Failed to grant access (${response.status})`);
-      return (await response.json()) as AccessEntry;
-    } catch (error) {
-      log(`Error granting access: ${error}`, "error");
-    }
+  ): Promise<AccessEntry> {
+    const response = await apiFetch(
+      `instances/sceneInstances/${encodeURIComponent(sceneInstanceUuid)}/access`,
+      { method: "POST", headers: authHeaders(), body: JSON.stringify(body) },
+    );
+    // No log(..., 'error') here: throwing hands the failure to the caller, which
+    // renders its own message. Logging would ALSO pop the error snackbar (logStore),
+    // and a 409 "last delete owner" is an expected outcome, not an app-level error.
+    if (!response.ok) throw new ApiError(`Failed to grant access (${response.status})`, response.status);
+    return (await response.json()) as AccessEntry;
   }
 
-  /** DELETE /instances/sceneInstances/:uuid/access/:userUuid (fetchHelper.sceneAccessDELETE:7761). */
+  /**
+   * DELETE /instances/sceneInstances/:uuid/access/:userUuid (fetchHelper.sceneAccessDELETE:7761).
+   * THROWS ApiError instead of swallowing — the share dialog branches on 409. See ApiError.
+   */
   async sceneAccessDELETE(sceneInstanceUuid: string, userUuid: string): Promise<void> {
-    try {
-      const response = await apiFetch(
-        `instances/sceneInstances/${encodeURIComponent(sceneInstanceUuid)}/access/${encodeURIComponent(userUuid)}`,
-        { method: "DELETE", headers: authHeaders() },
-      );
-      if (!response.ok) throw new Error(`Failed to revoke access (${response.status})`);
-    } catch (error) {
-      log(`Error revoking access: ${error}`, "error");
-    }
+    const response = await apiFetch(
+      `instances/sceneInstances/${encodeURIComponent(sceneInstanceUuid)}/access/${encodeURIComponent(userUuid)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    // Not logged as an error — see sceneAccessPOST.
+    if (!response.ok) throw new ApiError(`Failed to revoke access (${response.status})`, response.status);
   }
 
-  /** GET /users/byUsername/:username -> user (fetchHelper.userByUsernameGET:7787). */
-  async userByUsernameGET(
-    username: string,
-  ): Promise<{ uuid: string; username: string; displayname: string } | undefined> {
-    try {
-      const response = await apiFetch(`users/byUsername/${encodeURIComponent(username)}`, {
-        method: "GET",
-        headers: authHeaders(),
-      });
-      if (!response.ok) throw new Error(`Failed to look up user (${response.status})`);
-      return (await response.json()) as {
-        uuid: string;
-        username: string;
-        displayname: string;
-      };
-    } catch (error) {
-      log(`Error looking up user: ${error}`, "error");
-    }
+  /**
+   * GET /users/byUsername/:username -> user (fetchHelper.userByUsernameGET:7787).
+   * THROWS ApiError instead of swallowing — the share dialog turns a 404 into
+   * "User not found". Verified live: an unknown username really does return 404.
+   */
+  async userByUsernameGET(username: string): Promise<{ uuid: string; username: string; displayname: string }> {
+    const response = await apiFetch(`users/byUsername/${encodeURIComponent(username)}`, {
+      method: "GET",
+      headers: authHeaders(),
+    });
+    // Not logged as an error — see sceneAccessPOST. A 404 here is just a typo'd
+    // username, which the share dialog reports inline as "User not found".
+    if (!response.ok) throw new ApiError(`Failed to look up user (${response.status})`, response.status);
+    return (await response.json()) as {
+      uuid: string;
+      username: string;
+      displayname: string;
+    };
   }
 }
 
