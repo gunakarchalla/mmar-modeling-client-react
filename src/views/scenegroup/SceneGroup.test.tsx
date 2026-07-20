@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   remoteCursorRenderer: { bindToSession: vi.fn(), clearForTab: vi.fn() },
   remoteSelectionRenderer: { bindToSession: vi.fn(), clearForTab: vi.fn() },
   closeTab: vi.fn(async () => undefined),
+  switchToTab: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
@@ -72,7 +73,7 @@ vi.mock("@/resources/collaboration/remote-cursor-renderer", () => ({ remoteCurso
 vi.mock("@/resources/collaboration/remote-selection-renderer", () => ({
   remoteSelectionRenderer: mocks.remoteSelectionRenderer,
 }));
-vi.mock("@/views/layout/tabActions", () => ({ closeTab: mocks.closeTab }));
+vi.mock("@/views/layout/tabActions", () => ({ closeTab: mocks.closeTab, switchToTab: mocks.switchToTab }));
 
 import SceneGroup from "./SceneGroup";
 import { useUiStore } from "@/resources/store/uiStore";
@@ -207,6 +208,18 @@ describe("SceneGroup — maybeAttachSharedSession", () => {
     await waitFor(() => expect(mocks.persistencyHandler.loadPersistedModel).toHaveBeenCalled());
     expect(mocks.remoteCursorRenderer.bindToSession).not.toHaveBeenCalled();
     expect(mocks.remoteSelectionRenderer.bindToSession).not.toHaveBeenCalled();
+  });
+
+  it("redirects to the existing tab instead of opening a second one for the same scene", async () => {
+    // A tab for si-1 is already open (mirrors the single mutation path's tabsStore).
+    useTabsStore.setState({ tabs: [{ name: "My Scene", uuid: "si-1", isShared: false }], selectedTab: 0 });
+
+    await openSceneInstance();
+
+    // No new tab is created; selection is redirected to the existing one.
+    await waitFor(() => expect(mocks.switchToTab).toHaveBeenCalledWith(0));
+    expect(mocks.instanceUtility.createTabContextSceneInstance).not.toHaveBeenCalled();
+    expect(useTabsStore.getState().tabs).toHaveLength(1);
   });
 });
 

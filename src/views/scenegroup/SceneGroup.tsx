@@ -26,7 +26,7 @@ import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService, type AccessLevel } from "@/resources/collaboration/shared-doc-service";
 import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-renderer";
 import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
-import { closeTab } from "@/views/layout/tabActions";
+import { closeTab, switchToTab } from "@/views/layout/tabActions";
 
 /**
  * Port of `views/scenegroup/scenegroup.{ts,html}` (plan §10: ★ modeling-unique).
@@ -233,6 +233,18 @@ export default function SceneGroup() {
       openDialog("createNewScene", { sceneType: node as SceneType });
     } else if (instanceUtility.checkIfSceneInstance(node)) {
       const sceneInstance = node as SceneInstance;
+
+      // If this SceneInstance is already open, don't create a second tab — redirect
+      // to the existing one. tabsStore is in lockstep with globalObject.tabContext
+      // (single mutation path), so its index is authoritative for switchToTab.
+      const existingIndex = useTabsStore
+        .getState()
+        .tabs.findIndex((tab) => tab.uuid === sceneInstance.uuid);
+      if (existingIndex !== -1) {
+        await switchToTab(existingIndex);
+        return;
+      }
+
       // The engine must be initialised before we build a scene (guard the race where
       // a double-click lands before ThreeCanvas has finished engine.mount()).
       await engine.whenReady();
