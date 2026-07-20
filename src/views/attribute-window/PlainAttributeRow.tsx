@@ -133,6 +133,14 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
             attributeInstance.value = e.target.value;
             setValue(e.target.value);
           }}
+          onKeyDown={(e) => {
+            // Enter commits without waiting for blur, so the scene vizrep updates
+            // immediately (the old browser <input> fired `change` on Enter too).
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit((e.target as HTMLInputElement).value);
+            }
+          }}
           onBlur={() => commit(value)}
           helperText={uiType}
         />

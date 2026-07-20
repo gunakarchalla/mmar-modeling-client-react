@@ -187,6 +187,25 @@ describe("AttributeWindow", () => {
     await waitFor(() => expect(mocks.globalObject.doSceneInstancePatch).toBe(true));
   });
 
+  it("commits a string attribute on Enter without waiting for blur", async () => {
+    const classInstance = selectClassInstanceWith([attributeInstanceJson()]);
+    const published: AttributeInstance[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (p) => published.push(p));
+
+    render(<AttributeWindow firstLevel />);
+    eventBus.publish("updateAttributeGui");
+    const input = await screen.findByDisplayValue("hello");
+
+    fireEvent.change(input, { target: { value: "edited" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    sub.dispose();
+
+    expect(classInstance.attribute_instance[0].value).toBe("edited");
+    expect(published).toHaveLength(1);
+    expect(published[0].uuid).toBe("ai-1");
+    await waitFor(() => expect(mocks.globalObject.doSceneInstancePatch).toBe(true));
+  });
+
   it("renders a dropdown for a faceted attribute and commits the picked facet", async () => {
     const classInstance = selectClassInstanceWith([attributeInstanceJson({ value: "catching" })]);
     mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(
