@@ -22,6 +22,7 @@ import type { SceneInstance, SceneType } from "@gds";
 import { globalObject } from "@/engine";
 import { backendService, type AccessEntry } from "@/resources/services/backend-service";
 import { ApiError } from "@/resources/services/api";
+import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { useUiStore } from "@/resources/store/uiStore";
 import type { AccessLevel } from "@/resources/collaboration/shared-doc-service";
@@ -177,6 +178,10 @@ export default function ShareSceneDialog() {
         `Granted ${levelChoice} access to ${user.username} on scene ${selectedSceneInstance.uuid}`,
         "info",
       );
+      // Tell an already-open tab for this scene to (re)check shared mode, so the collab
+      // session attaches and the presence icon appears without a window reload. Harmless
+      // when the scene isn't open, or when it's already shared (the handler no-ops).
+      eventBus.publish("sceneAccessGranted", { sceneInstanceUuid: selectedSceneInstance.uuid });
     } catch (err) {
       const status = err instanceof ApiError ? err.status : undefined;
       if (status === 404) setErrorMsg("User not found");

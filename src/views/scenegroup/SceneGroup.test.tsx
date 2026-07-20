@@ -245,4 +245,51 @@ describe("SceneGroup — shared session bus subscriptions", () => {
     expect(alertSpy).toHaveBeenCalledWith('Your access to "My Scene" was revoked. The tab will be closed.');
     alertSpy.mockRestore();
   });
+
+  // The reload-free share fix: granting access to an already-open scene promotes its
+  // tab to shared live, instead of only on next open / a window reload.
+  it("attaches the shared session for an already-open tab when access is granted", async () => {
+    const sceneInstance = { uuid: "si-1", name: "My Scene" };
+    const tabCtx = { sceneInstance, isShared: false } as { sceneInstance: unknown; isShared: boolean };
+    mocks.globalObject.tabContext = [tabCtx];
+    useTabsStore.setState({ tabs: [{ name: "My Scene", uuid: "si-1", isShared: false }], selectedTab: 0 });
+    // Crossing the 2-user threshold is exactly what the grant did on the backend.
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }, { uuid_user: "u2" }]);
+    mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "edit" });
+    render(<SceneGroup />);
+
+    eventBus.publish("sceneAccessGranted", { sceneInstanceUuid: "si-1" });
+
+    await waitFor(() => expect(mocks.sharedDocService.attach).toHaveBeenCalledWith(0, sceneInstance, "edit"));
+    expect(mocks.remoteCursorRenderer.bindToSession).toHaveBeenCalledWith(0);
+    expect(mocks.remoteSelectionRenderer.bindToSession).toHaveBeenCalledWith(0);
+    expect(tabCtx.isShared).toBe(true);
+    expect(useTabsStore.getState().tabs[0].isShared).toBe(true);
+  });
+
+  it("does nothing on a grant for a scene that has no open tab", async () => {
+    mocks.globalObject.tabContext = [];
+    useTabsStore.setState({ tabs: [], selectedTab: -1 });
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }, { uuid_user: "u2" }]);
+    render(<SceneGroup />);
+
+    eventBus.publish("sceneAccessGranted", { sceneInstanceUuid: "si-1" });
+
+    // No open tab to promote -> the access probes never even run (next open handles it).
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.backendService.sceneAccessListGET).not.toHaveBeenCalled();
+    expect(mocks.sharedDocService.attach).not.toHaveBeenCalled();
+  });
+
+  it("ignores a grant for a tab that is already shared", async () => {
+    mocks.globalObject.tabContext = [{ sceneInstance: { uuid: "si-1", name: "My Scene" }, isShared: true }];
+    useTabsStore.setState({ tabs: [{ name: "My Scene", uuid: "si-1", isShared: true }], selectedTab: 0 });
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([{ uuid_user: "u1" }, { uuid_user: "u2" }]);
+    render(<SceneGroup />);
+
+    eventBus.publish("sceneAccessGranted", { sceneInstanceUuid: "si-1" });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.sharedDocService.attach).not.toHaveBeenCalled();
+  });
 });

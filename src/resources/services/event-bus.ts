@@ -30,6 +30,16 @@ export interface TabIndexPayload {
 }
 
 /**
+ * Payload for `sceneAccessGranted`. A share grant succeeded for this scene; the grant
+ * is keyed by scene UUID (not a tab index) because the scene may not be open — the
+ * handler resolves it to an open tab itself. Mirrors the `sceneAccessRevoked` flow but
+ * in the other direction (revoke closes an open tab; grant may promote one to shared).
+ */
+export interface SceneAccessGrantedPayload {
+  sceneInstanceUuid: string;
+}
+
+/**
  * Payload for `openReferenceDialog` (P8). One reference dialog is shared by every
  * reference button, so the clicked attribute instance IS the context — that is exactly
  * what the old `attribute-window.openDialog()` published.
@@ -86,6 +96,7 @@ export interface EventPayloads {
   remoteRelationInstanceAdded: TabIndexPayload;
   sharedSceneReconnected: TabIndexPayload;
   sceneAccessRevoked: TabIndexPayload;
+  sceneAccessGranted: SceneAccessGrantedPayload;
 }
 
 export type EventName = keyof EventPayloads;

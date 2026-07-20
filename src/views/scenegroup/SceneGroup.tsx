@@ -69,11 +69,19 @@ let initInFlight: Promise<void> | null = null;
  *
  * P11: the two renderers subscribe the session's awareness right after attach, so
  * remote cursors/selection boxes start drawing as soon as peers publish them.
+ *
+ * `tabIndex` defaults to the just-opened (last) tab, which is the open-scene caller's
+ * case. The `sceneAccessGranted` handler passes an explicit index so an ALREADY-open
+ * tab can be promoted to shared the moment it crosses the 2-user threshold, without a
+ * window reload (the old client only ever evaluated this at open time). The early
+ * `isShared` return makes that path idempotent if the tab is already collaborative.
  */
 async function maybeAttachSharedSession(
   sceneInstance: SceneInstance,
   tabContext: { isShared: boolean },
+  tabIndex: number = globalObject.tabContext.length - 1,
 ): Promise<void> {
+  if (tabContext.isShared) return;
   try {
     const accessList = await backendService.sceneAccessListGET(sceneInstance.uuid);
     if (!accessList || accessList.length < 2) return;
@@ -83,7 +91,6 @@ async function maybeAttachSharedSession(
     const me = await backendService.sceneAccessMeGET(sceneInstance.uuid);
     if (me && me.level) access = me.level;
 
-    const tabIndex = globalObject.tabContext.length - 1;
     sharedDocService.attach(tabIndex, sceneInstance, access);
     remoteCursorRenderer.bindToSession(tabIndex);
     remoteSelectionRenderer.bindToSession(tabIndex);
@@ -209,12 +216,29 @@ export default function SceneGroup() {
       );
     });
 
+    // Access granted while the scene's tab is already open: re-check shared mode for
+    // that tab so the collab session attaches (and the presence icon appears) live,
+    // instead of only on the next open / a full window reload. If the scene is not
+    // open, there is nothing to do — its next open runs the same check.
+    const subGranted = eventBus.subscribe("sceneAccessGranted", (payload) => {
+      const tabIndex = useTabsStore
+        .getState()
+        .tabs.findIndex((tab) => tab.uuid === payload.sceneInstanceUuid);
+      if (tabIndex === -1) return;
+      const tabCtx = globalObject.tabContext[tabIndex];
+      if (!tabCtx?.sceneInstance || tabCtx.isShared) return;
+      void maybeAttachSharedSession(tabCtx.sceneInstance, tabCtx, tabIndex).catch((err) =>
+        logger.log(`Attaching shared session after grant failed: ${err}`, "error"),
+      );
+    });
+
     return () => {
       mountedRef.current = false;
       subUpdate.dispose();
       subInit.dispose();
       subReconnect.dispose();
       subRevoked.dispose();
+      subGranted.dispose();
     };
   }, [initTree, updateTree]);
 

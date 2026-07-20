@@ -33,6 +33,7 @@ vi.mock("@/resources/services/logger", () => ({ logger: mocks.logger }));
 import ShareSceneDialog from "./ShareSceneDialog";
 import { useUiStore } from "@/resources/store/uiStore";
 import { ApiError } from "@/resources/services/api";
+import { eventBus } from "@/resources/services/event-bus";
 
 const SCENE_UUID = "si-1";
 
@@ -134,6 +135,26 @@ describe("ShareSceneDialog", () => {
       uuid_user: "u9",
       access: "read", // the default levelChoice
     });
+  });
+
+  it("publishes sceneAccessGranted so an open tab attaches its session without a reload", async () => {
+    const publishSpy = vi.spyOn(eventBus, "publish");
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([entry()]);
+    mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "delete" });
+    mocks.backendService.userByUsernameGET.mockResolvedValue({ uuid: "u9", username: "carol", displayname: "carol" });
+    mocks.backendService.sceneAccessPOST.mockResolvedValue(
+      entry({ uuid_user: "u9", username: "carol", displayname: "carol" }),
+    );
+
+    await openAndSelectScene();
+    await waitFor(() => expect(screen.getByText("Add user:")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "carol" } });
+    fireEvent.click(screen.getByText("Add user"));
+
+    await waitFor(() =>
+      expect(publishSpy).toHaveBeenCalledWith("sceneAccessGranted", { sceneInstanceUuid: SCENE_UUID }),
+    );
+    publishSpy.mockRestore();
   });
 
   it("turns a 404 from the user lookup into 'User not found'", async () => {
