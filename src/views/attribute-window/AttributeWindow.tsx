@@ -168,7 +168,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
       )}
 
       {hasDynamic && (
-        <Typography variant="h6" sx={{ m: 0, p: 0, fontSize: "1rem", fontWeight: 600 }}>
+        <Typography variant="h6" sx={{ mt: 0, mb: 1.5, p: 0, fontSize: "1rem", fontWeight: 600 }}>
           Dynamic Attributes
         </Typography>
       )}
@@ -186,7 +186,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
 
       {groups.table.length !== 0 && (
         <Box>
-          <Typography variant="h6" sx={{ fontSize: "1rem", fontWeight: 600 }}>
+          <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
             Table Attributes
           </Typography>
           {groups.table.map((enhanced) => (
@@ -205,7 +205,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
 
       {groups.reference.length !== 0 && (
         <Box>
-          <Typography variant="h6" sx={{ fontSize: "1rem", fontWeight: 600 }}>
+          <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
             Reference Attributes
           </Typography>
           {groups.reference.map((enhanced) => (
@@ -247,7 +247,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
 function StaticAttributes({ uuid, name }: { uuid: string; name: string }) {
   return (
     <Box>
-      <Typography variant="h6" sx={{ fontSize: "1rem", fontWeight: 600 }}>
+      <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
         Static Attributes
       </Typography>
       <TextField
