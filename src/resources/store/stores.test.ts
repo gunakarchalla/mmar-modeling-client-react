@@ -29,6 +29,20 @@ describe("logStore", () => {
     useLogStore.getState().log("hi", "info");
     expect(useLogStore.getState().snackbar.open).toBe(false);
   });
+
+  it("bounds the log array under bulk logging (keeps most-recent, newest first)", () => {
+    // Bulk operations (e.g. a URDF import) log thousands of times. The array must not
+    // grow without bound, otherwise each log becomes an O(n) copy + LogWindow re-render.
+    const total = 5000;
+    for (let i = 0; i < total; i++) {
+      useLogStore.getState().log(`entry-${i}`, "info");
+    }
+    const { logArray } = useLogStore.getState();
+    expect(logArray.length).toBeLessThanOrEqual(500);
+    // newest-first: the last logged entry is at the head, oldest retained trails it.
+    expect(logArray[0].value).toBe(`entry-${total - 1}`);
+    expect(logArray[logArray.length - 1].value).toBe(`entry-${total - logArray.length}`);
+  });
 });
 
 describe("uiStore", () => {
