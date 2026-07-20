@@ -18,6 +18,8 @@ import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
+import { useTabsStore } from "@/resources/store/tabsStore";
+import { closeTab } from "@/views/layout/tabActions";
 
 // Port of `dialogs/dialog-delete-scene/{ts,html}` — deletes a SceneInstance from the
 // database, then republishes 'initSceneGroup' so the tree re-fetches (SceneGroup
@@ -27,10 +29,9 @@ import { useUiStore } from "@/resources/store/uiStore";
 // keyed by uuid. The old class injected eight collaborators but used exactly one
 // (fetchHelper) — the rest are dropped here, the same pruning P5/P7 did.
 //
-// NOTE the deletion is not confirmed twice and does not close the scene's tab if it
-// happens to be open; that matches the old dialog. A tab left open on a deleted
-// scene will fail its next auto-save PATCH (persistency-handler falls back to POST
-// on 404, which effectively re-creates it) — pre-existing behaviour, not introduced here.
+// If the deleted scene happens to be open in a tab, that tab is closed as part of the
+// deletion (via tabActions.closeTab), so a stale tab can't survive to re-create the
+// scene on its next auto-save PATCH (persistency-handler falls back to POST on a 404).
 type SceneTypeNode = SceneType & { children?: SceneInstance[] };
 
 export default function DeleteSceneDialog() {
@@ -59,6 +60,13 @@ export default function DeleteSceneDialog() {
 
     await backendService.sceneInstancesAllDELETE2(uuid);
     logger.log("SceneInstance" + uuid + " deleted", "delete");
+
+    // If the deleted scene is open in a tab, close it so the tab bar and engine don't
+    // keep a stale tab pointing at a now-nonexistent SceneInstance.
+    const openTabIndex = useTabsStore.getState().tabs.findIndex((tab) => tab.uuid === uuid);
+    if (openTabIndex !== -1) {
+      await closeTab(openTabIndex);
+    }
 
     eventBus.publish("initSceneGroup");
     setSelectedUuid("");

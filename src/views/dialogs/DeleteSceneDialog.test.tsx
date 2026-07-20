@@ -12,14 +12,19 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-li
 const mocks = vi.hoisted(() => ({
   globalObject: { sceneTree: [] as any[] } as any,
   backendService: { sceneInstancesAllDELETE2: vi.fn(async (): Promise<unknown> => ({})) },
+  closeTab: vi.fn(async (): Promise<void> => {}),
 }));
 
 vi.mock("@/engine", () => ({ globalObject: mocks.globalObject }));
 vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.backendService }));
+// tabActions.closeTab drives the real engine/collaboration singletons, which aren't
+// mounted here — mock it and assert the dialog calls it with the open tab's index.
+vi.mock("@/views/layout/tabActions", () => ({ closeTab: mocks.closeTab }));
 
 import DeleteSceneDialog from "./DeleteSceneDialog";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore, DialogName } from "@/resources/store/uiStore";
+import { useTabsStore, TabInfo } from "@/resources/store/tabsStore";
 
 const SCENE_A = "scene-a-uuid";
 const SCENE_B = "scene-b-uuid";
@@ -39,11 +44,17 @@ function closeAllDialogs() {
   names.forEach((name) => useUiStore.getState().closeDialog(name));
 }
 
+/** Reset the tab bar to a known set of open tabs. */
+function setOpenTabs(tabs: TabInfo[]) {
+  useTabsStore.setState({ tabs, selectedTab: tabs.length ? 0 : -1 });
+}
+
 beforeEach(() => {
   cleanup();
   vi.clearAllMocks();
   closeAllDialogs();
   mocks.globalObject.sceneTree = makeTree();
+  setOpenTabs([]);
 });
 
 /** Opens the MUI Select. Queried by role: MUI renders the InputLabel as a sibling
@@ -95,6 +106,32 @@ describe("DeleteSceneDialog", () => {
     // and it closes itself
     await waitFor(() => expect(useUiStore.getState().dialogs.deleteScene).toBe(false));
     sub.dispose();
+  });
+
+  it("closes the open tab for the deleted scene", async () => {
+    setOpenTabs([
+      { uuid: SCENE_A, name: "Scene A", isShared: false },
+      { uuid: SCENE_B, name: "Scene B", isShared: false },
+    ]);
+
+    await openAndSelect("Scene B");
+    fireEvent.click(screen.getByRole("button", { name: "Delete SceneInstance" }));
+
+    // Scene B is at tab index 1.
+    await waitFor(() => expect(mocks.closeTab).toHaveBeenCalledWith(1));
+    expect(mocks.closeTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close any tab when the deleted scene isn't open", async () => {
+    setOpenTabs([{ uuid: SCENE_A, name: "Scene A", isShared: false }]);
+
+    await openAndSelect("Scene B");
+    fireEvent.click(screen.getByRole("button", { name: "Delete SceneInstance" }));
+
+    await waitFor(() => {
+      expect(mocks.backendService.sceneInstancesAllDELETE2).toHaveBeenCalledWith(SCENE_B);
+    });
+    expect(mocks.closeTab).not.toHaveBeenCalled();
   });
 
   it("cannot delete with nothing selected — the button is disabled", async () => {
