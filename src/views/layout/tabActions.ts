@@ -9,6 +9,8 @@ import {
 } from "@/engine";
 import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
+import { backendService } from "@/resources/services/backend-service";
+import { describeError } from "@/resources/util/describe-error";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
 import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-renderer";
@@ -61,6 +63,60 @@ async function applyEngineTabSelection(index: number): Promise<void> {
 export async function switchToTab(index: number): Promise<void> {
   await applyEngineTabSelection(index);
   useTabsStore.getState().selectTab(index);
+}
+
+/**
+ * Rename the SceneInstance shown on the tab at `index`. Mutates the engine's
+ * tabContext SceneInstance, the SceneGroup tree node (matched by uuid), and the
+ * reactive tabsStore so tab bar + scene tree stay in lockstep. Persists via a
+ * PATCH when autoSave is on (the same upsert the create/autosave path uses); on a
+ * failed persist (e.g. 403 read-only on a shared scene) the local name is reverted
+ * so the UI reflects the server. A blank/unchanged name is a no-op.
+ */
+export async function renameTab(index: number, rawName: string): Promise<void> {
+  const name = rawName.trim();
+  const tabContext = globalObject.tabContext;
+  const tab = tabContext[index];
+  if (!tab || !name || name === tab.sceneInstance.name) return;
+
+  const sceneInstance = tab.sceneInstance;
+  const previousName = sceneInstance.name;
+  const uuid = sceneInstance.uuid;
+
+  // Update the engine's SceneInstance + the matching SceneGroup tree node (they may
+  // be different object references), then the reactive store.
+  sceneInstance.name = name;
+  const treeArr = (globalObject.sceneTree ?? []) as { children?: { uuid: string; name: string }[] }[];
+  for (const sceneType of treeArr) {
+    const node = sceneType.children?.find((child) => child.uuid === uuid);
+    if (node) node.name = name;
+  }
+  useTabsStore.getState().renameTab(index, name);
+  eventBus.publish("updateSceneGroup");
+
+  if (!globalObject.autoSave) {
+    logger.log(`SceneInstance renamed to ${name} (autoSave off, not persisted)`, "info");
+    return;
+  }
+
+  try {
+    await backendService.sceneInstancesPATCH(uuid, sceneInstance);
+    logger.log(`SceneInstance renamed to ${name}`, "info");
+  } catch (error) {
+    // Revert the rename everywhere so the UI matches the server (mirrors the 403
+    // revert-to-snapshot behaviour in persistency-handler.persistSceneInstanceToDB).
+    sceneInstance.name = previousName;
+    for (const sceneType of treeArr) {
+      const node = sceneType.children?.find((child) => child.uuid === uuid);
+      if (node) node.name = previousName;
+    }
+    useTabsStore.getState().renameTab(index, previousName);
+    eventBus.publish("updateSceneGroup");
+    if (Number((error as { status?: number }).status) === 403 && typeof window !== "undefined") {
+      window.alert("You don't have enough authorization to rename this scene instance.");
+    }
+    logger.log(`SceneInstance rename failed: ${describeError(error)}`, "error");
+  }
 }
 
 /** Close the tab at `index` (closeTab): tear down the engine tab, reconcile selection. */

@@ -31,6 +31,8 @@ interface TabsState {
   closeTab: (index: number) => void;
   /** Activate an existing tab by index. */
   selectTab: (index: number) => void;
+  /** Rename the tab at `index` (its SceneInstance name shown on the tab). */
+  renameTab: (index: number, name: string) => void;
   /** Mark a tab shared/unshared (used when collaboration attaches, P10). */
   setTabShared: (index: number, isShared: boolean) => void;
 }
@@ -69,6 +71,12 @@ export const useTabsStore = create<TabsState>((set) => ({
     set((s) => {
       if (index < 0 || index >= s.tabs.length) return s;
       return { selectedTab: index };
+    }),
+
+  renameTab: (index, name) =>
+    set((s) => {
+      if (index < 0 || index >= s.tabs.length) return s;
+      return { tabs: s.tabs.map((t, i) => (i === index ? { ...t, name } : t)) };
     }),
 
   setTabShared: (index, isShared) =>

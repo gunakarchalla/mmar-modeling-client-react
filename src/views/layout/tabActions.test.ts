@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
     dragObjects: [] as unknown[],
     mousePointer3d: {},
     plane: {},
+    // renameTab reads autoSave (persist gate) and sceneTree (the SceneGroup node to sync).
+    autoSave: true,
+    sceneTree: [] as unknown[],
   },
   engine: { isInitialized: false },
   globalSelectedObject: { removeObject: vi.fn() },
@@ -33,6 +36,8 @@ const mocks = vi.hoisted(() => ({
   // directly (bypassing the mocked barrel), which builds a WebGLRenderer at module scope.
   remoteCursorRenderer: { clearForTab: vi.fn() },
   remoteSelectionRenderer: { clearForTab: vi.fn() },
+  // renameTab persists via a PATCH when autoSave is on.
+  backendService: { sceneInstancesPATCH: vi.fn() },
 }));
 
 vi.mock("@/engine", () => ({
@@ -45,13 +50,14 @@ vi.mock("@/engine", () => ({
 }));
 vi.mock("@/resources/services/event-bus", () => ({ eventBus: mocks.eventBus }));
 vi.mock("@/resources/services/logger", () => ({ logger: mocks.logger }));
+vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.backendService }));
 vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
 vi.mock("@/resources/collaboration/remote-cursor-renderer", () => ({ remoteCursorRenderer: mocks.remoteCursorRenderer }));
 vi.mock("@/resources/collaboration/remote-selection-renderer", () => ({
   remoteSelectionRenderer: mocks.remoteSelectionRenderer,
 }));
 
-import { switchToTab, closeTab } from "./tabActions";
+import { switchToTab, closeTab, renameTab } from "./tabActions";
 import { useTabsStore } from "@/resources/store/tabsStore";
 
 function seedTabs(names: string[]) {
@@ -72,6 +78,8 @@ function seedTabs(names: string[]) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.engine.isInitialized = false;
+  mocks.globalObject.autoSave = true;
+  mocks.globalObject.sceneTree = [];
 });
 
 describe("switchToTab", () => {
@@ -157,5 +165,77 @@ describe("closeTab", () => {
     await closeTab(5);
     expect(mocks.remoteCursorRenderer.clearForTab).not.toHaveBeenCalled();
     expect(mocks.remoteSelectionRenderer.clearForTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("renameTab", () => {
+  // Seed one tab whose SceneInstance also lives (as a separate object) in the tree,
+  // so we can assert renameTab updates the store, the engine, AND the tree node.
+  function seedRenamable(name: string) {
+    useTabsStore.setState({ tabs: [], selectedTab: -1 });
+    useTabsStore.getState().openTab({ name, uuid: "uuid-1", isShared: false });
+    const treeNode = { uuid: "uuid-1", name };
+    mocks.globalObject.tabContext = [
+      { sceneInstance: { uuid: "uuid-1", name }, threeScene: {}, contextDragObjects: [] },
+    ];
+    mocks.globalObject.sceneTree = [{ uuid: "type-1", children: [treeNode] }];
+    return treeNode;
+  }
+
+  it("updates the store, engine SceneInstance and tree node, then PATCHes", async () => {
+    const treeNode = seedRenamable("Old");
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue({});
+
+    await renameTab(0, "New");
+
+    expect(useTabsStore.getState().tabs[0].name).toBe("New");
+    expect((mocks.globalObject.tabContext[0] as { sceneInstance: { name: string } }).sceneInstance.name).toBe("New");
+    expect(treeNode.name).toBe("New");
+    expect(mocks.backendService.sceneInstancesPATCH).toHaveBeenCalledWith(
+      "uuid-1",
+      expect.objectContaining({ name: "New" }),
+    );
+    expect(mocks.eventBus.publish).toHaveBeenCalledWith("updateSceneGroup");
+  });
+
+  it("trims the new name", async () => {
+    seedRenamable("Old");
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue({});
+    await renameTab(0, "  Trimmed  ");
+    expect(useTabsStore.getState().tabs[0].name).toBe("Trimmed");
+  });
+
+  it("is a no-op for a blank or unchanged name", async () => {
+    seedRenamable("Old");
+    await renameTab(0, "   ");
+    await renameTab(0, "Old");
+    expect(mocks.backendService.sceneInstancesPATCH).not.toHaveBeenCalled();
+    expect(useTabsStore.getState().tabs[0].name).toBe("Old");
+  });
+
+  it("does not PATCH when autoSave is off but still renames locally", async () => {
+    seedRenamable("Old");
+    mocks.globalObject.autoSave = false;
+    await renameTab(0, "New");
+    expect(mocks.backendService.sceneInstancesPATCH).not.toHaveBeenCalled();
+    expect(useTabsStore.getState().tabs[0].name).toBe("New");
+  });
+
+  it("reverts the rename everywhere when the PATCH fails", async () => {
+    const treeNode = seedRenamable("Old");
+    // A non-403 error avoids the window.alert branch (this file runs in the node env).
+    mocks.backendService.sceneInstancesPATCH.mockRejectedValue(new Error("network"));
+
+    await renameTab(0, "New");
+
+    expect(useTabsStore.getState().tabs[0].name).toBe("Old");
+    expect((mocks.globalObject.tabContext[0] as { sceneInstance: { name: string } }).sceneInstance.name).toBe("Old");
+    expect(treeNode.name).toBe("Old");
+  });
+
+  it("ignores an out-of-range index", async () => {
+    seedRenamable("Old");
+    await renameTab(9, "New");
+    expect(mocks.backendService.sceneInstancesPATCH).not.toHaveBeenCalled();
   });
 });
