@@ -136,6 +136,17 @@ describe("urdf-pose-service", () => {
     // The engine must be told to redraw and the scene marked dirty for auto-save.
     expect(fakeGlobal.globalObject.render).toBe(true);
     expect(fakeGlobal.globalObject.doSceneInstancePatch).toBe(true);
+
+    // Regression: rotation must be a plain {x,y,z,w} object, NOT a raw THREE.Quaternion.
+    // A THREE.Quaternion JSON.stringifies to an ARRAY ([x,y,z,w]); the server then stores
+    // that as a Postgres array literal ({"0","0","0","1"}) which is not valid JSON, so the
+    // scene PATCH 500s on read-back. Serializing to a plain object keeps it valid JSON.
+    expect(jointInstance.rotation).not.toBeInstanceOf(THREE.Quaternion);
+    expect(Array.isArray(jointInstance.rotation)).toBe(false);
+    const serialized = JSON.stringify(jointInstance.rotation);
+    expect(serialized.startsWith("{")).toBe(true);
+    expect(() => JSON.parse(serialized)).not.toThrow();
+    expect(Object.keys(JSON.parse(serialized)).sort()).toEqual(["w", "x", "y", "z"]);
   });
 
   it("scaleFactor multiplies the world position written onto the instance", async () => {

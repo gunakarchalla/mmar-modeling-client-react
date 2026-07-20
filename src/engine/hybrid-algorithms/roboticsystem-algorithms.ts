@@ -163,7 +163,10 @@ export class RoboticsystemAlgorithms {
             linkMeta.uuid,
             "class",
           );
-          classInstance.rotation = rot;
+          // gds `rotation` must be a plain {x,y,z,w} object. A raw THREE.Quaternion
+          // JSON.stringifies to an ARRAY, which the server stores as a Postgres array
+          // literal that is not valid JSON — breaking the scene PATCH on read-back.
+          classInstance.rotation = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
 
           // Store URDF linkage metadata for later pose recomputation on attribute edits.
           const tagged = classInstance as UrdfTaggedClassInstance;
@@ -244,7 +247,10 @@ export class RoboticsystemAlgorithms {
             jointMeta.uuid,
             "class",
           );
-          classInstance.rotation = rot;
+          // gds `rotation` must be a plain {x,y,z,w} object. A raw THREE.Quaternion
+          // JSON.stringifies to an ARRAY, which the server stores as a Postgres array
+          // literal that is not valid JSON — breaking the scene PATCH on read-back.
+          classInstance.rotation = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
 
           // Store URDF linkage metadata for later pose recomputation on attribute edits.
           const tagged = classInstance as UrdfTaggedClassInstance;

@@ -318,7 +318,12 @@ export class UrdfPoseService {
     instance.coordinates_2d.x = pos.x * scaleFactor;
     instance.coordinates_2d.y = pos.y * scaleFactor;
     instance.coordinates_2d.z = pos.z * scaleFactor;
-    instance.rotation = rot;
+    // gds `rotation` is a plain {x,y,z,w} object (Quaternion). Assigning the raw
+    // THREE.Quaternion serializes via JSON.stringify to an ARRAY ([x,y,z,w]); the
+    // server then stores that array as a Postgres array literal ({"0","0","0","1"})
+    // which is not valid JSON, so the next read-back JSON.parse throws and the whole
+    // scene PATCH 500s. Always write the plain object shape the gds expects.
+    instance.rotation = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
 
     // Also update the existing THREE object in the scene immediately, if present.
     const sceneObj = this.globalObjectInstance.scene?.getObjectByProperty?.("uuid", instance.uuid);
