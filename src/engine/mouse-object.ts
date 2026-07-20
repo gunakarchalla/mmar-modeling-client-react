@@ -22,7 +22,7 @@ export class MouseObject {
     const intersects: { point: { getComponent: (arg0: number) => number } }[] = this.globalObjectInstance.raycaster.intersectObjects(objects);
 
     //set pos3d to textfield
-    if (intersects) {
+    if (intersects.length > 0) {
       this.globalObjectInstance.mousePointer3d.position.x = intersects[0].point.getComponent(0);
       this.globalObjectInstance.mousePointer3d.position.y = intersects[0].point.getComponent(1);
     }
