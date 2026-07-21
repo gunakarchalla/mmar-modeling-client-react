@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   Button,
+  CircularProgress,
   Collapse,
   IconButton,
   List,
@@ -17,6 +18,11 @@ import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algor
 import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { snapshotService } from "@/resources/services/snapshot-service";
+import {
+  loadSceneInstancesForType,
+  resetSceneInstanceCache,
+  isSceneTypeLoaded,
+} from "@/resources/services/scene-tree-service";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
@@ -44,7 +50,15 @@ import { closeTab, switchToTab } from "@/views/layout/tabActions";
  * (reload the scene from the freshly fetched SceneInstance) / 'sceneAccessRevoked'
  * (alert + close the tab), which the old client wired in its constructor.
  *
- * The tree is loaded once the component mounts (which only happens after login).
+ * The tree is loaded once the component mounts (which only happens after login), but
+ * ONLY down to the SceneType level: each type's SceneInstances are fetched the first
+ * time its arrow is expanded, by scene-tree-service. The old eager version fetched
+ * every instance of every type at mount, and the server hydrates each scene in full
+ * (classes, relations, ports, attributes, roles), so startup cost scaled with the whole
+ * database instead of with the scene being opened. Consumers that need all scenes at
+ * once (the Duplicate/Delete/Share pickers, the reference-attribute dialog) call
+ * `loadAllSceneInstances()` behind their own spinner.
+ *
  * The canonical arrays live on globalObject.sceneTypes / globalObject.sceneTree (the
  * old design — instance-utility.getAllSceneInstancesFromLocal reads sceneTree); the
  * component mirrors them into local state to render.
@@ -109,13 +123,42 @@ export default function SceneGroup() {
 
   const [tree, setTree] = useState<SceneTypeNode[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /** SceneTypes whose instances are being fetched right now (drives the row spinner). */
+  const [loadingTypes, setLoadingTypes] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<{ uuid: string; isType: boolean } | null>(null);
   const mountedRef = useRef(true);
+  /** `expanded` readable from initTree without making it a dependency. */
+  const expandedRef = useRef<Set<string>>(new Set());
 
   // Mirror the canonical globalObject.sceneTree into local state to trigger a render.
   const syncTreeFromGlobal = useCallback(() => {
     if (mountedRef.current) setTree([...(globalObject.sceneTree as SceneTypeNode[])]);
   }, []);
+
+  /**
+   * Fetch one SceneType's instances (if not already loaded) with the row spinner up.
+   * Used both by the expand arrow and by initTree, which has to re-fill the types the
+   * user already had open — a re-init resets the cache, so without this an expanded
+   * type would sit there empty until the user collapsed and re-expanded it.
+   */
+  const ensureTypeLoaded = useCallback(
+    (uuid: string) => {
+      if (isSceneTypeLoaded(uuid)) return;
+      setLoadingTypes((prev) => new Set(prev).add(uuid));
+      void loadSceneInstancesForType(uuid)
+        .catch((err) => logger.log(`Loading scene instances failed: ${err}`, "error"))
+        .finally(() => {
+          if (!mountedRef.current) return;
+          syncTreeFromGlobal();
+          setLoadingTypes((prev) => {
+            const next = new Set(prev);
+            next.delete(uuid);
+            return next;
+          });
+        });
+    },
+    [syncTreeFromGlobal],
+  );
 
   const initTree = useCallback(async () => {
     if (initInFlight) return initInFlight;
@@ -126,23 +169,25 @@ export default function SceneGroup() {
         const sceneTypes = (await metaUtility.getAllSceneTypesFromDB()) as SceneTypeNode[];
         globalObject.sceneTypes = sceneTypes;
 
+        // Only the SceneType skeleton is fetched here — each type's SceneInstances are
+        // fetched when its arrow is first expanded (see toggleExpand / scene-tree-service).
+        // `children` is still initialised to [] because instance-utility's
+        // getAllSceneInstancesFromLocal iterates it unguarded.
         for (const sceneType of sceneTypes) {
-          const instances = await backendService.sceneInstancesAllGET(sceneType.uuid);
           if (!sceneType.children) sceneType.children = [];
-          for (const sceneInstance of instances) {
-            snapshotService.setSceneInstanceSnapshot(sceneInstance);
-            sceneType.children.push(sceneInstance);
-          }
         }
+        resetSceneInstanceCache();
         globalObject.sceneTree = sceneTypes;
         syncTreeFromGlobal();
+        // Re-fill whatever the user still has expanded (see ensureTypeLoaded).
+        for (const uuid of expandedRef.current) ensureTypeLoaded(uuid);
       } finally {
         setLoading(false);
         initInFlight = null;
       }
     })();
     return initInFlight;
-  }, [setLoading, syncTreeFromGlobal]);
+  }, [setLoading, syncTreeFromGlobal, ensureTypeLoaded]);
 
   // Port of updateTree(): fold imported scene instances + open tabs into the tree.
   const updateTree = useCallback(() => {
@@ -242,13 +287,17 @@ export default function SceneGroup() {
     };
   }, [initTree, updateTree]);
 
+  // Expanding a SceneType is what fetches its SceneInstances (lazily, once). The
+  // per-type spinner matters because that request is not cheap — the server returns
+  // each scene fully hydrated — so without it the row would just sit there empty.
   function toggleExpand(uuid: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(uuid)) next.delete(uuid);
-      else next.add(uuid);
-      return next;
-    });
+    const willExpand = !expanded.has(uuid);
+    const next = new Set(expanded);
+    if (willExpand) next.add(uuid);
+    else next.delete(uuid);
+    expandedRef.current = next;
+    setExpanded(next);
+    if (willExpand) ensureTypeLoaded(uuid);
   }
 
   async function openScene(node: SceneTypeNode | SceneInstance) {
@@ -267,6 +316,15 @@ export default function SceneGroup() {
       if (existingIndex !== -1) {
         await switchToTab(existingIndex);
         return;
+      }
+
+      // Baseline for "revert local edits" (what a rejected 403 save restores). The old
+      // eager initTree snapshotted every scene it fetched; now that scenes arrive
+      // lazily, the snapshot is taken here — the last point at which this SceneInstance
+      // is still exactly what the server sent. Guarded so re-opening a scene does not
+      // clobber the baseline persistency-handler maintains on each successful save.
+      if (!snapshotService.hasSceneInstanceSnapshot(sceneInstance.uuid)) {
+        snapshotService.setSceneInstanceSnapshot(sceneInstance);
       }
 
       // The engine must be initialised before we build a scene (guard the race where
@@ -339,6 +397,7 @@ export default function SceneGroup() {
         {tree.map((sceneType) => {
           const isOpen = expanded.has(sceneType.uuid);
           const children = sceneType.children ?? [];
+          const isLoadingType = loadingTypes.has(sceneType.uuid);
           return (
             <Fragment key={sceneType.uuid}>
               <ListItemButton
@@ -347,20 +406,26 @@ export default function SceneGroup() {
                 onDoubleClick={() => void handleDoubleClick(sceneType)}
                 data-uuid={sceneType.uuid}
               >
-                {children.length > 0 && (
-                  <IconButton
-                    size="small"
-                    edge="start"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleExpand(sceneType.uuid);
-                    }}
-                    aria-label={isOpen ? "collapse" : "expand"}
-                    sx={{ mr: 0.5 }}
-                  >
-                    {isOpen ? <ExpandLess fontSize="inherit" /> : <ExpandMore fontSize="inherit" />}
-                  </IconButton>
-                )}
+                {/* Always rendered: until the type is expanded once we do not know
+                    whether it has any instances, so there is no child count to test. */}
+                <IconButton
+                  size="small"
+                  edge="start"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleExpand(sceneType.uuid);
+                  }}
+                  aria-label={isOpen ? "collapse" : "expand"}
+                  sx={{ mr: 0.5 }}
+                >
+                  {isLoadingType ? (
+                    <CircularProgress size={14} aria-label="loading scene instances" />
+                  ) : isOpen ? (
+                    <ExpandLess fontSize="inherit" />
+                  ) : (
+                    <ExpandMore fontSize="inherit" />
+                  )}
+                </IconButton>
                 <ListItemText
                   primary={
                     <span style={{ fontSize: "10pt" }}>
@@ -374,6 +439,29 @@ export default function SceneGroup() {
               </ListItemButton>
               <Collapse in={isOpen} timeout="auto" unmountOnExit>
                 <List dense disablePadding>
+                  {isLoadingType && (
+                    <ListItemText
+                      sx={{ pl: 4, py: 0.5, display: "flex", alignItems: "center", gap: 1 }}
+                      primary={
+                        <>
+                          <CircularProgress size={12} sx={{ mr: 1 }} />
+                          <span style={{ fontSize: "9pt", fontStyle: "italic" }}>
+                            Loading scenes…
+                          </span>
+                        </>
+                      }
+                    />
+                  )}
+                  {!isLoadingType && children.length === 0 && (
+                    <ListItemText
+                      sx={{ pl: 4, py: 0.5 }}
+                      primary={
+                        <span style={{ fontSize: "9pt", fontStyle: "italic", opacity: 0.7 }}>
+                          No scene instances
+                        </span>
+                      }
+                    />
+                  )}
                   {children.map((sceneInstance) => (
                     <ListItemButton
                       key={sceneInstance.uuid}

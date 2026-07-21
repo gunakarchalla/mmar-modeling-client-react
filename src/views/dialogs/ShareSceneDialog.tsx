@@ -10,6 +10,7 @@ import {
   FormControl,
   IconButton,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
   TextField,
@@ -23,7 +24,9 @@ import { globalObject } from "@/engine";
 import { backendService, type AccessEntry } from "@/resources/services/backend-service";
 import { ApiError } from "@/resources/services/api";
 import { eventBus } from "@/resources/services/event-bus";
+import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { logger } from "@/resources/services/logger";
+import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
 import type { AccessLevel } from "@/resources/collaboration/shared-doc-service";
 
@@ -112,13 +115,28 @@ export default function ShareSceneDialog() {
     } catch {
       // ignore decode errors
     }
-    const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
-    setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
     setSelectedUuid("");
     setExistingAccess([]);
     setCanManage(false);
     setErrorMsg("");
     setUsernameInput("");
+
+    // The tree only holds the SceneTypes the user expanded (scene-tree-service), but
+    // you must be able to share any scene you own — so fetch the rest before flattening.
+    // Reuses `loading`, which already gates this dialog's controls.
+    let cancelled = false;
+    setLoading(true);
+    void loadAllSceneInstances()
+      .catch((err) => logger.log(`Loading scene instances failed: ${describeError(err)}`, "error"))
+      .finally(() => {
+        if (cancelled) return;
+        const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
+        setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const loadAccessList = useCallback(async (sceneInstanceUuid: string) => {
@@ -216,11 +234,18 @@ export default function ShareSceneDialog() {
     <Dialog open={open} onClose={cancel} fullWidth maxWidth="sm">
       <DialogTitle>Share Scene Instance</DialogTitle>
       <DialogContent>
-        <FormControl fullWidth size="small" sx={{ mt: 1 }}>
-          <InputLabel id="share-scene-select-label">Select Scene Instance</InputLabel>
+        {/* `loading` covers both the scene list (on open) and the access list (on
+            selection); before a scene is picked it can only mean the former. */}
+        {loading && !selectedSceneInstance && (
+          <LinearProgress aria-label="loading scene instances" sx={{ mt: 1 }} />
+        )}
+        <FormControl fullWidth size="small" sx={{ mt: 1 }} disabled={loading && !selectedSceneInstance}>
+          <InputLabel id="share-scene-select-label">
+            {loading && !selectedSceneInstance ? "Loading scenes…" : "Select Scene Instance"}
+          </InputLabel>
           <Select
             labelId="share-scene-select-label"
-            label="Select Scene Instance"
+            label={loading && !selectedSceneInstance ? "Loading scenes…" : "Select Scene Instance"}
             value={selectedUuid}
             onChange={onSceneInstanceChange}
           >

@@ -7,6 +7,7 @@ import {
   DialogTitle,
   FormControl,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
 } from "@mui/material";
@@ -14,6 +15,7 @@ import type { SelectChangeEvent } from "@mui/material";
 import type { SceneInstance, SceneType } from "@gds";
 import { globalObject } from "@/engine";
 import { backendService } from "@/resources/services/backend-service";
+import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { eventBus } from "@/resources/services/event-bus";
@@ -40,12 +42,26 @@ export default function DeleteSceneDialog() {
 
   const [sceneInstances, setSceneInstances] = useState<SceneInstance[]>([]);
   const [selectedUuid, setSelectedUuid] = useState<string>("");
+  const [loadingScenes, setLoadingScenes] = useState(false);
 
+  // The picker lists every scene, but the tree now only holds the SceneTypes the user
+  // has expanded, so pull the rest in first (see scene-tree-service).
   useEffect(() => {
     if (!open) return;
-    const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
-    setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
+    let cancelled = false;
     setSelectedUuid("");
+    setLoadingScenes(true);
+    void loadAllSceneInstances()
+      .catch((err) => logger.log(`Loading scene instances failed: ${describeError(err)}`, "error"))
+      .finally(() => {
+        if (cancelled) return;
+        const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
+        setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
+        setLoadingScenes(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const selectedSceneInstance = sceneInstances.find((si) => si.uuid === selectedUuid) ?? null;
@@ -82,11 +98,14 @@ export default function DeleteSceneDialog() {
     <Dialog open={open} onClose={cancel} maxWidth="sm" fullWidth>
       <DialogTitle>Delete SceneInstance</DialogTitle>
       <DialogContent>
-        <FormControl fullWidth required sx={{ mt: 1 }}>
-          <InputLabel id="delete-scene-instance-label">Select SceneInstance</InputLabel>
+        {loadingScenes && <LinearProgress aria-label="loading scene instances" sx={{ mt: 1 }} />}
+        <FormControl fullWidth required sx={{ mt: 1 }} disabled={loadingScenes}>
+          <InputLabel id="delete-scene-instance-label">
+            {loadingScenes ? "Loading scenes…" : "Select SceneInstance"}
+          </InputLabel>
           <Select
             labelId="delete-scene-instance-label"
-            label="Select SceneInstance"
+            label={loadingScenes ? "Loading scenes…" : "Select SceneInstance"}
             value={selectedUuid}
             onChange={onSelectionChange}
           >

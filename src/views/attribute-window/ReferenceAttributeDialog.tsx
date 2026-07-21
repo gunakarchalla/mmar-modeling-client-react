@@ -28,6 +28,7 @@ import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algor
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { expressionUtility } from "@/resources/services/expression-utility";
+import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { eventBus, type OpenReferenceDialogPayload } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
@@ -114,6 +115,14 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
     async (payload: Payload) => {
       setIsLoading(true);
       reset();
+
+      // A reference may point at an instance in ANY scene, and the scene tree is lazy
+      // now (scene-tree-service) — it only holds the SceneTypes the user expanded. The
+      // collectAllowed* helpers below, and resolveReferenceName, walk
+      // getAllSceneInstancesFromLocal, so without this the pickers would silently omit
+      // whole scenes and an existing reference would render as its raw fallback name.
+      await loadAllSceneInstances();
+
       const instance = payload.attributeInstance;
       setAttributeInstance(instance);
 

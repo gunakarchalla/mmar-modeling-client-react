@@ -7,6 +7,7 @@ import {
   DialogTitle,
   FormControl,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
   Stack,
@@ -18,6 +19,7 @@ import { globalObject, globalClassObject, globalRelationclassObject, sceneInitia
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
+import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { eventBus } from "@/resources/services/event-bus";
@@ -46,16 +48,31 @@ export default function CopySceneDialog() {
   const [selectedUuid, setSelectedUuid] = useState<string>("");
   const [name, setName] = useState<string>("");
   const [description, setDescription] = useState<string>("");
+  const [loadingScenes, setLoadingScenes] = useState(false);
 
   // Flatten the tree each time the dialog opens (the old dialog's commented-out
   // constructor did this once; reading on open keeps it fresh after imports/creates).
+  // The tree is lazy now (scene-tree-service), and duplicating needs the *hydrated*
+  // scene — its class/relation/attribute instances are what gets cloned — so pull in
+  // every type's instances before flattening.
   useEffect(() => {
     if (!open) return;
-    const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
-    setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
+    let cancelled = false;
     setSelectedUuid("");
     setName("");
     setDescription("");
+    setLoadingScenes(true);
+    void loadAllSceneInstances()
+      .catch((err) => logger.log(`Loading scene instances failed: ${describeError(err)}`, "error"))
+      .finally(() => {
+        if (cancelled) return;
+        const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
+        setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
+        setLoadingScenes(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const selectedSceneInstance = sceneInstances.find((si) => si.uuid === selectedUuid) ?? null;
@@ -100,11 +117,14 @@ export default function CopySceneDialog() {
       <DialogTitle>Enter your value</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <FormControl fullWidth required>
-            <InputLabel id="copy-scene-instance-label">Select SceneInstance</InputLabel>
+          {loadingScenes && <LinearProgress aria-label="loading scene instances" />}
+          <FormControl fullWidth required disabled={loadingScenes}>
+            <InputLabel id="copy-scene-instance-label">
+              {loadingScenes ? "Loading scenes…" : "Select SceneInstance"}
+            </InputLabel>
             <Select
               labelId="copy-scene-instance-label"
-              label="Select SceneInstance"
+              label={loadingScenes ? "Loading scenes…" : "Select SceneInstance"}
               value={selectedUuid}
               onChange={onSelectionChange}
             >

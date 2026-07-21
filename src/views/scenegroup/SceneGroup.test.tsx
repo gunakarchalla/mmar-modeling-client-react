@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   },
   snapshotService: {
     setSceneInstanceSnapshot: vi.fn(),
+    hasSceneInstanceSnapshot: vi.fn(() => false),
     createSceneOpenSnapshot: vi.fn(),
     clearSceneOpenSnapshot: vi.fn(),
     rollbackSceneOpen: vi.fn(),
@@ -115,7 +116,84 @@ describe("SceneGroup", () => {
     await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
     expect(screen.getByText(/Petri Net/)).toBeTruthy();
     expect(mocks.metaUtility.getFiles).toHaveBeenCalled();
-    expect(mocks.backendService.sceneInstancesAllGET).toHaveBeenCalledTimes(2);
+    // Mount fetches the SceneType skeleton ONLY — instances are lazy (see below). The
+    // eager version fired one fully-hydrating request per SceneType here.
+    expect(mocks.backendService.sceneInstancesAllGET).not.toHaveBeenCalled();
+  });
+});
+
+// --- lazy SceneInstance loading ----------------------------------------------
+
+describe("SceneGroup — lazy loading", () => {
+  beforeEach(() => {
+    mocks.metaUtility.getAllSceneTypesFromDB.mockResolvedValue([
+      { uuid: "st-1", name: "BPMN", classes: [], children: [] },
+      { uuid: "st-2", name: "Petri Net", classes: [], children: [] },
+    ]);
+  });
+
+  it("fetches a SceneType's instances only when its arrow is expanded", async () => {
+    mocks.backendService.sceneInstancesAllGET.mockResolvedValue([
+      { uuid: "si-1", name: "My Scene", uuid_scene_type: "st-1" },
+    ] as never);
+    render(<SceneGroup />);
+    await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
+    expect(screen.queryByText(/My Scene/)).toBeNull();
+
+    // Every type gets an arrow now: with nothing fetched there is no child count to
+    // gate it on. Expanding the first one must fetch that type and no other.
+    fireEvent.click(screen.getAllByLabelText("expand")[0]);
+
+    expect(await screen.findByText(/My Scene/)).toBeTruthy();
+    expect(mocks.backendService.sceneInstancesAllGET).toHaveBeenCalledTimes(1);
+    expect(mocks.backendService.sceneInstancesAllGET).toHaveBeenCalledWith("st-1");
+  });
+
+  it("shows a loading indicator while the instances are in flight", async () => {
+    let release!: (value: unknown[]) => void;
+    mocks.backendService.sceneInstancesAllGET.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve as (value: unknown[]) => void;
+      }) as never,
+    );
+    render(<SceneGroup />);
+    await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
+
+    fireEvent.click(screen.getAllByLabelText("expand")[0]);
+
+    // Users must see that the click did something — the request is not cheap (the
+    // server hydrates every scene it returns).
+    expect(await screen.findByText(/Loading scenes/)).toBeTruthy();
+
+    release([{ uuid: "si-1", name: "My Scene", uuid_scene_type: "st-1" }]);
+    expect(await screen.findByText(/My Scene/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/Loading scenes/)).toBeNull());
+  });
+
+  it("does not re-fetch a SceneType that was already expanded once", async () => {
+    mocks.backendService.sceneInstancesAllGET.mockResolvedValue([
+      { uuid: "si-1", name: "My Scene", uuid_scene_type: "st-1" },
+    ] as never);
+    render(<SceneGroup />);
+    await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
+
+    fireEvent.click(screen.getAllByLabelText("expand")[0]);
+    expect(await screen.findByText(/My Scene/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("collapse"));
+    fireEvent.click(screen.getAllByLabelText("expand")[0]);
+
+    expect(await screen.findByText(/My Scene/)).toBeTruthy();
+    expect(mocks.backendService.sceneInstancesAllGET).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an empty SceneType instead of leaving the row blank", async () => {
+    mocks.backendService.sceneInstancesAllGET.mockResolvedValue([] as never);
+    render(<SceneGroup />);
+    await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
+
+    fireEvent.click(screen.getAllByLabelText("expand")[0]);
+
+    expect(await screen.findByText(/No scene instances/)).toBeTruthy();
   });
 });
 

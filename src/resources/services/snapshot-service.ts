@@ -85,6 +85,16 @@ export class SnapshotService {
     this.sceneInstanceSnapshots.set(sceneInstance.uuid, this.deepCloneSceneInstance(sceneInstance));
   }
 
+  /**
+   * Whether a baseline already exists for this scene. SceneGroup uses it to snapshot a
+   * scene the first time it is opened WITHOUT clobbering the baseline on a later re-open
+   * (the baseline must stay the last *persisted* state — persistency-handler is what
+   * refreshes it, on every successful save).
+   */
+  hasSceneInstanceSnapshot(uuid: string): boolean {
+    return this.sceneInstanceSnapshots.has(uuid);
+  }
+
   restoreSceneInstanceToCurrentTab(): SceneInstance | null {
     const tabContext = this.globalObjectInstance.tabContext[this.globalObjectInstance.selectedTab];
     if (!tabContext?.sceneInstance) {
