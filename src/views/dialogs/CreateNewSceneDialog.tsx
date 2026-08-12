@@ -17,6 +17,7 @@ import type { SelectChangeEvent } from "@mui/material";
 import { SceneInstance, SceneType } from "@gds";
 import { globalObject, globalClassObject, globalRelationclassObject, sceneInitiator } from "@/engine";
 import { metaUtility } from "@/resources/services/meta-utility";
+import { historyService } from "@/resources/services/history-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { logger } from "@/resources/services/logger";
@@ -91,6 +92,10 @@ export default function CreateNewSceneDialog() {
       // Set globalClassObject/globalRelationclassObject classes for the palettes.
       globalClassObject.initClasses();
       globalRelationclassObject.initRelationClasses();
+
+      // Undo floor for the new tab: the empty scene it was created as.
+      historyService.initScene(sceneInstance);
+
       logger.log(`SceneInstance with name ${sceneInstance.name} created`, "info");
     }
 

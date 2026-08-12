@@ -17,6 +17,7 @@ import type { SelectChangeEvent } from "@mui/material";
 import type { SceneInstance, SceneType } from "@gds";
 import { globalObject, globalClassObject, globalRelationclassObject, sceneInitiator } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
+import { historyService } from "@/resources/services/history-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
@@ -99,6 +100,9 @@ export default function CopySceneDialog() {
       //check hybrid algorithms -> specifically for reference attributes --> we do not
       //give an attributeInstance as argument (P12: live)
       await hybridAlgorithmsService.checkHybridAlgorithms(null, newSceneInstance.class_instances);
+
+      // Undo floor for the new tab: the duplicate as it was just built.
+      historyService.initScene(newSceneInstance);
 
       logger.log(`SceneInstance with name ${newSceneInstance.name} created`, "info");
     }

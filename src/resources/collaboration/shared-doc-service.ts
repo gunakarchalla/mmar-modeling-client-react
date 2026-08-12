@@ -258,6 +258,7 @@ export class SharedDocService {
         // A remote edit mutated the gds objects in place; the attribute window only
         // re-renders when selectionStore's revision changes (P8's bump() contract).
         this.notifyRemoteMutation(aggregate);
+        this.notifyRemoteInstances(tabIndex, events);
       } finally {
         session.applyingRemote = false;
       }
@@ -290,10 +291,35 @@ export class SharedDocService {
           eventBus.publish("remoteRelationInstanceAdded", { tabIndex });
         }
         this.notifyRemoteMutation(aggregate);
+        this.notifyRemoteInstances(tabIndex, events);
       } finally {
         session.applyingRemote = false;
       }
     });
+  }
+
+  /**
+   * Name the instances a PEER just changed, for the undo history (which must hold local
+   * edits only — see history-service). The uuids come straight off the Y events rather
+   * than from the apply functions: the observed maps are keyed BY instance uuid, so a
+   * root-level event names them in `changes.keys` (add/remove) and a nested one has the
+   * uuid as the first path segment (a field of that instance changed).
+   */
+  private notifyRemoteInstances(tabIndex: number, events: Y.YEvent<Y.Map<unknown>>[]): void {
+    const instanceUuids = new Set<string>();
+    for (const event of events) {
+      const path = event.path as Array<string | number>;
+      if (path.length === 0) {
+        (event as Y.YMapEvent<Y.Map<unknown>>).changes.keys.forEach((_change, uuid) => {
+          instanceUuids.add(uuid);
+        });
+      } else if (typeof path[0] === "string") {
+        instanceUuids.add(path[0]);
+      }
+    }
+    if (instanceUuids.size > 0) {
+      eventBus.publish("remoteSceneInstanceChanged", { tabIndex, instanceUuids: [...instanceUuids] });
+    }
   }
 
   /**

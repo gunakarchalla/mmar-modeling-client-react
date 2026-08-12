@@ -14,6 +14,7 @@ import {
   type ZipEntry,
 } from "@/engine/hybrid-algorithms/roboticsystem-algorithms";
 import { instanceUtility } from "@/resources/services/instance-utility";
+import { historyService } from "@/resources/services/history-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
@@ -94,6 +95,11 @@ export default function MapFromFileDialog() {
       // instantiate links/joints from it.
       const zipIndex = roboticsystemAlgorithms.createZipIndex(entries as unknown as Record<string, ZipEntry>);
       await roboticsystemAlgorithms.processZipUrdf(zipIndex);
+
+      // A URDF import instantiates every link and joint at once. It is one user action,
+      // so it is one undo step — with no touched list, which makes the history service
+      // diff the whole scene to work out what the import produced.
+      historyService.record("map from file");
     } catch (e) {
       logger.log(`Mapping failed: ${describeError(e)}`, "error");
     } finally {

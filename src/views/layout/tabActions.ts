@@ -10,6 +10,7 @@ import {
 import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { backendService } from "@/resources/services/backend-service";
+import { historyService } from "@/resources/services/history-service";
 import { describeError } from "@/resources/util/describe-error";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
@@ -45,6 +46,10 @@ async function applyEngineTabSelection(index: number): Promise<void> {
   if (!engine.isInitialized) return;
   const tab = globalObject.tabContext[index];
   if (!tab) return;
+
+  // Undo is scoped to the scene you are looking at (same rule as the metamodeling
+  // twin's per-tab history), so the controls follow the selection.
+  historyService.setActiveScene(tab.sceneInstance);
 
   const threeScene = tab.threeScene;
   globalObject.scene = threeScene;
@@ -96,12 +101,16 @@ export async function renameTab(index: number, rawName: string): Promise<void> {
 
   if (!globalObject.autoSave) {
     logger.log(`SceneInstance renamed to ${name} (autoSave off, not persisted)`, "info");
+    historyService.record(`rename to ${name}`, { coalesceKey: `rename:${uuid}` });
     return;
   }
 
   try {
     await backendService.sceneInstancesPATCH(uuid, sceneInstance);
     logger.log(`SceneInstance renamed to ${name}`, "info");
+    // Recorded only once the rename has stuck. The catch below reverts a rejected one
+    // everywhere, and a step for a change that no longer exists would be a trap.
+    historyService.record(`rename to ${name}`, { coalesceKey: `rename:${uuid}` });
   } catch (error) {
     // Revert the rename everywhere so the UI matches the server (mirrors the 403
     // revert-to-snapshot behaviour in persistency-handler.persistSceneInstanceToDB).
@@ -142,7 +151,11 @@ export async function closeTab(index: number): Promise<void> {
   sharedDocService.detach(index);
 
   // Remove the tab from the engine's tabContext (same position the store removes).
+  const closedSceneUuid = tabContext[index]?.sceneInstance?.uuid;
   if (index < tabContext.length) tabContext.splice(index, 1);
+
+  // The scene is gone from memory, so its undo stack has nothing left to restore into.
+  historyService.dropScene(closedSceneUuid);
 
   // Let the store apply its selection-clamp rules, then read the resulting index.
   useTabsStore.getState().closeTab(index);
@@ -153,6 +166,7 @@ export async function closeTab(index: number): Promise<void> {
     globalObject.selectedTab = -1;
     globalObject.scene = new THREE.Scene();
     globalObject.dragObjects = [];
+    historyService.setActiveScene(null);
     eventBus.publish("tabChanged");
     return;
   }

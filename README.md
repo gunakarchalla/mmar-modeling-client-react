@@ -26,6 +26,9 @@ robot-joint simulation window, procedures ("Algorithms" dialog), and WebXR (AR/V
 Interaction is a 5-state machine (`globalStateObject`): `0 Selection (drag)`,
 `1 View`, `2 Drawing (insert)`, `3 DrawingRelationClass (line)`, `4 Simulation`.
 
+Every change to the open scene is undoable (`Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z` or `Ctrl/⌘+Y`,
+and the toolbar buttons) — see [Undo/redo](#undoredo).
+
 ## Tech stack
 
 | Concern        | Choice                                              |
@@ -64,9 +67,11 @@ src/
     ...                       # animator, initiator, coordinates-updater, deletion/creation handlers, ...
   resources/
     services/                 # framework-agnostic TS: api, backend-service, *-utility, event-bus, logger
+      history-service.ts      # undo/redo: record a step, replay it, broadcast it (see below)
+      scene-diff.ts           # the snapshot/diff rules history-service applies
     store/                    # Zustand stores (see below)
     collaboration/            # yjs shared-doc, y-mapping, awareness/cursor/selection renderers
-    util/                     # small helpers (describe-error)
+    util/                     # small helpers (describe-error, platform)
   views/                      # React components (MUI), one folder per region
     layout/                   # AppLayout (page skeleton) + TabBar + tabActions
     top-nav-bar/ toolbar/ left-nav/ right-nav/ state-window/ log-window/ footer/
@@ -120,6 +125,35 @@ src/
 | `stateStore`     | display-only mirror of the engine interaction state |
 | `selectionStore` | selected instance/type + `revision` bump; drives the AttributeWindow |
 | `collabStore`    | per-tab collaboration status/access/banner/users |
+| `historyStore`   | per-scene undo/redo stacks (snapshot + touched uuids); drives the toolbar buttons |
+
+## Undo/redo
+
+Scoped to the ACTIVE tab's SceneInstance, one stack per open scene
+(`historyStore`), driven by `resources/services/history-service.ts`.
+
+Recording is generic: mutation sites only announce that something happened — engine
+modules publish `historyRecord` on the bus (they must not import the service, which
+reaches back into the engine), views call `historyService.record()` directly — and the
+service snapshots the scene and derives the changed UUIDs by diffing against the
+previous entry. That is why coverage is total: creation, deletion, transforms, attribute
+and table-attribute values, the scene name, a URDF import, an algorithm run — anything
+that lands in the SceneInstance is picked up by the same code, with no per-action
+inverse to maintain.
+
+Applying a step is NOT a snapshot restore. Only the instances the recorded action
+touched are moved back, so a collaborator's concurrent edits to other objects survive an
+undo (`resources/services/scene-diff.ts`). The result is then pushed out through the
+channels a normal edit already uses: gds objects are mutated in place and re-drawn via
+`persistencyHandler`/`deletionHandler`, peers receive the equivalent
+`applyLocalChangeToYDoc` deltas, and the scene is flagged dirty so auto-save PATCHes it.
+Instances a peer changed are reported by SharedDocService over
+`remoteSceneInstanceChanged` and excluded when a step is recorded, so the stack holds
+local edits only.
+
+Chords match the metamodeling client (shared `resources/util/platform.ts`), with one
+difference: they stand down inside a text field, so `Ctrl+Z` in an attribute input undoes
+the typing rather than the model.
 
 ## Shared DTOs (`@gds`)
 

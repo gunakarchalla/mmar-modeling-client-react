@@ -52,7 +52,22 @@ const mocks = vi.hoisted(() => ({
   remoteSelectionRenderer: { bindToSession: vi.fn(), clearForTab: vi.fn() },
   closeTab: vi.fn(async () => undefined),
   switchToTab: vi.fn(async () => undefined),
+  // The undo/redo history service imports the @/engine/global-definition LEAF (a
+  // WebGLRenderer at module scope), so it bypasses the `@/engine` barrel mock and has
+  // to be mocked in its own right — same lesson as persistency-handler (P9),
+  // shared-doc-service (P10) and hybrid-algorithms-service (P12).
+  historyService: {
+    record: vi.fn(),
+    recordAfterTransformSync: vi.fn(async () => undefined),
+    initScene: vi.fn(),
+    setActiveScene: vi.fn(),
+    dropScene: vi.fn(),
+    undo: vi.fn(async () => undefined),
+    redo: vi.fn(async () => undefined),
+    reset: vi.fn(),
+  },
 }));
+vi.mock("@/resources/services/history-service", () => ({ historyService: mocks.historyService }));
 
 vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
   hybridAlgorithmsService: mocks.hybridAlgorithmsService,

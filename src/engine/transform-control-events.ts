@@ -3,6 +3,7 @@ import { ObjectInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { globalSelectedObject } from "@/engine/global-selected-object";
 import { instanceUtility } from "@/resources/services/instance-utility";
+import { eventBus } from "@/resources/services/event-bus";
 import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 
 /**
@@ -33,6 +34,7 @@ export class TransformControlsEvents {
   private globalObjectInstance = globalObject;
   private globalSelectedObject = globalSelectedObject;
   private instanceUtility = instanceUtility;
+  private eventAggregator = eventBus;
 
   onTransformControlsPropertyChange() {
     if (this.globalSelectedObject.object) {
@@ -153,6 +155,17 @@ export class TransformControlsEvents {
     }
 
     this.globalObjectInstance.render = true;
+
+    // One undo step per completed drag (mouse-up), not per frame. `afterTransformSync`
+    // matters: the moved mesh is only written back onto the gds instance by the
+    // animator's coordinates-updater pass on a LATER frame, so the history service has
+    // to flush those writes before it snapshots — otherwise it would record the pose the
+    // object had BEFORE the drag. The mode is in the label so the log reads sensibly.
+    this.eventAggregator.publish("historyRecord", {
+      label: mode ?? "transform",
+      afterTransformSync: true,
+      coalesceKey: `transform:${object?.uuid ?? ""}:${mode ?? ""}`,
+    });
   }
 
   /**

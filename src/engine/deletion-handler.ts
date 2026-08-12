@@ -46,6 +46,13 @@ export class DeletionHandler {
     } else if (index2 !== undefined && index2 >= 0) {
       await this.deleteRelationclassInstance(this.globalObjectInstance.current_class_instance, index2);
     }
+
+    // One undo step for the whole delete, cascade included. Recording here rather than
+    // inside deleteClassInstance/deleteRelationclassInstance is deliberate: those two
+    // recurse into each other (a class takes its relations, a relation takes its
+    // bendpoints), so per-call recording would turn one keypress into a pile of steps.
+    this.eventAggregator.publish("historyRecord", { label: "delete" });
+
     this.globalStateObject.setState(0);
   }
 

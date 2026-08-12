@@ -25,6 +25,7 @@ import type { Attribute, AttributeInstance, Class, ClassInstance, PortInstance }
 import type { ColumnStructure } from "@gds/models/meta/Metamodel_columns.structure";
 import { globalObject, instanceCreationHandler } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
+import { historyService } from "@/resources/services/history-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { eventBus } from "@/resources/services/event-bus";
@@ -200,6 +201,9 @@ export function TableAttributeDialogView({
     // commented out). The window still has to notice the in-place edit, so bump the
     // P5 selection store — the plan's `revision` re-render trigger (§3.1/§3.2).
     bump();
+
+    // Undo step, keyed per cell so re-editing the same one does not stack steps.
+    historyService.record("edit table cell", { coalesceKey: `table-cell:${cell.uuid}` });
   }
 
   function commitCell(cell: AttributeInstance, next: string) {
@@ -225,6 +229,10 @@ export function TableAttributeDialogView({
     await load();
     globalObject.doSceneInstancePatch = true;
     bump();
+
+    // One step for the whole row: createCell() ran once per column above, but adding a
+    // row is a single user action and undoes as one.
+    historyService.record("add table row");
   }
 
   async function createCell(row: number, columnIndex: number, hasTableAttribute: ColumnStructure[]) {

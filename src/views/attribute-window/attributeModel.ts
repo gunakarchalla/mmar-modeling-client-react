@@ -10,6 +10,7 @@ import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algor
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { eventBus } from "@/resources/services/event-bus";
+import { historyService } from "@/resources/services/history-service";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
 import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 import { FILE_ATTRIBUTE_TYPE_UUID } from "@/constants";
@@ -308,4 +309,11 @@ export async function applyFieldChange(attributeInstance: AttributeInstance, own
   } else {
     globalObject.doSceneInstancePatch = true;
   }
+
+  // Undo step for the edit. Keyed on the attribute instance so a slider being dragged
+  // (which commits on every release) and a value re-edited straight away collapse into
+  // one step, while a different field always starts a new one.
+  historyService.record(`edit ${attributeInstance.name || "attribute"}`, {
+    coalesceKey: `attribute:${attributeInstance.uuid}`,
+  });
 }

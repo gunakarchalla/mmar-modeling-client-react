@@ -3,6 +3,7 @@ import type { URDFRobot, URDFJoint, URDFLink } from "urdf-loader";
 import { AttributeInstance, ClassInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { metaUtility } from "@/resources/services/meta-utility";
+import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 
 /**
@@ -65,6 +66,7 @@ export class UrdfPoseService {
   private robotsByKey = new Map<string, RobotRecord>();
 
   private globalObjectInstance = globalObject;
+  private eventAggregator = eventBus;
   private metaUtility = metaUtility;
   private logger = logger;
 
@@ -159,6 +161,14 @@ export class UrdfPoseService {
     this.globalObjectInstance.render = true;
     this.globalObjectInstance.doSceneInstancePatch = true;
 
+    // Re-posing a robot rewrites the pose attributes of every link/joint instance, so
+    // it is one undo step like any other edit. Coalesced per joint: the table dialog
+    // commits a value per field, and a origin edit is several of those in a row.
+    this.eventAggregator.publish("historyRecord", {
+      label: "joint origin",
+      coalesceKey: `urdf-origin:${jointInstance?.uuid ?? ""}`,
+    });
+
     return true;
   }
 
@@ -206,6 +216,13 @@ export class UrdfPoseService {
 
     this.globalObjectInstance.render = true;
     this.globalObjectInstance.doSceneInstancePatch = true;
+
+    // A dragged slider fires this on every tick; the coalesce key collapses the whole
+    // drag into one undo step instead of one per intermediate joint value.
+    this.eventAggregator.publish("historyRecord", {
+      label: "joint value",
+      coalesceKey: `urdf-joint:${jointInstance?.uuid ?? ""}`,
+    });
 
     return true;
   }

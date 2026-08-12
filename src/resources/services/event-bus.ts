@@ -62,6 +62,30 @@ export interface SceneInstanceMutatedPayload {
   instanceUuid?: string;
 }
 
+/**
+ * Payload for `historyRecord`. Engine modules must NOT import `history-service` (it
+ * reaches back into the engine, whose construction order engine/index.ts owns), so they
+ * announce an undo step over the bus instead. `coalesceKey` merges a run of related
+ * mutations into one step; `afterTransformSync` tells the service to flush the pending
+ * three.js -> gds transform writes before snapshotting (see its `recordAfterTransformSync`).
+ */
+export interface HistoryRecordPayload {
+  label: string;
+  coalesceKey?: string | null;
+  afterTransformSync?: boolean;
+}
+
+/**
+ * Payload for `remoteSceneInstanceChanged`. Published by SharedDocService for every
+ * Y.Doc update that came from a PEER, naming the class/relation instances it touched.
+ * The history service subtracts these so a collaborator's edit never becomes part of a
+ * local undo step (it stays in the snapshots — it is just never replayed).
+ */
+export interface RemoteSceneInstanceChangedPayload {
+  tabIndex: number;
+  instanceUuids: string[];
+}
+
 export interface EventPayloads {
   // Auth / scenegroup lifecycle
   login: boolean;
@@ -82,6 +106,10 @@ export interface EventPayloads {
   // VizRep pipeline
   checkForVizRepUpdate: void;
   checkForVizRepUpdateByAttributeInstance: AttributeInstance;
+
+  // Undo / redo history
+  historyRecord: HistoryRecordPayload;
+  remoteSceneInstanceChanged: RemoteSceneInstanceChangedPayload;
 
   // Keyboard
   ctrlPlusSPressed: void;

@@ -325,6 +325,11 @@ export class InteractionHandler {
         if (session && !session.applyingRemote) {
           applyLocalChangeToYDoc(session.ydoc, { type: "add_class_instance", classInstance: class_instance }, session.localOrigin);
         }
+
+        // Undo step for the drop. Same place as the Y.Doc publish and for the same
+        // reason: every port + attribute of the new instance exists by now, so the
+        // snapshot is of a finished instance rather than a half-built one.
+        this.eventAggregator.publish("historyRecord", { label: `create ${class_instance.name}` });
       }
     }
     // Faithful port of a dead branch in the original (its body is a commented-out
@@ -599,6 +604,12 @@ export class InteractionHandler {
       if (relSession && !relSession.applyingRemote) {
         applyLocalChangeToYDoc(relSession.ydoc, { type: "add_relation_class_instance", relationClassInstance: relationclass_instance }, relSession.localOrigin);
       }
+
+      // ONE undo step for the whole line, bendpoints included. The bendpoints created
+      // while drawing are intermediate states of this single action, so they are not
+      // recorded as they happen — the relation is only real once both roles are set,
+      // and abandoning the draw (right-click) unwinds back to the last recorded step.
+      this.eventAggregator.publish("historyRecord", { label: `create ${relationclass_instance.name}` });
     }
     //if right click and there is no relationclass_instance in creation reset state to view mode
     else if (this.clickedButton == 2 && !this.globalStateObject.activeStateLine) {

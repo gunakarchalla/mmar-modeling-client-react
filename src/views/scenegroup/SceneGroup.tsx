@@ -16,6 +16,7 @@ import { SceneInstance, SceneType } from "@gds";
 import { engine, globalObject, globalClassObject, globalRelationclassObject, sceneInitiator } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { metaUtility } from "@/resources/services/meta-utility";
+import { historyService } from "@/resources/services/history-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { snapshotService } from "@/resources/services/snapshot-service";
 import {
@@ -339,6 +340,10 @@ export default function SceneGroup() {
       await persistencyHandler.loadPersistedModel(sceneInstance);
       globalClassObject.initClasses();
       globalRelationclassObject.initRelationClasses();
+
+      // The undo floor for this tab is the scene AS OPENED — set once the instances
+      // have been imported, so the first Ctrl+Z lands on a fully drawn scene.
+      historyService.initScene(sceneInstance);
 
       //check hybrid algorithms -> specifically for reference attributes --> we do not
       //give an attributeInstance as argument (P12: live)

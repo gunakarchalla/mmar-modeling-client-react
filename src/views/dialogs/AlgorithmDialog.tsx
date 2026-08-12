@@ -15,6 +15,7 @@ import {
 } from "@mui/material";
 import { Procedure } from "@gds";
 import { globalObject } from "@/engine/global-definition";
+import { historyService } from "@/resources/services/history-service";
 import { procedureUtility } from "@/resources/services/procedure-utility";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
@@ -78,10 +79,14 @@ export default function AlgorithmDialog() {
 
   async function executeIndependent() {
     await procedureUtility.execute(independentAlgorithmChoice, "");
+    // A procedure is an arbitrary stored code string that may rewrite any part of the
+    // scene, so the step carries no touched list and the whole scene gets diffed.
+    historyService.record(`algorithm ${independentAlgorithmChoice}`);
   }
 
   async function executeDependent() {
     await procedureUtility.execute("", dependentAlgorithmChoice);
+    historyService.record(`algorithm ${dependentAlgorithmChoice}`);
   }
 
   const run = (fn: () => Promise<void>) => () =>
