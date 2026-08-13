@@ -11,16 +11,24 @@ import type { SceneInstance } from "@gds";
 import { backendService } from "@/resources/services/backend-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
+import { removeSceneInstanceFromTree } from "@/resources/services/scene-tree-service";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { closeTab } from "@/views/layout/tabActions";
 
 // Port of `dialogs/dialog-delete-scene/{ts,html}` — deletes a SceneInstance from the
-// database, then republishes 'initSceneGroup' so the tree re-fetches (SceneGroup
-// subscribes that channel, P7). Opened from the SceneGroup tree's "Delete" context-menu
-// item via uiStore 'deleteScene', with the right-clicked scene as its
-// `{ sceneInstance }` payload.
+// database, then drops that one node from the tree and publishes 'updateSceneGroup' to
+// re-render. Opened from the SceneGroup tree's "Delete" context-menu item via uiStore
+// 'deleteScene', with the right-clicked scene as its `{ sceneInstance }` payload.
+//
+// It used to publish 'initSceneGroup' instead, which made SceneGroup rebuild the whole
+// tree: refetch every metamodel file, every SceneType and every expanded type's fully
+// hydrated scenes. None of that can have changed — the delete touched the instance
+// layer only — and the rebuild dropped the tree's local-only nodes (imported metamodels
+// and models, scenes created with autoSave off). scene-tree-service's
+// `removeSceneInstanceFromTree` does the one thing the delete actually implies; see its
+// note for why the tree had no removal path before.
 //
 // The payload is REQUIRED, and the dialog is a plain confirmation rather than the old
 // picker: the user already chose the scene by right-clicking it, so all that is left is
@@ -90,7 +98,10 @@ export default function DeleteSceneDialog() {
       await closeTab(openTabIndex);
     }
 
-    eventBus.publish("initSceneGroup");
+    // Order matters: the tab is closed above FIRST, because 'updateSceneGroup' folds
+    // every open tab back into the tree and would re-add the scene we just removed.
+    removeSceneInstanceFromTree(uuid);
+    eventBus.publish("updateSceneGroup");
     setDeleting(false);
     closeDialog("deleteScene");
   }

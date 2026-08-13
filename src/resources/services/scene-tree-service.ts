@@ -84,9 +84,9 @@ export async function loadSceneInstancesForType(sceneTypeUuid: UUID): Promise<vo
     try {
       const instances = await backendService.sceneInstancesAllGET(sceneTypeUuid);
       // A reset landed while this was in flight, so the tree we were fetching for has
-      // been rebuilt (a re-login, or the delete-scene dialog's 'initSceneGroup'). This
-      // response describes the old tree — applying it could resurrect a scene that was
-      // just deleted. Drop it; initTree re-requests whatever is still expanded.
+      // been rebuilt ('initSceneGroup' / a re-login). This response describes the old
+      // tree — applying it could resurrect a scene that has since gone. Drop it;
+      // initTree re-requests whatever is still expanded.
       if (startedAt !== generation) return;
 
       const node = ((globalObject.sceneTree ?? []) as SceneTypeNode[]).find(
@@ -112,6 +112,41 @@ export async function loadSceneInstancesForType(sceneTypeUuid: UUID): Promise<vo
 
   inFlight.set(sceneTypeUuid, request);
   return request;
+}
+
+/**
+ * Drop one SceneInstance from the tree after it has been deleted from the database.
+ *
+ * WHY THIS EXISTS: the tree is otherwise append-only. `loadSceneInstancesForType` above
+ * merges by uuid and never removes (deliberately — see its note), and SceneGroup's
+ * `updateTree` only adds. So the only way to make a row disappear used to be a full
+ * `initTree()`, which the delete dialog reached for by publishing 'initSceneGroup'.
+ * That rebuilt the entire tree from the database — refetching every metamodel file and
+ * every SceneType — to remove one node whose uuid the caller already had in hand.
+ * Deleting a SceneInstance cannot change the metamodel, so none of that work was
+ * answering a question the delete had raised, and the rebuild took the tree's
+ * local-only nodes down with it: an imported SceneType (ImportMetamodelDialog pushes
+ * straight into `globalObject.sceneTypes`, which the rebuild overwrites), an imported
+ * SceneInstance, and a scene created with autoSave off all disappear from the tree,
+ * because the database's answer is the only one a rebuild keeps.
+ *
+ * Scans every type node instead of indexing by `uuid_scene_type`: this is a two-level
+ * tree, so the scan is free, and a scene that somehow sits under two nodes should leave
+ * both.
+ *
+ * The caller publishes 'updateSceneGroup' to re-render, and must close the scene's tab
+ * BEFORE calling this — `updateTree` folds every open tab back into the tree.
+ */
+export function removeSceneInstanceFromTree(sceneInstanceUuid: UUID): void {
+  for (const node of (globalObject.sceneTree ?? []) as SceneTypeNode[]) {
+    if (!node.children) continue;
+    node.children = node.children.filter((child) => child.uuid !== sceneInstanceUuid);
+  }
+  // A scene imported but not yet folded into the tree is still only in this buffer, and
+  // the next updateTree would add it back.
+  globalObject.importSceneInstances = (globalObject.importSceneInstances ?? []).filter(
+    (sceneInstance) => sceneInstance.uuid !== sceneInstanceUuid,
+  );
 }
 
 /**

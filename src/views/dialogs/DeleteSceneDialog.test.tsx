@@ -3,20 +3,25 @@
 // P9 component tests for the delete-scene dialog. It has no scene picker: the tree's
 // Delete context-menu item hands it the scene as a `{ sceneInstance }` payload and the
 // dialog is a plain confirmation for that scene, which then DELETEs through
-// backend-service and republishes 'initSceneGroup' so the tree re-fetches.
+// backend-service, removes that one node from the tree and publishes 'updateSceneGroup'.
 //
-// backend-service is mocked; uiStore + eventBus are the real singletons. `@/engine`
-// needs no mock any more — dropping the scene picker dropped the dialog's last read of
-// globalObject.sceneTree, so the engine barrel (a WebGLRenderer at module scope) is no
-// longer in this file's import graph.
+// backend-service is mocked; uiStore + eventBus are the real singletons. `@/engine` is
+// mocked because the dialog reaches globalObject.sceneTree through scene-tree-service's
+// removeSceneInstanceFromTree, and the real barrel builds a WebGLRenderer at module
+// scope. The mock is a plain object so the tree assertions read the real mutation.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   backendService: { sceneInstancesAllDELETE2: vi.fn(async (): Promise<unknown> => ({})) },
   closeTab: vi.fn(async (): Promise<void> => {}),
+  globalObject: { sceneTree: [], importSceneInstances: [] } as {
+    sceneTree: { uuid: string; children?: { uuid: string; name?: string }[] }[];
+    importSceneInstances: { uuid: string }[];
+  },
 }));
 
+vi.mock("@/engine", () => ({ globalObject: mocks.globalObject }));
 vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.backendService }));
 // tabActions.closeTab drives the real engine/collaboration singletons, which aren't
 // mounted here — mock it and assert the dialog calls it with the open tab's index.
@@ -42,11 +47,28 @@ function setOpenTabs(tabs: TabInfo[]) {
   useTabsStore.setState({ tabs, selectedTab: tabs.length ? 0 : -1 });
 }
 
+/** globalObject is a module-level singleton here too — rebuild the tree per test. */
+function setTree() {
+  mocks.globalObject.sceneTree = [
+    {
+      uuid: "scene-type-1",
+      children: [
+        { uuid: SCENE_A, name: "Scene A" },
+        { uuid: "scene-b-uuid", name: "Scene B" },
+      ],
+    },
+    // A second type with its children never expanded — removal must tolerate it.
+    { uuid: "scene-type-2" },
+  ];
+  mocks.globalObject.importSceneInstances = [];
+}
+
 beforeEach(() => {
   cleanup();
   vi.clearAllMocks();
   closeAllDialogs();
   setOpenTabs([]);
+  setTree();
 });
 
 describe("DeleteSceneDialog", () => {
@@ -84,8 +106,8 @@ describe("DeleteSceneDialog", () => {
   });
 
   it("deletes the passed scene without any selection step", async () => {
-    const initSceneGroup = vi.fn();
-    const sub = eventBus.subscribe("initSceneGroup", initSceneGroup);
+    const updateSceneGroup = vi.fn();
+    const sub = eventBus.subscribe("updateSceneGroup", updateSceneGroup);
     openConfirm();
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete SceneInstance" }));
@@ -93,9 +115,43 @@ describe("DeleteSceneDialog", () => {
     await waitFor(() =>
       expect(mocks.backendService.sceneInstancesAllDELETE2).toHaveBeenCalledWith(SCENE_A),
     );
-    await waitFor(() => expect(initSceneGroup).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(updateSceneGroup).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(useUiStore.getState().dialogs.deleteScene).toBe(false));
     sub.dispose();
+  });
+
+  it("removes just the deleted node instead of asking for a full tree rebuild", async () => {
+    // The regression this guards: publishing 'initSceneGroup' made SceneGroup refetch
+    // every metamodel file and SceneType to drop one instance the dialog already had
+    // the uuid of — and wiped the tree's local-only nodes on the way through.
+    const initSceneGroup = vi.fn();
+    const sub = eventBus.subscribe("initSceneGroup", initSceneGroup);
+    openConfirm();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete SceneInstance" }));
+
+    await waitFor(() =>
+      expect(mocks.globalObject.sceneTree[0].children?.map((c) => c.uuid)).toEqual([
+        "scene-b-uuid",
+      ]),
+    );
+    expect(initSceneGroup).not.toHaveBeenCalled();
+    sub.dispose();
+  });
+
+  it("leaves the tree alone when the delete is rejected", async () => {
+    mocks.backendService.sceneInstancesAllDELETE2.mockRejectedValueOnce(
+      Object.assign(new Error("Forbidden"), { status: 403 }),
+    );
+    openConfirm();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete SceneInstance" }));
+
+    expect(await screen.findByText(/don't have enough authorization/)).toBeTruthy();
+    expect(mocks.globalObject.sceneTree[0].children?.map((c) => c.uuid)).toEqual([
+      SCENE_A,
+      "scene-b-uuid",
+    ]);
   });
 
   it("closes the deleted scene's open tab", async () => {
