@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
-// P7 component tests for SceneGroup: the action buttons open the right uiStore
-// dialogs, and initTree() builds the SceneType tree from the (mocked) backend.
+// P7 component tests for SceneGroup: the row context menus open the right uiStore
+// dialogs WITH the clicked node as their payload, and initTree() builds the SceneType
+// tree from the (mocked) backend.
 // `@/engine` and the sibling services are mocked (the real barrel builds a
 // WebGLRenderer at module scope); uiStore + eventBus are the real singletons.
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -52,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   remoteSelectionRenderer: { bindToSession: vi.fn(), clearForTab: vi.fn() },
   closeTab: vi.fn(async () => undefined),
   switchToTab: vi.fn(async () => undefined),
+  renameSceneInstance: vi.fn(async () => undefined),
   // The undo/redo history service imports the @/engine/global-definition LEAF (a
   // WebGLRenderer at module scope), so it bypasses the `@/engine` barrel mock and has
   // to be mocked in its own right — same lesson as persistency-handler (P9),
@@ -89,7 +91,11 @@ vi.mock("@/resources/collaboration/remote-cursor-renderer", () => ({ remoteCurso
 vi.mock("@/resources/collaboration/remote-selection-renderer", () => ({
   remoteSelectionRenderer: mocks.remoteSelectionRenderer,
 }));
-vi.mock("@/views/layout/tabActions", () => ({ closeTab: mocks.closeTab, switchToTab: mocks.switchToTab }));
+vi.mock("@/views/layout/tabActions", () => ({
+  closeTab: mocks.closeTab,
+  switchToTab: mocks.switchToTab,
+  renameSceneInstance: mocks.renameSceneInstance,
+}));
 
 import SceneGroup from "./SceneGroup";
 import { useUiStore } from "@/resources/store/uiStore";
@@ -99,7 +105,16 @@ import { eventBus } from "@/resources/services/event-bus";
 beforeEach(() => {
   vi.clearAllMocks();
   cleanup();
-  useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, createNewScene: false, copyScene: false } });
+  useUiStore.setState({
+    dialogs: {
+      ...useUiStore.getState().dialogs,
+      createNewScene: false,
+      copyScene: false,
+      deleteScene: false,
+      shareScene: false,
+    },
+    dialogPayloads: {},
+  });
   Object.assign(mocks.globalObject, { selectedTab: -1, tabContext: [], sceneTypes: [], sceneTree: [], importSceneInstances: [] });
   mocks.metaUtility.getAllSceneTypesFromDB.mockResolvedValue([]);
   mocks.backendService.sceneAccessListGET.mockResolvedValue([]);
@@ -108,18 +123,6 @@ beforeEach(() => {
 });
 
 describe("SceneGroup", () => {
-  it("opens the create-new-scene dialog from the action button", async () => {
-    render(<SceneGroup />);
-    fireEvent.click(screen.getByText("Create new SceneInstance"));
-    expect(useUiStore.getState().dialogs.createNewScene).toBe(true);
-  });
-
-  it("opens the duplicate (copyScene) dialog from the action button", async () => {
-    render(<SceneGroup />);
-    fireEvent.click(screen.getByText("Duplicate SceneInstance"));
-    expect(useUiStore.getState().dialogs.copyScene).toBe(true);
-  });
-
   it("builds the SceneType tree from the backend on mount", async () => {
     mocks.metaUtility.getAllSceneTypesFromDB.mockResolvedValue([
       { uuid: "st-1", name: "BPMN", classes: [], children: [] },
@@ -134,6 +137,168 @@ describe("SceneGroup", () => {
     // Mount fetches the SceneType skeleton ONLY — instances are lazy (see below). The
     // eager version fired one fully-hydrating request per SceneType here.
     expect(mocks.backendService.sceneInstancesAllGET).not.toHaveBeenCalled();
+  });
+});
+
+// --- context menus -------------------------------------------------------------
+//
+// The scene actions used to be four buttons above the tree, each opening a dialog that
+// made the user re-pick the scene from a dropdown. They are right-click items on the
+// rows now, and what these tests actually protect is the PAYLOAD: without it the
+// dialogs fall back to their picker mode (and to hydrating every scene in the database
+// to fill it), which looks almost identical on screen and is easy to regress.
+
+/** Render the tree with one SceneType + one SceneInstance, and expand the type. */
+async function renderTree() {
+  mocks.metaUtility.getAllSceneTypesFromDB.mockResolvedValue([
+    { uuid: "st-1", name: "BPMN", classes: [], children: [] },
+  ]);
+  mocks.backendService.sceneInstancesAllGET.mockResolvedValue([
+    { uuid: "si-1", name: "My Scene", uuid_scene_type: "st-1" },
+  ] as never);
+  render(<SceneGroup />);
+  await waitFor(() => expect(screen.getByText(/BPMN/)).toBeTruthy());
+  fireEvent.click(screen.getByLabelText("expand"));
+  await screen.findByText(/My Scene/);
+}
+
+function rightClick(text: RegExp) {
+  fireEvent.contextMenu(screen.getByText(text), { clientX: 20, clientY: 30 });
+}
+
+/** Click a menu item by its exact label (the menu is portalled to the body). */
+function clickMenuItem(label: string) {
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+}
+
+describe("SceneGroup — context menus", () => {
+  it("no longer renders the old action buttons", async () => {
+    await renderTree();
+    // Every one of these is a menu item now; a stray button would give the actions a
+    // second, target-less entry point.
+    expect(screen.queryByRole("button", { name: "Duplicate SceneInstance" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete SceneInstance" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Share SceneInstance" })).toBeNull();
+  });
+
+  it("offers only Create on a SceneType, preselecting that type", async () => {
+    await renderTree();
+    rightClick(/BPMN/);
+
+    const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
+    expect(items).toEqual(["Create new SceneInstance"]);
+
+    clickMenuItem("Create new SceneInstance");
+    expect(useUiStore.getState().dialogs.createNewScene).toBe(true);
+    // The payload is what makes the dialog open with this type already chosen.
+    expect(
+      useUiStore.getState().getDialogPayload<{ sceneType: { uuid: string } }>("createNewScene")
+        ?.sceneType.uuid,
+    ).toBe("st-1");
+  });
+
+  it("offers the full action set on a SceneInstance", async () => {
+    await renderTree();
+    rightClick(/My Scene/);
+
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
+      "Open",
+      "Create new SceneInstance",
+      "Duplicate SceneInstance",
+      "Rename SceneInstance",
+      "Share SceneInstance",
+      "Delete SceneInstance",
+    ]);
+  });
+
+  it("selects the row it was opened on", async () => {
+    await renderTree();
+    rightClick(/My Scene/);
+    // The menu carries no title, so the moved selection (and its hint) is the only
+    // thing on screen saying which scene the menu is about.
+    expect(screen.getByText(/DC to open/)).toBeTruthy();
+  });
+
+  it.each([
+    ["Duplicate SceneInstance", "copyScene"],
+    ["Share SceneInstance", "shareScene"],
+    ["Delete SceneInstance", "deleteScene"],
+  ] as const)("passes the clicked scene to the %s dialog", async (label, dialog) => {
+    await renderTree();
+    rightClick(/My Scene/);
+    clickMenuItem(label);
+
+    expect(useUiStore.getState().dialogs[dialog]).toBe(true);
+    expect(
+      useUiStore.getState().getDialogPayload<{ sceneInstance: { uuid: string } }>(dialog)
+        ?.sceneInstance.uuid,
+    ).toBe("si-1");
+  });
+
+  it("offers a plain Create on the empty area below the tree, with nothing preselected", async () => {
+    await renderTree();
+    // The panel's own background — no row under the cursor. This is the entry point
+    // that replaced the always-available "Create new SceneInstance" button.
+    fireEvent.contextMenu(screen.getByText("Scenes"), { clientX: 5, clientY: 5 });
+
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
+      "Create new SceneInstance",
+    ]);
+
+    clickMenuItem("Create new SceneInstance");
+    expect(useUiStore.getState().dialogs.createNewScene).toBe(true);
+    // No payload: with no row to read a type off, the dialog's own SceneType picker
+    // does the choosing.
+    expect(useUiStore.getState().getDialogPayload("createNewScene")).toBeUndefined();
+  });
+
+  it("preselects the PARENT type when creating from a SceneInstance row", async () => {
+    await renderTree();
+    rightClick(/My Scene/);
+    clickMenuItem("Create new SceneInstance");
+
+    expect(
+      useUiStore.getState().getDialogPayload<{ sceneType: { uuid: string } }>("createNewScene")
+        ?.sceneType.uuid,
+    ).toBe("st-1");
+  });
+
+  it("opens the scene from the Open item, like a double-click", async () => {
+    await renderTree();
+    rightClick(/My Scene/);
+    clickMenuItem("Open");
+
+    await waitFor(() =>
+      expect(mocks.instanceUtility.createTabContextSceneInstance).toHaveBeenCalled(),
+    );
+  });
+
+  it("renames through the tree-level rename path, which works for a scene with no tab", async () => {
+    await renderTree();
+    rightClick(/My Scene/);
+    clickMenuItem("Rename SceneInstance");
+
+    const input = await screen.findByLabelText("Name");
+    fireEvent.change(input, { target: { value: "Renamed Scene" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    // renameSceneInstance (not renameTab): the tree can rename a scene that is not open,
+    // which has no tab index to address.
+    await waitFor(() => expect(mocks.renameSceneInstance).toHaveBeenCalled());
+    const [sceneInstance, name] = mocks.renameSceneInstance.mock.calls[0] as unknown as [
+      { uuid: string },
+      string,
+    ];
+    expect(sceneInstance.uuid).toBe("si-1");
+    expect(name).toBe("Renamed Scene");
+  });
+
+  it("closes the menu once an item is chosen", async () => {
+    await renderTree();
+    rightClick(/My Scene/);
+    clickMenuItem("Duplicate SceneInstance");
+
+    await waitFor(() => expect(screen.queryByRole("menuitem")).toBeNull());
   });
 });
 

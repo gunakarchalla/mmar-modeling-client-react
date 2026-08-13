@@ -1,3 +1,4 @@
+import type { SceneInstance } from "@gds";
 import * as THREE from "three";
 import {
   engine,
@@ -71,61 +72,91 @@ export async function switchToTab(index: number): Promise<void> {
 }
 
 /**
- * Rename the SceneInstance shown on the tab at `index`. Mutates the engine's
- * tabContext SceneInstance, the SceneGroup tree node (matched by uuid), and the
- * reactive tabsStore so tab bar + scene tree stay in lockstep. Persists via a
- * PATCH when autoSave is on (the same upsert the create/autosave path uses); on a
- * failed persist (e.g. 403 read-only on a shared scene) the local name is reverted
- * so the UI reflects the server. A blank/unchanged name is a no-op.
+ * Rename `sceneInstance`, whether or not it is currently open in a tab. Mutates the
+ * SceneGroup tree node (matched by uuid), and — when the scene IS open — the engine's
+ * tabContext SceneInstance and the reactive tabsStore, so tab bar + scene tree stay in
+ * lockstep. Persists via a PATCH when autoSave is on (the same upsert the
+ * create/autosave path uses); on a failed persist (e.g. 403 read-only on a shared
+ * scene) the local name is reverted everywhere so the UI reflects the server. A
+ * blank/unchanged name is a no-op.
+ *
+ * The tree-level entry point (SceneGroup's context menu) is why this is keyed on the
+ * SceneInstance rather than on a tab index: a scene can be renamed from the tree while
+ * it has no tab at all. `renameTab` is the tab-index-shaped wrapper the tab bar uses.
  */
-export async function renameTab(index: number, rawName: string): Promise<void> {
+export async function renameSceneInstance(
+  sceneInstance: SceneInstance,
+  rawName: string,
+): Promise<void> {
   const name = rawName.trim();
-  const tabContext = globalObject.tabContext;
-  const tab = tabContext[index];
-  if (!tab || !name || name === tab.sceneInstance.name) return;
+  if (!sceneInstance || !name || name === sceneInstance.name) return;
 
-  const sceneInstance = tab.sceneInstance;
-  const previousName = sceneInstance.name;
   const uuid = sceneInstance.uuid;
+  const previousName = sceneInstance.name;
 
-  // Update the engine's SceneInstance + the matching SceneGroup tree node (they may
-  // be different object references), then the reactive store.
-  sceneInstance.name = name;
+  // The tree node and the tab's SceneInstance may be different object references (the
+  // tree is merged by uuid, see scene-tree-service), so every holder is updated by uuid.
+  // The OPEN scene's instance is the authoritative, engine-attached one — it is what
+  // gets PATCHed when the scene has a tab.
+  const tabIndex = globalObject.tabContext.findIndex(
+    (tab) => tab.sceneInstance?.uuid === uuid,
+  );
+  const openSceneInstance =
+    tabIndex === -1 ? undefined : globalObject.tabContext[tabIndex].sceneInstance;
   const treeArr = (globalObject.sceneTree ?? []) as { children?: { uuid: string; name: string }[] }[];
-  for (const sceneType of treeArr) {
-    const node = sceneType.children?.find((child) => child.uuid === uuid);
-    if (node) node.name = name;
-  }
-  useTabsStore.getState().renameTab(index, name);
-  eventBus.publish("updateSceneGroup");
+
+  const applyName = (value: string) => {
+    sceneInstance.name = value;
+    if (openSceneInstance) openSceneInstance.name = value;
+    for (const sceneType of treeArr) {
+      const node = sceneType.children?.find((child) => child.uuid === uuid);
+      if (node) node.name = value;
+    }
+    if (tabIndex !== -1) useTabsStore.getState().renameTab(tabIndex, value);
+    eventBus.publish("updateSceneGroup");
+  };
+
+  applyName(name);
+
+  // Undo is scoped to the scene you are looking at, so a rename is only a history step
+  // when the renamed scene is the active tab; renaming some other scene from the tree
+  // must not push a step onto the open scene's stack.
+  const isActiveScene = tabIndex !== -1 && tabIndex === globalObject.selectedTab;
+  const recordStep = () => {
+    if (isActiveScene) historyService.record(`rename to ${name}`, { coalesceKey: `rename:${uuid}` });
+  };
 
   if (!globalObject.autoSave) {
     logger.log(`SceneInstance renamed to ${name} (autoSave off, not persisted)`, "info");
-    historyService.record(`rename to ${name}`, { coalesceKey: `rename:${uuid}` });
+    recordStep();
     return;
   }
 
   try {
-    await backendService.sceneInstancesPATCH(uuid, sceneInstance);
+    await backendService.sceneInstancesPATCH(uuid, openSceneInstance ?? sceneInstance);
     logger.log(`SceneInstance renamed to ${name}`, "info");
     // Recorded only once the rename has stuck. The catch below reverts a rejected one
     // everywhere, and a step for a change that no longer exists would be a trap.
-    historyService.record(`rename to ${name}`, { coalesceKey: `rename:${uuid}` });
+    recordStep();
   } catch (error) {
     // Revert the rename everywhere so the UI matches the server (mirrors the 403
     // revert-to-snapshot behaviour in persistency-handler.persistSceneInstanceToDB).
-    sceneInstance.name = previousName;
-    for (const sceneType of treeArr) {
-      const node = sceneType.children?.find((child) => child.uuid === uuid);
-      if (node) node.name = previousName;
-    }
-    useTabsStore.getState().renameTab(index, previousName);
-    eventBus.publish("updateSceneGroup");
+    applyName(previousName);
     if (Number((error as { status?: number }).status) === 403 && typeof window !== "undefined") {
       window.alert("You don't have enough authorization to rename this scene instance.");
     }
     logger.log(`SceneInstance rename failed: ${describeError(error)}`, "error");
   }
+}
+
+/**
+ * Rename the SceneInstance shown on the tab at `index` — the tab bar's entry point,
+ * kept as-is for its callers; the work itself lives in `renameSceneInstance`.
+ */
+export async function renameTab(index: number, rawName: string): Promise<void> {
+  const tab = globalObject.tabContext[index];
+  if (!tab) return;
+  return renameSceneInstance(tab.sceneInstance, rawName);
 }
 
 /** Close the tab at `index` (closeTab): tear down the engine tab, reconcile selection. */

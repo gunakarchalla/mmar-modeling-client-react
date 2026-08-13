@@ -72,7 +72,7 @@ vi.mock("@/resources/collaboration/remote-selection-renderer", () => ({
   remoteSelectionRenderer: mocks.remoteSelectionRenderer,
 }));
 
-import { switchToTab, closeTab, renameTab } from "./tabActions";
+import { switchToTab, closeTab, renameTab, renameSceneInstance } from "./tabActions";
 import { useTabsStore } from "@/resources/store/tabsStore";
 
 function seedTabs(names: string[]) {
@@ -252,5 +252,74 @@ describe("renameTab", () => {
     seedRenamable("Old");
     await renameTab(9, "New");
     expect(mocks.backendService.sceneInstancesPATCH).not.toHaveBeenCalled();
+  });
+});
+
+describe("renameSceneInstance — a scene with no open tab", () => {
+  // The scene-tree context menu can rename a scene that was never opened, so there is
+  // no tab index to address and no tabsStore entry to update; only the tree node and
+  // the server may be touched. renameTab is the thin wrapper over this for the tab bar.
+  function seedTreeOnly(name: string) {
+    useTabsStore.setState({ tabs: [], selectedTab: -1 });
+    mocks.globalObject.tabContext = [];
+    mocks.globalObject.selectedTab = -1;
+    const treeNode = { uuid: "uuid-closed", name };
+    mocks.globalObject.sceneTree = [{ uuid: "type-1", children: [treeNode] }];
+    return treeNode;
+  }
+
+  it("renames the tree node and PATCHes it", async () => {
+    const treeNode = seedTreeOnly("Old");
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue({});
+
+    await renameSceneInstance(treeNode as never, "New");
+
+    expect(treeNode.name).toBe("New");
+    expect(mocks.backendService.sceneInstancesPATCH).toHaveBeenCalledWith(
+      "uuid-closed",
+      expect.objectContaining({ name: "New" }),
+    );
+    expect(mocks.eventBus.publish).toHaveBeenCalledWith("updateSceneGroup");
+  });
+
+  it("reverts the tree node when the PATCH fails", async () => {
+    const treeNode = seedTreeOnly("Old");
+    mocks.backendService.sceneInstancesPATCH.mockRejectedValue(new Error("network"));
+
+    await renameSceneInstance(treeNode as never, "New");
+
+    expect(treeNode.name).toBe("Old");
+  });
+
+  it("records no undo step for a scene that is not the active tab", async () => {
+    const treeNode = seedTreeOnly("Old");
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue({});
+
+    await renameSceneInstance(treeNode as never, "New");
+
+    // history is scoped to the scene you are looking at; a step here would land on
+    // whatever OTHER scene happens to be open.
+    expect(mocks.historyService.record).not.toHaveBeenCalled();
+  });
+
+  it("still updates the tab bar when the renamed scene does have a tab", async () => {
+    // Same entry point, scene open: the tab's SceneInstance and the store must follow.
+    useTabsStore.setState({ tabs: [], selectedTab: -1 });
+    useTabsStore.getState().openTab({ name: "Old", uuid: "uuid-1", isShared: false });
+    const treeNode = { uuid: "uuid-1", name: "Old" };
+    mocks.globalObject.tabContext = [
+      { sceneInstance: { uuid: "uuid-1", name: "Old" }, threeScene: {}, contextDragObjects: [] },
+    ];
+    mocks.globalObject.selectedTab = 0;
+    mocks.globalObject.sceneTree = [{ uuid: "type-1", children: [treeNode] }];
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue({});
+
+    await renameSceneInstance(treeNode as never, "New");
+
+    expect(useTabsStore.getState().tabs[0].name).toBe("New");
+    expect(
+      (mocks.globalObject.tabContext[0] as { sceneInstance: { name: string } }).sceneInstance.name,
+    ).toBe("New");
+    expect(treeNode.name).toBe("New");
   });
 });

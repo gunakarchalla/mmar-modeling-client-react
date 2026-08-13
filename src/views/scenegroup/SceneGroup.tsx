@@ -1,13 +1,22 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent, MouseEvent } from "react";
 import {
   Box,
   Button,
   CircularProgress,
   Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
   IconButton,
   List,
   ListItemButton,
   ListItemText,
+  Menu,
+  MenuItem,
+  TextField,
   Typography,
 } from "@mui/material";
 import ExpandLess from "@mui/icons-material/ExpandLess";
@@ -28,17 +37,32 @@ import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
+import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService, type AccessLevel } from "@/resources/collaboration/shared-doc-service";
 import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-renderer";
 import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
-import { closeTab, switchToTab } from "@/views/layout/tabActions";
+import { closeTab, switchToTab, renameSceneInstance } from "@/views/layout/tabActions";
 
 /**
  * Port of `views/scenegroup/scenegroup.{ts,html}` (plan §10: ★ modeling-unique).
- * Builds the SceneType -> SceneInstance tree, opens a SceneInstance on double-click
- * (with snapshot rollback), and hosts the Create/Duplicate/Delete/Share buttons.
+ * Builds the SceneType -> SceneInstance tree and opens a SceneInstance on double-click
+ * (with snapshot rollback).
+ *
+ * CONTEXT MENUS: the four scene actions used to be a row of buttons above the tree,
+ * each opening a dialog that then made the user pick the scene back out of a dropdown —
+ * even though they had just clicked the scene in the tree. They are now right-click
+ * menus on the tree rows themselves, and the node under the cursor is passed to the
+ * dialog as its payload:
+ *   SceneType     -> Create (that type preselected)
+ *   SceneInstance -> Open / Create (its parent type preselected) / Duplicate / Rename /
+ *                    Share / Delete, each prefilled with that scene.
+ *   empty space   -> Create with nothing preselected (the old toolbar button's job)
+ * Because the scene is now always known, the Duplicate/Delete/Share dialogs no longer
+ * have a scene picker at all — and so no longer call loadAllSceneInstances(), which
+ * hydrated every scene in the database to fill one (see each dialog's note). Delete is
+ * a confirmation. Double-click to open (and its red hint) is unchanged.
  *
  * WIDGET CHOICE (plan §4 left this to the P7 agent, recorded in state.json): nested
  * MUI `List` + `Collapse` (a 2-level tree), NOT @mui/x-tree-view — no new dependency
@@ -56,9 +80,10 @@ import { closeTab, switchToTab } from "@/views/layout/tabActions";
  * time its arrow is expanded, by scene-tree-service. The old eager version fetched
  * every instance of every type at mount, and the server hydrates each scene in full
  * (classes, relations, ports, attributes, roles), so startup cost scaled with the whole
- * database instead of with the scene being opened. Consumers that need all scenes at
- * once (the Duplicate/Delete/Share pickers, the reference-attribute dialog) call
- * `loadAllSceneInstances()` behind their own spinner.
+ * database instead of with the scene being opened. The one consumer that still needs
+ * all scenes at once (the reference-attribute dialog — a reference may point into a
+ * scene the user never expanded) calls `loadAllSceneInstances()` behind its own
+ * spinner.
  *
  * The canonical arrays live on globalObject.sceneTypes / globalObject.sceneTree (the
  * old design — instance-utility.getAllSceneInstancesFromLocal reads sceneTree); the
@@ -127,6 +152,23 @@ export default function SceneGroup() {
   /** SceneTypes whose instances are being fetched right now (drives the row spinner). */
   const [loadingTypes, setLoadingTypes] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<{ uuid: string; isType: boolean } | null>(null);
+  /**
+   * Open context menu, anchored at the cursor. `sceneType` is the type half of the row
+   * (for an instance row: its parent), so "Create" can preselect it from either kind of
+   * row; `sceneInstance` is set only on an instance row and is what marks the menu as
+   * the six-item variant. BOTH are absent for the empty area below the tree, which
+   * offers Create with nothing preselected.
+   */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    sceneType?: SceneTypeNode;
+    sceneInstance?: SceneInstance;
+  } | null>(null);
+  /** Rename dialog state: the scene being renamed + the in-progress name value. */
+  const [renaming, setRenaming] = useState<{ sceneInstance: SceneInstance; value: string } | null>(
+    null,
+  );
   const mountedRef = useRef(true);
   /** `expanded` readable from initTree without making it a dependency. */
   const expandedRef = useRef<Set<string>>(new Set());
@@ -373,29 +415,81 @@ export default function SceneGroup() {
     }
   }
 
+  /**
+   * Right-clicking a row selects it first, then opens the menu at the cursor: the menu
+   * has no title of its own, so without the selection moving there would be nothing on
+   * screen tying it to the row it is about.
+   */
+  function handleContextMenu(
+    e: MouseEvent<HTMLElement>,
+    sceneType: SceneTypeNode,
+    sceneInstance?: SceneInstance,
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    const node = sceneInstance ?? sceneType;
+    setSelected({ uuid: node.uuid, isType: !sceneInstance });
+    setMenu({ x: e.clientX, y: e.clientY, sceneType, sceneInstance });
+  }
+
+  /**
+   * Right-click on the panel itself rather than on a row (the empty space below the
+   * tree, which is most of the panel when few types are expanded). Create is the only
+   * action that makes sense with no node under the cursor, and it opens with nothing
+   * preselected — the dialog's own SceneType picker then does the choosing. This is
+   * what replaces the old always-available "Create new SceneInstance" button.
+   *
+   * Row handlers stopPropagation, so a right-click on a row never reaches this.
+   */
+  function handleBackgroundContextMenu(e: MouseEvent<HTMLElement>) {
+    e.preventDefault();
+    setSelected(null);
+    setMenu({ x: e.clientX, y: e.clientY });
+  }
+
+  /** Close the menu, then run the item's action against the node it was opened on. */
+  function runMenuAction(
+    action: (target: { sceneType?: SceneTypeNode; sceneInstance?: SceneInstance }) => void,
+  ) {
+    if (!menu) return;
+    const target = { sceneType: menu.sceneType, sceneInstance: menu.sceneInstance };
+    setMenu(null);
+    action(target);
+  }
+
+  function onRenameKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmRename();
+    }
+  }
+
+  function confirmRename() {
+    if (!renaming) return;
+    const { sceneInstance, value } = renaming;
+    setRenaming(null);
+    void renameSceneInstance(sceneInstance, value)
+      .then(syncTreeFromGlobal)
+      .catch((err) => logger.log(describeError(err), "error"));
+  }
+
   const helperFor = (uuid: string, isType: boolean) =>
     selected?.uuid === uuid ? (isType ? " DC for new" : " DC to open") : "";
 
   return (
-    <Box>
-      {/* Scene-instance action buttons (create P7; duplicate/delete P9; share P10). */}
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mb: 1 }}>
-        <Button size="small" variant="outlined" sx={{ flex: 1, fontSize: 10, minWidth: 90 }} onClick={() => openDialog("createNewScene")}>
-          Create new SceneInstance
-        </Button>
-        <Button size="small" variant="outlined" sx={{ flex: 1, fontSize: 10, minWidth: 90 }} onClick={() => openDialog("copyScene")}>
-          Duplicate SceneInstance
-        </Button>
-        <Button size="small" variant="outlined" sx={{ flex: 1, fontSize: 10, minWidth: 90 }} onClick={() => openDialog("deleteScene")}>
-          Delete SceneInstance
-        </Button>
-        <Button size="small" variant="outlined" sx={{ flex: 1, fontSize: 10, minWidth: 90 }} onClick={() => openDialog("shareScene")}>
-          Share SceneInstance
-        </Button>
-      </Box>
-
+    // The whole panel is right-clickable, not just the rows: `minHeight` guarantees
+    // there is some empty area below the tree to aim at even when nothing is expanded,
+    // which is where the plain "Create new SceneInstance" (the old always-available
+    // button) lives now.
+    <Box onContextMenu={handleBackgroundContextMenu} sx={{ minHeight: 140 }}>
+      {/* The Create/Duplicate/Delete/Share buttons that used to sit here are gone —
+          every one of them is a right-click item on the row it acts on (see the
+          context menu below), so the actions now carry their target with them. */}
       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
         Scenes
+      </Typography>
+      <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
+        Right-click a scene, a scene type, or the empty space for actions.
       </Typography>
 
       <List dense disablePadding>
@@ -409,6 +503,7 @@ export default function SceneGroup() {
                 selected={selected?.uuid === sceneType.uuid}
                 onClick={() => setSelected({ uuid: sceneType.uuid, isType: true })}
                 onDoubleClick={() => void handleDoubleClick(sceneType)}
+                onContextMenu={(e) => handleContextMenu(e, sceneType)}
                 data-uuid={sceneType.uuid}
               >
                 {/* Always rendered: until the type is expanded once we do not know
@@ -474,6 +569,7 @@ export default function SceneGroup() {
                       selected={selected?.uuid === sceneInstance.uuid}
                       onClick={() => setSelected({ uuid: sceneInstance.uuid, isType: false })}
                       onDoubleClick={() => void handleDoubleClick(sceneInstance)}
+                      onContextMenu={(e) => handleContextMenu(e, sceneType, sceneInstance)}
                       data-uuid={sceneInstance.uuid}
                     >
                       <ListItemText
@@ -494,6 +590,101 @@ export default function SceneGroup() {
           );
         })}
       </List>
+
+      {/* One menu for both row kinds: a SceneType only offers Create (there is nothing
+          else you can do to a type from here), a SceneInstance gets the full set. Every
+          item hands the clicked node to its dialog as a payload, so nothing has to be
+          re-selected in the dialog. */}
+      <Menu
+        open={menu !== null}
+        onClose={() => setMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={menu ? { top: menu.y, left: menu.x } : undefined}
+      >
+        {menu?.sceneInstance && (
+          <MenuItem
+            onClick={() =>
+              runMenuAction(({ sceneInstance }) => void handleDoubleClick(sceneInstance!))
+            }
+          >
+            Open
+          </MenuItem>
+        )}
+        <MenuItem
+          onClick={() =>
+            // No payload from the empty area: the dialog opens with its SceneType picker
+            // empty, which is the only thing it can do without a row to read a type off.
+            runMenuAction(({ sceneType }) =>
+              openDialog("createNewScene", sceneType ? { sceneType } : undefined),
+            )
+          }
+        >
+          Create new SceneInstance
+        </MenuItem>
+        {menu?.sceneInstance && [
+          <MenuItem
+            key="duplicate"
+            onClick={() =>
+              runMenuAction(({ sceneInstance }) => openDialog("copyScene", { sceneInstance }))
+            }
+          >
+            Duplicate SceneInstance
+          </MenuItem>,
+          <MenuItem
+            key="rename"
+            onClick={() =>
+              runMenuAction(({ sceneInstance }) =>
+                setRenaming({ sceneInstance: sceneInstance!, value: sceneInstance!.name }),
+              )
+            }
+          >
+            Rename SceneInstance
+          </MenuItem>,
+          <MenuItem
+            key="share"
+            onClick={() =>
+              runMenuAction(({ sceneInstance }) => openDialog("shareScene", { sceneInstance }))
+            }
+          >
+            Share SceneInstance
+          </MenuItem>,
+          <Divider key="divider" />,
+          // Separated from the rest: it is the one irreversible item, and the dialog it
+          // opens is a confirmation rather than a form.
+          <MenuItem
+            key="delete"
+            sx={{ color: "error.main" }}
+            onClick={() =>
+              runMenuAction(({ sceneInstance }) => openDialog("deleteScene", { sceneInstance }))
+            }
+          >
+            Delete SceneInstance
+          </MenuItem>,
+        ]}
+      </Menu>
+
+      {/* Tree-level rename. The tab bar has the same dialog for the tab it is on; this
+          one works whether or not the scene is open (see tabActions.renameSceneInstance). */}
+      <Dialog open={renaming !== null} onClose={() => setRenaming(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Rename SceneInstance</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="Name"
+            value={renaming?.value ?? ""}
+            onChange={(e) => setRenaming((r) => (r ? { ...r, value: e.target.value } : r))}
+            onKeyDown={onRenameKeyDown}
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={confirmRename} disabled={!renaming?.value.trim()}>
+            Rename
+          </Button>
+          <Button onClick={() => setRenaming(null)}>Cancel</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

@@ -21,10 +21,12 @@ type SceneTypeNode = SceneType & { children?: SceneInstance[] };
  * the whole database rather than with the one scene the user actually opens.
  *
  * Now a SceneType's children are fetched the first time that type is expanded in the
- * tree. The consumers that genuinely need *all* scenes (the Copy/Delete/Share scene
- * pickers and the cross-scene reference attribute dialog) call `loadAllSceneInstances`
- * themselves behind their own spinner, so the total work is unchanged — it just moves
- * off the startup path and only happens when something really needs it.
+ * tree. The consumer that genuinely needs *all* scenes (the cross-scene reference
+ * attribute dialog) calls `loadAllSceneInstances` itself behind its own spinner, so the
+ * total work is unchanged — it just moves off the startup path and only happens when
+ * something really needs it. (The Copy/Delete/Share dialogs used to call it too, for
+ * their scene pickers; those pickers are gone — the scene now arrives as the context
+ * menu's payload.)
  *
  * The cache is module-level (not React state) because the tree it fills is the
  * engine-global `globalObject.sceneTree`, and non-component code (the dialogs, the
@@ -113,10 +115,10 @@ export async function loadSceneInstancesForType(sceneTypeUuid: UUID): Promise<vo
 }
 
 /**
- * Load every SceneType's instances — what `initTree()` used to do eagerly. Callers are
- * the features that need the complete set: the Duplicate/Delete/Share scene pickers and
- * the reference-attribute dialog (a reference may point into a scene the user never
- * expanded). Each caller shows its own loading state while this runs.
+ * Load every SceneType's instances — what `initTree()` used to do eagerly. The caller is
+ * the feature that needs the complete set: the reference-attribute dialog (a reference
+ * may point into a scene the user never expanded). It shows its own loading state while
+ * this runs.
  *
  * Sequential, like the loop it replaces: every request runs its own DB transaction on
  * the server, and firing one per SceneType in parallel would just move the queue.

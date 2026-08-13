@@ -5,17 +5,10 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  FormControl,
-  InputLabel,
-  LinearProgress,
-  MenuItem,
-  Select,
+  Typography,
 } from "@mui/material";
-import type { SelectChangeEvent } from "@mui/material";
-import type { SceneInstance, SceneType } from "@gds";
-import { globalObject } from "@/engine";
+import type { SceneInstance } from "@gds";
 import { backendService } from "@/resources/services/backend-service";
-import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { eventBus } from "@/resources/services/event-bus";
@@ -25,56 +18,69 @@ import { closeTab } from "@/views/layout/tabActions";
 
 // Port of `dialogs/dialog-delete-scene/{ts,html}` — deletes a SceneInstance from the
 // database, then republishes 'initSceneGroup' so the tree re-fetches (SceneGroup
-// subscribes that channel, P7). Opened from SceneGroup's "Delete" button.
+// subscribes that channel, P7). Opened from the SceneGroup tree's "Delete" context-menu
+// item via uiStore 'deleteScene', with the right-clicked scene as its
+// `{ sceneInstance }` payload.
 //
-// Like the copy dialog, the scene list is flattened from globalObject.sceneTree and
-// keyed by uuid. The old class injected eight collaborators but used exactly one
-// (fetchHelper) — the rest are dropped here, the same pruning P5/P7 did.
+// The payload is REQUIRED, and the dialog is a plain confirmation rather than the old
+// picker: the user already chose the scene by right-clicking it, so all that is left is
+// the "are you sure?" that an irreversible action deserves. Dropping the picker also
+// drops the loadAllSceneInstances() call that fetched every scene in the database fully
+// hydrated just to fill a dropdown (see CopySceneDialog's note).
+//
+// The old class injected eight collaborators but used exactly one (fetchHelper) — the
+// rest are dropped here, the same pruning P5/P7 did.
 //
 // If the deleted scene happens to be open in a tab, that tab is closed as part of the
 // deletion (via tabActions.closeTab), so a stale tab can't survive to re-create the
 // scene on its next auto-save PATCH (persistency-handler falls back to POST on a 404).
-type SceneTypeNode = SceneType & { children?: SceneInstance[] };
+interface Payload {
+  sceneInstance?: SceneInstance;
+}
 
 export default function DeleteSceneDialog() {
   const open = useUiStore((s) => s.dialogs.deleteScene);
   const closeDialog = useUiStore((s) => s.closeDialog);
 
-  const [sceneInstances, setSceneInstances] = useState<SceneInstance[]>([]);
-  const [selectedUuid, setSelectedUuid] = useState<string>("");
-  const [loadingScenes, setLoadingScenes] = useState(false);
+  const [sceneInstance, setSceneInstance] = useState<SceneInstance | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
-  // The picker lists every scene, but the tree now only holds the SceneTypes the user
-  // has expanded, so pull the rest in first (see scene-tree-service).
+  // Read the payload each time the dialog opens (a stale one would confirm the
+  // deletion of the previously right-clicked scene).
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
-    setSelectedUuid("");
-    setLoadingScenes(true);
-    void loadAllSceneInstances()
-      .catch((err) => logger.log(`Loading scene instances failed: ${describeError(err)}`, "error"))
-      .finally(() => {
-        if (cancelled) return;
-        const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
-        setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
-        setLoadingScenes(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    setErrorMsg("");
+    setDeleting(false);
+    const payload = useUiStore.getState().getDialogPayload<Payload>("deleteScene");
+    const target = payload?.sceneInstance ?? null;
+    setSceneInstance(target);
+    if (!target) {
+      logger.log("Delete dialog opened without a SceneInstance — nothing to delete", "error");
+    }
   }, [open]);
 
-  const selectedSceneInstance = sceneInstances.find((si) => si.uuid === selectedUuid) ?? null;
-
-  function onSelectionChange(event: SelectChangeEvent) {
-    setSelectedUuid(event.target.value);
-  }
-
   async function deleteScene() {
-    if (!selectedSceneInstance) return;
-    const uuid = selectedSceneInstance.uuid;
+    if (!sceneInstance) return;
+    const uuid = sceneInstance.uuid;
 
-    await backendService.sceneInstancesAllDELETE2(uuid);
+    // The delete can be rejected (403 without delete access on a shared scene). The
+    // dialog stays open and says so, instead of closing as if it had worked — the
+    // scene tree would still show the scene and leave the user guessing.
+    setDeleting(true);
+    setErrorMsg("");
+    try {
+      await backendService.sceneInstancesAllDELETE2(uuid);
+    } catch (error) {
+      setDeleting(false);
+      setErrorMsg(
+        Number((error as { status?: number }).status) === 403
+          ? "You don't have enough authorization to delete this scene instance."
+          : "An error occurred while deleting this scene instance.",
+      );
+      logger.log(`SceneInstance ${uuid} delete failed: ${describeError(error)}`, "error");
+      return;
+    }
     logger.log("SceneInstance" + uuid + " deleted", "delete");
 
     // If the deleted scene is open in a tab, close it so the tab bar and engine don't
@@ -85,7 +91,7 @@ export default function DeleteSceneDialog() {
     }
 
     eventBus.publish("initSceneGroup");
-    setSelectedUuid("");
+    setDeleting(false);
     closeDialog("deleteScene");
   }
 
@@ -94,35 +100,27 @@ export default function DeleteSceneDialog() {
     closeDialog("deleteScene");
   }
 
+  // Without a scene there is nothing to confirm — the opener is at fault, and the
+  // effect above has logged it.
   return (
-    <Dialog open={open} onClose={cancel} maxWidth="sm" fullWidth>
+    <Dialog open={open && sceneInstance !== null} onClose={cancel} maxWidth="sm" fullWidth>
       <DialogTitle>Delete SceneInstance</DialogTitle>
       <DialogContent>
-        {loadingScenes && <LinearProgress aria-label="loading scene instances" sx={{ mt: 1 }} />}
-        <FormControl fullWidth required sx={{ mt: 1 }} disabled={loadingScenes}>
-          <InputLabel id="delete-scene-instance-label">
-            {loadingScenes ? "Loading scenes…" : "Select SceneInstance"}
-          </InputLabel>
-          <Select
-            labelId="delete-scene-instance-label"
-            label={loadingScenes ? "Loading scenes…" : "Select SceneInstance"}
-            value={selectedUuid}
-            onChange={onSelectionChange}
-          >
-            {sceneInstances.map((sceneInstance) => (
-              <MenuItem key={sceneInstance.uuid} value={sceneInstance.uuid}>
-                {sceneInstance.name} | {sceneInstance.uuid}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <Typography sx={{ mt: 1, fontSize: 14 }}>
+          Delete <strong>{sceneInstance?.name}</strong>? This permanently removes the scene and
+          everything in it, and cannot be undone.
+        </Typography>
+        {errorMsg && (
+          <Typography sx={{ color: "#c00", fontSize: 12, mt: 1 }}>{errorMsg}</Typography>
+        )}
       </DialogContent>
       <DialogActions>
         <Button
+          color="error"
           onClick={() =>
             void deleteScene().catch((err) => logger.log(describeError(err), "error"))
           }
-          disabled={!selectedSceneInstance}
+          disabled={deleting}
         >
           Delete SceneInstance
         </Button>

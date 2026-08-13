@@ -10,23 +10,19 @@ import {
   FormControl,
   IconButton,
   InputLabel,
-  LinearProgress,
   MenuItem,
   Select,
   TextField,
   Typography,
 } from "@mui/material";
-import type { SelectChangeEvent } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { jwtDecode } from "jwt-decode";
-import type { SceneInstance, SceneType } from "@gds";
+import type { SceneInstance } from "@gds";
 import { globalObject } from "@/engine";
 import { backendService, type AccessEntry } from "@/resources/services/backend-service";
 import { ApiError } from "@/resources/services/api";
 import { eventBus } from "@/resources/services/event-bus";
-import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { logger } from "@/resources/services/logger";
-import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
 import type { AccessLevel } from "@/resources/collaboration/shared-doc-service";
 
@@ -34,17 +30,22 @@ import type { AccessLevel } from "@/resources/collaboration/shared-doc-service";
  * P10 port of `dialogs/share-scene-instance/{ts,html,css}` (147 lines + css). Manages
  * the access list of a SceneInstance through the `sceneAccess*` endpoints; a scene
  * with >= 2 entries is what makes SceneGroup attach a shared yjs session on open.
- * Opened from SceneGroup's "Share SceneInstance" button via uiStore.
+ * Opened from the SceneGroup tree's "Share" context-menu item via uiStore, with a
+ * `{ sceneInstance }` payload.
  *
- * The old view took the tree through a `@bindable tree` prop; here the scene list is
- * flattened out of `globalObject.sceneTree` when the dialog opens, matching what P9's
- * Copy/Delete dialogs do (and dropping the bindable, which had exactly one caller).
+ * The payload is REQUIRED — the dialog no longer picks a scene, so it opens straight
+ * onto the thing the user came for: that scene's access list. The old view took the
+ * scene list through a `@bindable tree` prop (later a flattened <Select>), which had to
+ * call loadAllSceneInstances() first — every scene in the database, fully hydrated, to
+ * render a list of names (see CopySceneDialog's note).
  *
  * The .css is gone: the three class rules (`user-row`, `access-pill--<level>`,
  * `share-error`) become `sx` props (plan §10: "port stray rules into sx/styled").
  */
 
-type SceneTypeNode = SceneType & { children?: SceneInstance[] };
+interface Payload {
+  sceneInstance?: SceneInstance;
+}
 
 interface JwtPayload {
   uuid: string;
@@ -92,8 +93,7 @@ export default function ShareSceneDialog() {
   const open = useUiStore((s) => s.dialogs.shareScene);
   const closeDialog = useUiStore((s) => s.closeDialog);
 
-  const [sceneInstances, setSceneInstances] = useState<SceneInstance[]>([]);
-  const [selectedUuid, setSelectedUuid] = useState<string>("");
+  const [sceneInstance, setSceneInstance] = useState<SceneInstance | null>(null);
   const [existingAccess, setExistingAccess] = useState<AccessEntry[]>([]);
   const [levelChoice, setLevelChoice] = useState<AccessLevel>("read");
   const [usernameInput, setUsernameInput] = useState("");
@@ -101,43 +101,6 @@ export default function ShareSceneDialog() {
   const [errorMsg, setErrorMsg] = useState("");
   const [currentUserUuid, setCurrentUserUuid] = useState("");
   const [loading, setLoading] = useState(false);
-
-  const selectedSceneInstance = sceneInstances.find((si) => si.uuid === selectedUuid) ?? null;
-
-  // Port of attached(): decode our own uuid (so we cannot revoke our own access) and
-  // build the scene list. Re-runs per open, which is what the old dialog's attached()
-  // + treeChanged() achieved between openings.
-  useEffect(() => {
-    if (!open) return;
-    try {
-      const token = globalObject.accessToken;
-      if (token) setCurrentUserUuid(jwtDecode<JwtPayload>(token).uuid);
-    } catch {
-      // ignore decode errors
-    }
-    setSelectedUuid("");
-    setExistingAccess([]);
-    setCanManage(false);
-    setErrorMsg("");
-    setUsernameInput("");
-
-    // The tree only holds the SceneTypes the user expanded (scene-tree-service), but
-    // you must be able to share any scene you own — so fetch the rest before flattening.
-    // Reuses `loading`, which already gates this dialog's controls.
-    let cancelled = false;
-    setLoading(true);
-    void loadAllSceneInstances()
-      .catch((err) => logger.log(`Loading scene instances failed: ${describeError(err)}`, "error"))
-      .finally(() => {
-        if (cancelled) return;
-        const tree = (globalObject.sceneTree ?? []) as SceneTypeNode[];
-        setSceneInstances(tree.flatMap((sceneType) => sceneType.children ?? []));
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   const loadAccessList = useCallback(async (sceneInstanceUuid: string) => {
     setLoading(true);
@@ -156,29 +119,43 @@ export default function ShareSceneDialog() {
     setLoading(false);
   }, []);
 
-  // Port of onSceneInstanceChange(): reset the form, then load that scene's list.
-  function onSceneInstanceChange(event: SelectChangeEvent) {
-    const uuid = event.target.value;
-    setSelectedUuid(uuid);
-    setErrorMsg("");
-    setUsernameInput("");
+  // Port of attached(): decode our own uuid (so we cannot revoke our own access), then
+  // load the payload scene's access list. Re-runs per open, which is what the old
+  // dialog's attached() + treeChanged() achieved between openings.
+  useEffect(() => {
+    if (!open) return;
+    try {
+      const token = globalObject.accessToken;
+      if (token) setCurrentUserUuid(jwtDecode<JwtPayload>(token).uuid);
+    } catch {
+      // ignore decode errors
+    }
     setExistingAccess([]);
     setCanManage(false);
-    if (!uuid) return;
-    void loadAccessList(uuid);
-  }
+    setErrorMsg("");
+    setUsernameInput("");
+
+    const payload = useUiStore.getState().getDialogPayload<Payload>("shareScene");
+    const target = payload?.sceneInstance ?? null;
+    setSceneInstance(target);
+    if (!target) {
+      logger.log("Share dialog opened without a SceneInstance — nothing to share", "error");
+      return;
+    }
+    void loadAccessList(target.uuid);
+  }, [open, loadAccessList]);
 
   // Port of add(). The status branches are why backend-service throws ApiError for
   // these endpoints rather than swallowing (see api.ts → ApiError).
   async function add() {
-    if (!usernameInput.trim() || !selectedSceneInstance) {
+    if (!usernameInput.trim() || !sceneInstance) {
       setErrorMsg("Username is required");
       return;
     }
     setErrorMsg("");
     try {
       const user = await backendService.userByUsernameGET(usernameInput.trim());
-      const entry = await backendService.sceneAccessPOST(selectedSceneInstance.uuid, {
+      const entry = await backendService.sceneAccessPOST(sceneInstance.uuid, {
         uuid_user: user.uuid,
         access: levelChoice,
       });
@@ -193,13 +170,13 @@ export default function ShareSceneDialog() {
       });
       setUsernameInput("");
       logger.log(
-        `Granted ${levelChoice} access to ${user.username} on scene ${selectedSceneInstance.uuid}`,
+        `Granted ${levelChoice} access to ${user.username} on scene ${sceneInstance.uuid}`,
         "info",
       );
       // Tell an already-open tab for this scene to (re)check shared mode, so the collab
       // session attaches and the presence icon appears without a window reload. Harmless
       // when the scene isn't open, or when it's already shared (the handler no-ops).
-      eventBus.publish("sceneAccessGranted", { sceneInstanceUuid: selectedSceneInstance.uuid });
+      eventBus.publish("sceneAccessGranted", { sceneInstanceUuid: sceneInstance.uuid });
     } catch (err) {
       const status = err instanceof ApiError ? err.status : undefined;
       if (status === 404) setErrorMsg("User not found");
@@ -210,11 +187,11 @@ export default function ShareSceneDialog() {
 
   // Port of removeAccess(entry).
   async function removeAccess(entry: AccessEntry) {
-    if (!selectedSceneInstance) return;
+    if (!sceneInstance) return;
     try {
-      await backendService.sceneAccessDELETE(selectedSceneInstance.uuid, entry.uuid_user);
+      await backendService.sceneAccessDELETE(sceneInstance.uuid, entry.uuid_user);
       setExistingAccess((prev) => prev.filter((a) => a.uuid_user !== entry.uuid_user));
-      logger.log(`Revoked access for ${entry.username} on scene ${selectedSceneInstance.uuid}`, "info");
+      logger.log(`Revoked access for ${entry.username} on scene ${sceneInstance.uuid}`, "info");
     } catch (err) {
       const status = err instanceof ApiError ? err.status : undefined;
       if (status === 409) setErrorMsg("Cannot remove the last delete owner");
@@ -230,34 +207,19 @@ export default function ShareSceneDialog() {
     closeDialog("shareScene");
   }
 
+  // Without a scene there is nothing to share — the opener is at fault, and the effect
+  // above has logged it.
   return (
-    <Dialog open={open} onClose={cancel} fullWidth maxWidth="sm">
+    <Dialog open={open && sceneInstance !== null} onClose={cancel} fullWidth maxWidth="sm">
       <DialogTitle>Share Scene Instance</DialogTitle>
       <DialogContent>
-        {/* `loading` covers both the scene list (on open) and the access list (on
-            selection); before a scene is picked it can only mean the former. */}
-        {loading && !selectedSceneInstance && (
-          <LinearProgress aria-label="loading scene instances" sx={{ mt: 1 }} />
-        )}
-        <FormControl fullWidth size="small" sx={{ mt: 1 }} disabled={loading && !selectedSceneInstance}>
-          <InputLabel id="share-scene-select-label">
-            {loading && !selectedSceneInstance ? "Loading scenes…" : "Select Scene Instance"}
-          </InputLabel>
-          <Select
-            labelId="share-scene-select-label"
-            label={loading && !selectedSceneInstance ? "Loading scenes…" : "Select Scene Instance"}
-            value={selectedUuid}
-            onChange={onSceneInstanceChange}
-          >
-            {sceneInstances.map((si) => (
-              <MenuItem key={si.uuid} value={si.uuid}>
-                {si.name} | {si.uuid}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        {/* The scene is the one that was right-clicked, so it is named rather than
+            picked (and no scene list was ever fetched). */}
+        <Typography sx={{ mt: 1, fontSize: 13 }}>
+          Sharing <strong>{sceneInstance?.name}</strong>
+        </Typography>
 
-        {selectedSceneInstance && (
+        {sceneInstance && (
           <Box sx={{ mt: 2 }}>
             {loading && (
               <Typography sx={{ color: "grey.600", fontSize: 12 }}>Loading access list…</Typography>
@@ -346,7 +308,7 @@ export default function ShareSceneDialog() {
       </DialogContent>
       <DialogActions>
         <Button onClick={cancel}>Cancel</Button>
-        {canManage && selectedSceneInstance && !loading && (
+        {canManage && sceneInstance && !loading && (
           <Button variant="contained" onClick={() => void add()}>
             Add user
           </Button>

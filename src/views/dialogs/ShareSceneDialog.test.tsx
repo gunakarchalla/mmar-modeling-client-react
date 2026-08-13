@@ -4,9 +4,13 @@
 // holder may manage it, and add/remove map the HTTP statuses onto the original's error
 // messages (which is why backend-service throws ApiError for these three endpoints).
 //
+// The dialog has no scene picker — the tree's Share context-menu item hands it the
+// scene as a `{ sceneInstance }` payload, and it opens straight onto that scene's
+// access list.
+//
 // Test traps observed (P8/P9 notes): close every uiStore dialog in beforeEach (the
-// flags are module-global and leak); MUI's Select is not reachable via getByLabelText —
-// open it by role and pick from the listbox.
+// flags AND the payloads are module-global and leak); MUI's Select is not reachable via
+// getByLabelText — open it by role and pick from the listbox.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 
@@ -14,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   globalObject: {
     // A JWT payload for uuid 'me' — the dialog decodes it to hide its own delete button.
     accessToken: `header.${Buffer.from(JSON.stringify({ uuid: "me", username: "admin" })).toString("base64url")}.sig`,
-    sceneTree: [] as unknown[],
   } as any,
   backendService: {
     sceneAccessListGET: vi.fn(async (): Promise<unknown[]> => []),
@@ -54,22 +57,25 @@ beforeEach(() => {
   const dialogs = useUiStore.getState().dialogs;
   useUiStore.setState({
     dialogs: Object.fromEntries(Object.keys(dialogs).map((name) => [name, false])) as typeof dialogs,
+    // Payloads leak the same way the flags do, and a stale one silently switches the
+    // dialog into prefilled mode for the next test.
+    dialogPayloads: {},
   });
-  mocks.globalObject.sceneTree = [
-    { uuid: "st-1", name: "BPMN", children: [{ uuid: SCENE_UUID, name: "My Scene" }] },
-  ];
   mocks.backendService.sceneAccessListGET.mockResolvedValue([]);
   mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: null });
 });
 
-/** Open the dialog and select the one scene instance, running its access load. */
-async function openAndSelectScene() {
-  useUiStore.getState().openDialog("shareScene");
+/** Open the dialog on the one scene, exactly as the tree's Share menu item does. */
+async function openScene() {
+  useUiStore
+    .getState()
+    .openDialog("shareScene", { sceneInstance: { uuid: SCENE_UUID, name: "My Scene" } });
   render(<ShareSceneDialog />);
-  const select = await screen.findByRole("combobox");
-  fireEvent.mouseDown(select);
-  const listbox = await screen.findByRole("listbox");
-  fireEvent.click(within(listbox).getByText(/My Scene/));
+  // The access list load is what every test below builds on, and it starts on open now
+  // rather than on a selection.
+  await waitFor(() =>
+    expect(mocks.backendService.sceneAccessListGET).toHaveBeenCalledWith(SCENE_UUID),
+  );
 }
 
 describe("ShareSceneDialog", () => {
@@ -79,7 +85,7 @@ describe("ShareSceneDialog", () => {
       entry({ uuid_user: "u2", username: "bob", displayname: "bob", edit_access: true, delete_access: true }),
     ]);
 
-    await openAndSelectScene();
+    await openScene();
 
     await waitFor(() => expect(screen.getByText("alice")).toBeTruthy());
     expect(mocks.backendService.sceneAccessListGET).toHaveBeenCalledWith(SCENE_UUID);
@@ -95,7 +101,7 @@ describe("ShareSceneDialog", () => {
     mocks.backendService.sceneAccessListGET.mockResolvedValue([entry()]);
     mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "edit" });
 
-    await openAndSelectScene();
+    await openScene();
 
     await waitFor(() => expect(screen.getByText("alice")).toBeTruthy());
     expect(screen.queryByText("Add user:")).toBeNull();
@@ -109,7 +115,7 @@ describe("ShareSceneDialog", () => {
     ]);
     mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "delete" });
 
-    await openAndSelectScene();
+    await openScene();
 
     await waitFor(() => expect(screen.getByText("Add user:")).toBeTruthy());
     expect(screen.getByLabelText("Revoke access for alice")).toBeTruthy();
@@ -125,7 +131,7 @@ describe("ShareSceneDialog", () => {
       entry({ uuid_user: "u9", username: "carol", displayname: "carol" }),
     );
 
-    await openAndSelectScene();
+    await openScene();
     await waitFor(() => expect(screen.getByText("Add user:")).toBeTruthy());
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "carol" } });
     fireEvent.click(screen.getByText("Add user"));
@@ -146,7 +152,7 @@ describe("ShareSceneDialog", () => {
       entry({ uuid_user: "u9", username: "carol", displayname: "carol" }),
     );
 
-    await openAndSelectScene();
+    await openScene();
     await waitFor(() => expect(screen.getByText("Add user:")).toBeTruthy());
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "carol" } });
     fireEvent.click(screen.getByText("Add user"));
@@ -162,7 +168,7 @@ describe("ShareSceneDialog", () => {
     mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "delete" });
     mocks.backendService.userByUsernameGET.mockRejectedValue(new ApiError("nope", 404));
 
-    await openAndSelectScene();
+    await openScene();
     await waitFor(() => expect(screen.getByText("Add user:")).toBeTruthy());
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ghost" } });
     fireEvent.click(screen.getByText("Add user"));
@@ -175,7 +181,7 @@ describe("ShareSceneDialog", () => {
     mocks.backendService.sceneAccessListGET.mockResolvedValue([entry()]);
     mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "delete" });
 
-    await openAndSelectScene();
+    await openScene();
     await waitFor(() => expect(screen.getByText("Add user:")).toBeTruthy());
     fireEvent.click(screen.getByText("Add user"));
 
@@ -187,7 +193,7 @@ describe("ShareSceneDialog", () => {
     mocks.backendService.sceneAccessListGET.mockResolvedValue([entry()]);
     mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "delete" });
 
-    await openAndSelectScene();
+    await openScene();
     await waitFor(() => expect(screen.getByText("alice")).toBeTruthy());
     fireEvent.click(screen.getByLabelText("Revoke access for alice"));
 
@@ -200,7 +206,7 @@ describe("ShareSceneDialog", () => {
     mocks.backendService.sceneAccessMeGET.mockResolvedValue({ level: "delete" });
     mocks.backendService.sceneAccessDELETE.mockRejectedValue(new ApiError("conflict", 409));
 
-    await openAndSelectScene();
+    await openScene();
     await waitFor(() => expect(screen.getByText("alice")).toBeTruthy());
     fireEvent.click(screen.getByLabelText("Revoke access for alice"));
 
@@ -209,9 +215,29 @@ describe("ShareSceneDialog", () => {
   });
 
   it("closes on Cancel", async () => {
-    useUiStore.getState().openDialog("shareScene");
-    render(<ShareSceneDialog />);
+    await openScene();
     fireEvent.click(await screen.findByText("Cancel"));
     expect(useUiStore.getState().dialogs.shareScene).toBe(false);
+  });
+});
+
+describe("ShareSceneDialog — no picker", () => {
+  it("names the scene instead of offering a way to re-choose it", async () => {
+    mocks.backendService.sceneAccessListGET.mockResolvedValue([entry()]);
+    await openScene();
+
+    expect(screen.getByText(/Sharing/)).toBeTruthy();
+    // The only combobox left is the access-level one, and it appears only for a manager.
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("stays shut when opened with no scene", async () => {
+    render(<ShareSceneDialog />);
+    useUiStore.getState().openDialog("shareScene");
+
+    // No picker to fall back to: an unpayloaded open is a caller bug, so the dialog
+    // renders nothing and the mistake goes to the log instead of the user.
+    await waitFor(() => expect(screen.queryByText(/Sharing/)).toBeNull());
+    expect(mocks.backendService.sceneAccessListGET).not.toHaveBeenCalled();
   });
 });
