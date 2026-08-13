@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   metaUtility: {
     getMetaClass: vi.fn(async (): Promise<any> => undefined),
     getMetaPort: vi.fn(async (): Promise<any> => undefined),
+    getMetaAttribute: vi.fn(async (): Promise<any> => undefined),
   },
   expressionUtility: { attrvalByInst: vi.fn(async (): Promise<any> => "Referenced Task") },
   // P12: hybrid-algorithms-service imports the @/engine/global-definition LEAF directly,
@@ -120,6 +121,7 @@ beforeEach(() => {
   });
   mocks.metaUtility.getMetaClass.mockResolvedValue(metaClassWithReferenceAttribute());
   mocks.metaUtility.getMetaPort.mockResolvedValue(undefined);
+  mocks.metaUtility.getMetaAttribute.mockResolvedValue(undefined);
   mocks.instanceUtility.getAllClassInstances.mockResolvedValue([]);
   mocks.instanceUtility.getAllRelationClassInstances.mockResolvedValue([]);
   mocks.instanceUtility.getAllPortInstances.mockResolvedValue([]);
@@ -152,6 +154,22 @@ describe("ReferenceAttributeDialog", () => {
 
     expect(await screen.findByRole("option", { name: /Referenced Task \| ci-target/ })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /ci-other/ })).toBeNull();
+  });
+
+  it("resolves the Role through the meta attribute for a scene-owned reference attribute", async () => {
+    // Nothing selected (the attribute window is showing the open scene instance), so
+    // there is no current class or port to read the Role off — metaUtility resolves it
+    // from the scene type instead.
+    mocks.globalObject.current_class_instance = undefined;
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(metaClassWithReferenceAttribute().attributes[0]);
+    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([allowedClassInstance()]);
+
+    render(<ReferenceAttributeDialog />);
+    openDialogWith(referenceAttributeInstance());
+
+    await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+    expect(await screen.findByRole("option", { name: /Referenced Task \| ci-target/ })).toBeTruthy();
   });
 
   it("sets the reference: creates a role instance pointing at the picked class instance", async () => {

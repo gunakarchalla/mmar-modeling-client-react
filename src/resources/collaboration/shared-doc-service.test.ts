@@ -116,6 +116,8 @@ import { eventBus } from "@/resources/services/event-bus";
 const SCENE_UUID = "scene-1";
 const CI_UUID = "ci-1";
 const ATTR_UUID = "attr-1";
+/** An attribute of the scene instance itself, not of any instance inside it. */
+const SCENE_ATTR_UUID = "scene-attr-1";
 
 function makeScene(): SceneInstance {
   return SceneInstance.fromJS({
@@ -134,6 +136,15 @@ function makeScene(): SceneInstance {
       },
     ],
     relationclasses_instances: [],
+    attribute_instances: [
+      {
+        uuid: SCENE_ATTR_UUID,
+        uuid_attribute: "meta-scene-1",
+        name: "Comment",
+        value: "original",
+        assigned_uuid_scene_instance: SCENE_UUID,
+      },
+    ],
   }) as SceneInstance;
 }
 
@@ -342,6 +353,56 @@ describe("observers", () => {
     sub.dispose();
 
     expect(received).toEqual([{ tabIndex: 0 }]);
+  });
+
+  it("applies a remote edit of the SCENE's own attribute and refreshes the window", () => {
+    const session = service.attach(0, scene, "edit");
+    const received: AttributeInstance[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (payload) => received.push(payload));
+    const revisionBefore = useSelectionStore.getState().revision;
+
+    session.ydoc.transact(() => {
+      session.ydoc.getMap<Y.Map<unknown>>("attribute_instances").get(SCENE_ATTR_UUID)!.set("value", "remote model name");
+    }, "remote-peer");
+    sub.dispose();
+
+    expect(scene.attribute_instances[0].value).toBe("remote model name");
+    expect(received.map((a) => a.uuid)).toEqual([SCENE_ATTR_UUID]);
+    expect(useSelectionStore.getState().revision).toBe(revisionBefore + 1);
+  });
+
+  it("reports a remote scene-attribute change under the scene key so undo skips it", () => {
+    const session = service.attach(0, scene, "edit");
+    const received: { tabIndex: number; instanceUuids: string[] }[] = [];
+    const sub = eventBus.subscribe("remoteSceneInstanceChanged", (payload) => received.push(payload));
+
+    session.ydoc.transact(() => {
+      session.ydoc.getMap<Y.Map<unknown>>("attribute_instances").get(SCENE_ATTR_UUID)!.set("value", "theirs");
+    }, "remote-peer");
+    sub.dispose();
+
+    // history-service subtracts these from a step's touched set, and the scene's own
+    // state is named by the scene-diff sentinel.
+    expect(received).toEqual([{ tabIndex: 0, instanceUuids: ["__scene__"] }]);
+  });
+
+  it("adopts scene attributes a peer instantiated for a scene that had none", () => {
+    scene.attribute_instances = [];
+    const session = service.attach(0, scene, "edit");
+
+    session.ydoc.transact(() => {
+      const map = new Y.Map<unknown>();
+      map.set("uuid", "scene-attr-remote");
+      map.set("uuid_attribute", "meta-scene-2");
+      map.set("name", "Name");
+      map.set("value", "their model");
+      session.ydoc.getMap<Y.Map<unknown>>("attribute_instances").set("scene-attr-remote", map);
+    }, "remote-peer");
+
+    expect(scene.attribute_instances.map((a) => a.uuid)).toEqual(["scene-attr-remote"]);
+    expect(mocks.globalObject.attribute_instances.map((a: AttributeInstance) => a.uuid)).toEqual([
+      "scene-attr-remote",
+    ]);
   });
 
   it("does nothing when the tab context is gone (a closed tab must not resurrect state)", () => {

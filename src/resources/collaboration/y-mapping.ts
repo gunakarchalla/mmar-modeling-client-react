@@ -29,6 +29,11 @@ import type { GlobalDefinition } from "@/engine/global-definition";
 //   info                        Y.Map<string>
 //     uuid, uuid_scene_type, name, description
 //
+//   attribute_instances         Y.Map<Y.Map>    keyed by AttributeInstance.uuid
+//     the SCENE INSTANCE's own attributes (the scene type's, shown in the attribute
+//     window while nothing is selected)
+//     <uuid> → { uuid, uuid_attribute, name, value } : string
+//
 //   class_instances             Y.Map<Y.Map>    keyed by ClassInstance.uuid
 //     <uuid> →
 //       uuid, uuid_class, name, description : string
@@ -66,7 +71,11 @@ export type LocalChangeType =
   | { type: "remove_class_instance"; classInstanceUuid: string }
   | { type: "add_relation_class_instance"; relationClassInstance: RelationclassInstance }
   | { type: "remove_relation_class_instance"; relationClassInstanceUuid: string }
-  | { type: "relation_attribute_value"; relationClassInstanceUuid: string; attributeUuid: string; value: string };
+  | { type: "relation_attribute_value"; relationClassInstanceUuid: string; attributeUuid: string; value: string }
+  // The scene instance's OWN attributes: no owning instance uuid, because the scene is
+  // the owner and a Y.Doc holds exactly one scene.
+  | { type: "scene_attribute_value"; attributeUuid: string; value: string }
+  | { type: "add_scene_attribute_instances"; attributeInstances: AttributeInstance[] };
 
 /** Carries side-effect metadata back to the observer in SharedDocService. */
 export interface YDocChangeResult {
@@ -98,6 +107,12 @@ export function sceneInstanceToYDoc(sceneInstance: SceneInstance, ydoc: Y.Doc, o
     const relInstances = ydoc.getMap<Y.Map<unknown>>("relationclasses_instances");
     for (const ri of sceneInstance.relationclasses_instances ?? []) {
       relInstances.set(ri.uuid, relationClassInstanceToYMap(ri));
+    }
+
+    // the scene instance's own attributes
+    const sceneAttributes = ydoc.getMap<Y.Map<unknown>>("attribute_instances");
+    for (const ai of sceneInstance.attribute_instances ?? []) {
+      sceneAttributes.set(ai.uuid, attrInstanceToYMap(ai));
     }
   }, origin);
 }
@@ -194,6 +209,25 @@ export function applyLocalChangeToYDoc(ydoc: Y.Doc, change: LocalChangeType, ori
         const attrEntry = attrMap.get(change.attributeUuid);
         if (!attrEntry) break;
         attrEntry.set("value", change.value);
+        break;
+      }
+
+      // ------------------------------------------------------------------
+      // The scene instance's own attributes
+      // ------------------------------------------------------------------
+      case "scene_attribute_value": {
+        const sceneAttributes = ydoc.getMap<Y.Map<unknown>>("attribute_instances");
+        const attrEntry = sceneAttributes.get(change.attributeUuid) as Y.Map<unknown> | undefined;
+        if (!attrEntry) break;
+        attrEntry.set("value", change.value);
+        break;
+      }
+      case "add_scene_attribute_instances": {
+        const sceneAttributes = ydoc.getMap<Y.Map<unknown>>("attribute_instances");
+        for (const ai of change.attributeInstances) {
+          if (sceneAttributes.has(ai.uuid)) continue;
+          sceneAttributes.set(ai.uuid, attrInstanceToYMap(ai));
+        }
         break;
       }
     }
@@ -429,6 +463,62 @@ export function applyYDocRelationChangeToSceneInstance(
   return result;
 }
 
+/**
+ * Apply a Yjs deep event from the top-level 'attribute_instances' map — the SCENE
+ * INSTANCE's own attributes — to the in-memory SceneInstance. Called ONLY for
+ * remote-origin events.
+ *
+ * Two shapes, mirroring the class/relation observers: a root-level add/delete of a
+ * whole attribute entry (a peer instantiated the scene type's attributes for a scene
+ * that had none — see instance-creation-handler.createMissingSceneAttributeInstances),
+ * and a nested `value` change (a peer edited the field).
+ */
+export function applyYDocSceneAttributeChangeToSceneInstance(
+  event: Y.YEvent<Y.Map<unknown>>,
+  sceneInstance: SceneInstance,
+  globalObjectInstance: GlobalDefinition,
+): YDocChangeResult {
+  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+  const path = event.path as Array<string | number>;
+  sceneInstance.attribute_instances = sceneInstance.attribute_instances ?? [];
+
+  if (path.length === 0) {
+    (event as Y.YMapEvent<Y.Map<unknown>>).changes.keys.forEach((change, uuid) => {
+      if (change.action === "delete") {
+        const index = sceneInstance.attribute_instances.findIndex((ai) => ai.uuid === uuid);
+        if (index !== -1) sceneInstance.attribute_instances.splice(index, 1);
+        globalObjectInstance.attribute_instances = globalObjectInstance.attribute_instances.filter(
+          (ai) => ai.uuid !== uuid,
+        );
+        return;
+      }
+      if (change.action !== "add") return;
+      const attrMap = (event.target as Y.Map<Y.Map<unknown>>).get(uuid);
+      if (!attrMap) return;
+      if (sceneInstance.attribute_instances.some((ai) => ai.uuid === uuid)) return;
+      const attributeInstance = sceneAttrInstanceFromYMap(attrMap, sceneInstance.uuid);
+      sceneInstance.attribute_instances.push(attributeInstance);
+      // Register it in the flat list the vizrep pipeline and the undo history look in.
+      if (!globalObjectInstance.attribute_instances.find((ai) => ai.uuid === attributeInstance.uuid)) {
+        globalObjectInstance.attribute_instances.push(attributeInstance);
+      }
+      result.changedAttributeInstances.push(attributeInstance);
+    });
+    return result;
+  }
+
+  // A single attribute entry changed (path is [attributeUuid]).
+  const attributeUuid = path[0] as string;
+  const attributeInstance = sceneInstance.attribute_instances.find((ai) => ai.uuid === attributeUuid);
+  if (!attributeInstance) return result;
+  const attrMap = event.target as Y.Map<unknown>;
+  if (attrMap.has("value")) {
+    attributeInstance.value = attrMap.get("value") as string;
+    result.changedAttributeInstances.push(attributeInstance);
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -655,17 +745,38 @@ function customVariablesToYMap(vars: Record<string, unknown> | undefined): Y.Map
   return m;
 }
 
+function attrInstanceToYMap(attr: AttributeInstance): Y.Map<unknown> {
+  const am = new Y.Map<unknown>();
+  am.set("uuid", attr.uuid ?? "");
+  am.set("uuid_attribute", attr.uuid_attribute ?? "");
+  am.set("name", attr.name ?? "");
+  am.set("value", attr.value ?? "");
+  return am;
+}
+
 function attrInstancesToYMap(attrs: AttributeInstance[]): Y.Map<Y.Map<unknown>> {
   const m = new Y.Map<Y.Map<unknown>>();
   for (const attr of attrs) {
-    const am = new Y.Map<unknown>();
-    am.set("uuid", attr.uuid ?? "");
-    am.set("uuid_attribute", attr.uuid_attribute ?? "");
-    am.set("name", attr.name ?? "");
-    am.set("value", attr.value ?? "");
-    m.set(attr.uuid, am);
+    m.set(attr.uuid, attrInstanceToYMap(attr));
   }
   return m;
+}
+
+/**
+ * Reconstruct ONE AttributeInstance owned by the scene instance itself: same encoding
+ * as the class/relationclass entries, but the parent uuid goes in the SCENE slot, which
+ * is what the attribute window and the vizrep checker resolve it through.
+ */
+function sceneAttrInstanceFromYMap(attrEntry: Y.Map<unknown>, sceneUuid: string): AttributeInstance {
+  const ai = new AttributeInstance(
+    attrEntry.get("uuid") as string,
+    attrEntry.get("uuid_attribute") as string,
+    sceneUuid,
+    null as unknown as string,
+    (attrEntry.get("value") as string) ?? "",
+  );
+  ai.name = (attrEntry.get("name") as string) ?? "";
+  return ai;
 }
 
 /**

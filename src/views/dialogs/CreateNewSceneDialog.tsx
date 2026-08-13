@@ -15,12 +15,19 @@ import {
 } from "@mui/material";
 import type { SelectChangeEvent } from "@mui/material";
 import { SceneInstance, SceneType } from "@gds";
-import { globalObject, globalClassObject, globalRelationclassObject, sceneInitiator } from "@/engine";
+import {
+  globalObject,
+  globalClassObject,
+  globalRelationclassObject,
+  instanceCreationHandler,
+  sceneInitiator,
+} from "@/engine";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { historyService } from "@/resources/services/history-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
 import { logger } from "@/resources/services/logger";
+import { describeError } from "@/resources/util/describe-error";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
 
@@ -83,6 +90,16 @@ export default function CreateNewSceneDialog() {
 
       await sceneInitiator.sceneInit();
       await instanceUtility.createTabContextSceneInstance(sceneInstance);
+
+      // Instantiate the scene type's own attributes, the way createClassInstance does
+      // for a class — the attribute window shows them while nothing is selected. Runs
+      // before the POST below so they are part of the scene's first save, and cannot
+      // fail the scene creation itself.
+      await instanceCreationHandler
+        .createMissingSceneAttributeInstances(sceneInstance)
+        .catch((error) =>
+          logger.log(`Scene attribute instantiation failed: ${describeError(error)}`, "error"),
+        );
 
       // Post the new sceneInstance to the DB if autoSave is enabled.
       if (globalObject.autoSave) {

@@ -19,12 +19,14 @@ import {
   applyLocalChangeToYDoc,
   applyYDocClassChangeToSceneInstance,
   applyYDocRelationChangeToSceneInstance,
+  applyYDocSceneAttributeChangeToSceneInstance,
 } from "./y-mapping";
 
 const SCENE_UUID = "scene-1";
 const CI_UUID = "ci-1";
 const RI_UUID = "ri-1";
 const ATTR_UUID = "attr-1";
+const SCENE_ATTR_UUID = "scene-attr-1";
 
 function classInstanceJson(over: Record<string, unknown> = {}) {
   return {
@@ -67,6 +69,18 @@ function relationInstanceJson(over: Record<string, unknown> = {}) {
   };
 }
 
+/** An attribute of the SCENE INSTANCE itself (what the scene type declares). */
+function sceneAttributeJson(over: Record<string, unknown> = {}) {
+  return {
+    uuid: SCENE_ATTR_UUID,
+    uuid_attribute: "meta-attr-scene",
+    name: "Comment",
+    value: "scene original",
+    assigned_uuid_scene_instance: SCENE_UUID,
+    ...over,
+  };
+}
+
 function makeScene(over: Record<string, unknown> = {}): SceneInstance {
   return SceneInstance.fromJS({
     uuid: SCENE_UUID,
@@ -75,6 +89,7 @@ function makeScene(over: Record<string, unknown> = {}): SceneInstance {
     description: "desc",
     class_instances: [classInstanceJson()],
     relationclasses_instances: [relationInstanceJson()],
+    attribute_instances: [sceneAttributeJson()],
     ...over,
   }) as SceneInstance;
 }
@@ -205,9 +220,39 @@ describe("applyLocalChangeToYDoc", () => {
     expect((riMap.get("attribute_instance") as Y.Map<Y.Map<unknown>>).get("rel-attr-1")!.get("value")).toBe("rel edited");
   });
 
+  it("writes a scene attribute value", () => {
+    applyLocalChangeToYDoc(
+      ydoc,
+      { type: "scene_attribute_value", attributeUuid: SCENE_ATTR_UUID, value: "scene edited" },
+      origin,
+    );
+    const entry = ydoc.getMap<Y.Map<unknown>>("attribute_instances").get(SCENE_ATTR_UUID)!;
+    expect(entry.get("value")).toBe("scene edited");
+  });
+
+  it("adds scene attribute instances without replacing ones already in the doc", () => {
+    const existing = ydoc.getMap<Y.Map<unknown>>("attribute_instances").get(SCENE_ATTR_UUID)!;
+    const added = AttributeInstance.fromJS(
+      sceneAttributeJson({ uuid: "scene-attr-2", uuid_attribute: "meta-attr-scene-2", name: "Name", value: "a model" }),
+    ) as AttributeInstance;
+
+    applyLocalChangeToYDoc(ydoc, { type: "add_scene_attribute_instances", attributeInstances: [added] }, origin);
+
+    const map = ydoc.getMap<Y.Map<unknown>>("attribute_instances");
+    expect(map.get("scene-attr-2")!.get("value")).toBe("a model");
+    // the entry that was already there is left as it is (idempotent re-run)
+    expect(map.get(SCENE_ATTR_UUID)).toBe(existing);
+  });
+
   it("is a no-op for an unknown class instance instead of throwing", () => {
     expect(() =>
       applyLocalChangeToYDoc(ydoc, { type: "coordinates", classInstanceUuid: "nope", x: 1, y: 1, z: 1 }, origin),
+    ).not.toThrow();
+  });
+
+  it("is a no-op for an unknown scene attribute instead of throwing", () => {
+    expect(() =>
+      applyLocalChangeToYDoc(ydoc, { type: "scene_attribute_value", attributeUuid: "nope", value: "x" }, origin),
     ).not.toThrow();
   });
 });
@@ -224,7 +269,7 @@ describe("applyLocalChangeToYDoc", () => {
 function relayAndApply(
   from: Y.Doc,
   to: Y.Doc,
-  mapName: "class_instances" | "relationclasses_instances",
+  mapName: "class_instances" | "relationclasses_instances" | "attribute_instances",
   apply: (event: Y.YEvent<Y.Map<unknown>>) => void,
 ) {
   const map = to.getMap<Y.Map<unknown>>(mapName);
@@ -405,5 +450,65 @@ describe("applyYDocRelationChangeToSceneInstance", () => {
     expect(globalObjectInstance.dragObjects).toEqual([]);
     // Only the deleted relation's roles go; the unrelated one survives.
     expect(globalObjectInstance.role_instances.map((r) => r.uuid)).toEqual(["other"]);
+  });
+});
+
+describe("applyYDocSceneAttributeChangeToSceneInstance", () => {
+  let docB: Y.Doc;
+  let sceneB: SceneInstance;
+
+  beforeEach(() => {
+    sceneInstanceToYDoc(scene, ydoc, {});
+    docB = new Y.Doc();
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+    sceneB = makeScene();
+  });
+
+  const applyTo = (event: Y.YEvent<Y.Map<unknown>>) =>
+    applyYDocSceneAttributeChangeToSceneInstance(event, sceneB, globalObjectInstance);
+
+  it("applies a peer's edit of the scene instance's own attribute", () => {
+    const changed: string[] = [];
+    relayAndApply(ydoc, docB, "attribute_instances", (event) => {
+      applyTo(event).changedAttributeInstances.forEach((ai) => changed.push(ai.uuid));
+    });
+    applyLocalChangeToYDoc(ydoc, { type: "scene_attribute_value", attributeUuid: SCENE_ATTR_UUID, value: "remote scene edit" }, {});
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    expect(sceneB.attribute_instances.find((a) => a.uuid === SCENE_ATTR_UUID)!.value).toBe("remote scene edit");
+    // reported so the caller can refresh the vizrep, exactly like a class attribute
+    expect(changed).toEqual([SCENE_ATTR_UUID]);
+  });
+
+  it("adopts scene attributes a peer instantiated, parented by the scene", () => {
+    // The receiving client's scene does not have them yet.
+    sceneB.attribute_instances = [];
+    relayAndApply(ydoc, docB, "attribute_instances", applyTo);
+
+    const added = AttributeInstance.fromJS(
+      sceneAttributeJson({ uuid: "scene-attr-2", uuid_attribute: "meta-attr-scene-2", name: "Name", value: "a model" }),
+    ) as AttributeInstance;
+    applyLocalChangeToYDoc(ydoc, { type: "add_scene_attribute_instances", attributeInstances: [added] }, {});
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    const adopted = sceneB.attribute_instances.find((a) => a.uuid === "scene-attr-2")!;
+    expect(adopted).toBeInstanceOf(AttributeInstance);
+    expect(adopted.name).toBe("Name");
+    expect(adopted.value).toBe("a model");
+    // parented by the SCENE — how the attribute window and the vizrep checker find it
+    expect(adopted.assigned_uuid_scene_instance).toBe(SCENE_UUID);
+    expect(adopted.assigned_uuid_class_instance).toBeNull();
+    // and registered in the flat list the vizrep pipeline / undo history read
+    expect(globalObjectInstance.attribute_instances.map((a) => a.uuid)).toContain("scene-attr-2");
+  });
+
+  it("does not adopt an attribute the scene already holds", () => {
+    relayAndApply(ydoc, docB, "attribute_instances", applyTo);
+
+    const duplicate = AttributeInstance.fromJS(sceneAttributeJson({ value: "other" })) as AttributeInstance;
+    applyLocalChangeToYDoc(ydoc, { type: "add_scene_attribute_instances", attributeInstances: [duplicate] }, {});
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    expect(sceneB.attribute_instances.filter((a) => a.uuid === SCENE_ATTR_UUID)).toHaveLength(1);
   });
 });

@@ -5,7 +5,7 @@
 // actual record -> diff -> apply -> broadcast path. gds objects are revived through
 // `X.fromJS` (the P3 class-transformer rule) so `instanceof` survives an in-place undo.
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ClassInstance, SceneInstance } from "@gds";
+import { AttributeInstance, ClassInstance, SceneInstance } from "@gds";
 
 const mocks = vi.hoisted(() => ({
   globalObject: {
@@ -251,6 +251,64 @@ describe("undo and redo", () => {
 
     expect(attributeInstance.value).toBe("before");
     expect(vizrep).toHaveBeenCalledWith(attributeInstance);
+  });
+
+  // The scene instance's OWN attributes (shown in the attribute window while nothing is
+  // selected) belong to the scene, not to any instance in it — they are diffed under the
+  // scene sentinel, so a value edit is a step of its own.
+  it("restores the scene instance's own attribute value", async () => {
+    const scene = openScene();
+    const sceneAttribute = AttributeInstance.fromJS({
+      uuid: "scene-attr-1",
+      uuid_attribute: "meta-attr-scene",
+      name: "Comment",
+      value: "before",
+      assigned_uuid_scene_instance: SCENE_UUID,
+    }) as AttributeInstance;
+    scene.attribute_instances.push(sceneAttribute);
+    historyService.initScene(scene);
+    mocks.globalObject.attribute_instances = [sceneAttribute];
+
+    sceneAttribute.value = "after";
+    historyService.record("edit Comment");
+
+    const vizrep = vi.fn();
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", vizrep);
+    await historyService.undo();
+    sub.dispose();
+
+    expect(sceneAttribute.value).toBe("before");
+    // same object, so the attribute window keeps rendering the instance it was handed
+    expect(scene.attribute_instances[0]).toBe(sceneAttribute);
+    expect(vizrep).toHaveBeenCalledWith(sceneAttribute);
+
+    await historyService.redo();
+    expect(sceneAttribute.value).toBe("after");
+  });
+
+  it("broadcasts an undone scene attribute value to collaborators", async () => {
+    const session = { ydoc: {}, localOrigin: {}, access: "edit", applyingRemote: false };
+    mocks.sharedDocService.forTab.mockReturnValue(session);
+    const scene = openScene();
+    const sceneAttribute = AttributeInstance.fromJS({
+      uuid: "scene-attr-1",
+      uuid_attribute: "meta-attr-scene",
+      name: "Comment",
+      value: "before",
+      assigned_uuid_scene_instance: SCENE_UUID,
+    }) as AttributeInstance;
+    scene.attribute_instances.push(sceneAttribute);
+    historyService.initScene(scene);
+
+    sceneAttribute.value = "after";
+    historyService.record("edit Comment");
+    await historyService.undo();
+
+    expect(mocks.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      { type: "scene_attribute_value", attributeUuid: "scene-attr-1", value: "before" },
+      session.localOrigin,
+    );
   });
 
   it("undoes a creation by deleting the instance again", async () => {

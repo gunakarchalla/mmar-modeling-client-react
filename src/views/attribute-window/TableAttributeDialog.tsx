@@ -108,8 +108,15 @@ export function TableAttributeDialogView({
     const currentClass = globalObject.current_class_instance
       ? await metaUtility.getMetaClass(globalObject.current_class_instance.uuid_class)
       : undefined;
+    // A table attribute of the open SCENE INSTANCE (shown when nothing is selected) has
+    // no current class to resolve its columns from — and `current_class_instance` may
+    // still hold the last selected element, which does not carry this attribute either.
+    // metaUtility searches the scene type first, so it covers both. Only reached when
+    // the class lookup found nothing, where the dialog used to render an empty grid.
     const metaAttribute =
-      attribute ?? currentClass?.attributes.find((candidate) => candidate.uuid === attributeUUID);
+      attribute ??
+      currentClass?.attributes.find((candidate) => candidate.uuid === attributeUUID) ??
+      (await metaUtility.getMetaAttribute(attributeUUID));
     setCurrentAttribute(metaAttribute ?? null);
     setCurrentClass(currentClass ?? null);
 

@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   globalObject: { selectedTab: 0, doSceneInstancePatch: false, current_class_instance: undefined as any } as any,
   instanceCreationHandler: { createAttributeInstance: vi.fn() },
   instanceUtility: { getTabContextSceneInstance: vi.fn(async () => ({ uuid_scene_type: "st-1" })) },
-  metaUtility: { getMetaClass: vi.fn() },
+  metaUtility: { getMetaClass: vi.fn(), getMetaAttribute: vi.fn() },
   // The undo/redo history service imports the @/engine/global-definition LEAF (a
   // WebGLRenderer at module scope), so it bypasses the `@/engine` barrel mock and has
   // to be mocked in its own right — same lesson as persistency-handler (P9),
@@ -125,6 +125,7 @@ beforeEach(() => {
     current_class_instance: { uuid: "ci-1", uuid_class: "class-1" },
   });
   mocks.metaUtility.getMetaClass.mockResolvedValue({ uuid: "class-1", attributes: [tableMetaAttribute()] });
+  mocks.metaUtility.getMetaAttribute.mockResolvedValue(undefined);
   mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue({ uuid_scene_type: "st-1" });
   let created = 0;
   mocks.instanceCreationHandler.createAttributeInstance.mockImplementation(async (attribute: any, ...rest: any[]) => {
@@ -161,6 +162,20 @@ describe("TableAttributeDialog", () => {
     expect(screen.getByText("Table Attribute: BPMN Table")).toBeTruthy();
     // one row of two cells: a text field and a dropdown
     expect(screen.getByDisplayValue("row1-A")).toBeTruthy();
+  });
+
+  it("builds the grid from the meta attribute when no class owns it (a scene table attribute)", async () => {
+    // Nothing selected: the attribute window is showing the open scene instance, so the
+    // columns come from the scene type's attribute rather than a selected class.
+    mocks.globalObject.current_class_instance = undefined;
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(tableMetaAttribute());
+    openWith([cellJson({ uuid: "cell-1", value: "row1-A" }), cellJson({ uuid: "cell-2", uuid_attribute: "col-attr-2", value: "x" })]);
+
+    render(<TableAttributeDialog />);
+
+    await waitFor(() => expect(screen.getByText("Column A")).toBeTruthy());
+    expect(screen.getByDisplayValue("row1-A")).toBeTruthy();
+    expect(mocks.metaUtility.getMetaAttribute).toHaveBeenCalledWith(TABLE_ATTRIBUTE_UUID);
   });
 
   it("commits a cell edit to the AttributeInstance and publishes the vizrep channel", async () => {

@@ -26,6 +26,8 @@ export interface SceneSnapshot extends Json {
   description?: string;
   class_instances?: Json[];
   relationclasses_instances?: Json[];
+  /** The scene instance's OWN attributes (the scene type's), edited in the attribute window. */
+  attribute_instances?: Json[];
 }
 
 export type InstanceKind = "class" | "relation";
@@ -49,8 +51,19 @@ export interface SceneDelta {
   added: { kind: InstanceKind; instance: Json }[];
   removed: { kind: InstanceKind; uuid: string }[];
   changed: InstanceChange[];
-  /** Scene-level scalar fields that differ (`name` / `description`), or null. */
-  sceneFields: { name?: string; description?: string } | null;
+  /**
+   * What differs on the scene instance itself: its scalar fields (`name` /
+   * `description`) and the values of its own attribute instances. Null when neither did.
+   */
+  sceneFields: SceneFieldsChange | null;
+}
+
+/** The scene instance's own state, as far as an undo step can move it. */
+export interface SceneFieldsChange {
+  name?: string;
+  description?: string;
+  /** Scene-owned attribute instances whose `value` differs. */
+  attributes?: { uuid: string; value: string }[];
 }
 
 /** Sentinel `touched` entry standing for the scene's own scalar fields. */
@@ -116,8 +129,23 @@ export function touchedUuids(from: SceneSnapshot, to: SceneSnapshot): string[] {
   }
 
   if (from.name !== to.name || from.description !== to.description) touched.add(SCENE_FIELDS_KEY);
+  if (sceneAttributeChanges(from, to).length > 0) touched.add(SCENE_FIELDS_KEY);
 
   return [...touched];
+}
+
+/**
+ * The scene instance's own attribute instances whose value differs — the fields the
+ * attribute window edits while nothing is selected. They ride along with the scene's
+ * scalar fields under `SCENE_FIELDS_KEY`, since the scene itself is what changed.
+ */
+function sceneAttributeChanges(from: SceneSnapshot, to: SceneSnapshot): { uuid: string; value: string }[] {
+  const before = attributeValues({ attribute_instance: from.attribute_instances });
+  const changes: { uuid: string; value: string }[] = [];
+  for (const [uuid, value] of attributeValues({ attribute_instance: to.attribute_instances })) {
+    if (before.get(uuid) !== value) changes.push({ uuid, value });
+  }
+  return changes;
 }
 
 /**
@@ -220,9 +248,11 @@ export function diffScene(
   );
 
   if (!restrict || restrict.has(SCENE_FIELDS_KEY)) {
-    const sceneFields: { name?: string; description?: string } = {};
+    const sceneFields: SceneFieldsChange = {};
     if (from.name !== to.name) sceneFields.name = to.name;
     if (from.description !== to.description) sceneFields.description = to.description;
+    const attributes = sceneAttributeChanges(from, to);
+    if (attributes.length > 0) sceneFields.attributes = attributes;
     if (Object.keys(sceneFields).length > 0) delta.sceneFields = sceneFields;
   }
 

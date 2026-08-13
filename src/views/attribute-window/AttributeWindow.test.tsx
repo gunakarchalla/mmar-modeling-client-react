@@ -28,7 +28,9 @@ const mocks = vi.hoisted(() => ({
     getAllPortInstancesOfTabContext: vi.fn(async () => []),
     getClassInstance: vi.fn(),
     getPortInstance: vi.fn(async () => undefined),
-    getSceneInstance: vi.fn(async () => undefined),
+    // Typed `Promise<any>` so `mockResolvedValue(<gds instance>)` type-checks — an
+    // inferred `async () => undefined` fixes the mock's return type to `undefined`.
+    getSceneInstance: vi.fn(async (): Promise<any> => undefined),
     getAllClassInstances: vi.fn(async () => []),
     getAllRelationClassInstances: vi.fn(async () => []),
     getAllPortInstances: vi.fn(async () => []),
@@ -97,6 +99,7 @@ import { useUiStore } from "@/resources/store/uiStore";
 import { useSelectionStore } from "@/resources/store/selectionStore";
 
 const CLASS_INSTANCE_UUID = "ci-1";
+const SCENE_INSTANCE_UUID = "si-1";
 
 function metaAttribute(overrides: Record<string, unknown> = {}) {
   return {
@@ -121,6 +124,35 @@ function attributeInstanceJson(overrides: Record<string, unknown> = {}) {
     table_attributes: [],
     ...overrides,
   };
+}
+
+/**
+ * Nothing selected, with the open scene instance carrying `attributeInstances` of its
+ * own — the scene-fallback path. Returns the revived scene instance.
+ */
+function selectNothingWithSceneAttributes(attributeInstances: Record<string, unknown>[]): SceneInstance {
+  const sceneInstance = SceneInstance.fromJS({
+    uuid: SCENE_INSTANCE_UUID,
+    uuid_scene_type: "st-1",
+    name: "my model",
+    class_instances: [],
+    relationclasses_instances: [],
+    attribute_instances: attributeInstances,
+  }) as SceneInstance;
+  mocks.globalSelectedObject.getObject.mockReturnValue(undefined);
+  mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+  mocks.instanceUtility.getClassInstance.mockResolvedValue(undefined);
+  mocks.instanceUtility.getSceneInstance.mockResolvedValue(sceneInstance);
+  return sceneInstance;
+}
+
+function sceneAttributeInstanceJson(overrides: Record<string, unknown> = {}) {
+  return attributeInstanceJson({
+    uuid: "ai-scene",
+    assigned_uuid_class_instance: undefined,
+    assigned_uuid_scene_instance: SCENE_INSTANCE_UUID,
+    ...overrides,
+  });
 }
 
 /** Select a class instance carrying `attributeInstances` and return the revived instance. */
@@ -238,7 +270,7 @@ describe("AttributeWindow", () => {
     expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
   });
 
-  it("clears the window on removeAttributeGui (the old delayedReset)", async () => {
+  it("drops the element's attributes on removeAttributeGui (the old delayedReset)", async () => {
     selectClassInstanceWith([attributeInstanceJson()]);
 
     render(<AttributeWindow firstLevel />);
@@ -250,6 +282,69 @@ describe("AttributeWindow", () => {
 
     await waitFor(() => expect(screen.queryByDisplayValue("hello")).toBeNull());
     expect(screen.queryByText("Dynamic Attributes")).toBeNull();
+    // The deselection falls through to the open scene instance, which here has no
+    // attributes of its own — only its static block is left.
+    expect(screen.getByDisplayValue(SCENE_INSTANCE_UUID)).toBeTruthy();
+  });
+
+  it("renders nothing at all when no scene is open", async () => {
+    mocks.globalSelectedObject.getObject.mockReturnValue(undefined);
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(undefined);
+
+    const { container } = render(<AttributeWindow firstLevel />);
+    eventBus.publish("updateAttributeGui");
+
+    await waitFor(() => expect(container.firstChild).toBeNull());
+  });
+
+  // --- the scene fallback: nothing selected -> the open scene instance ---------------
+
+  it("shows the opened scene instance's attributes when no element is selected", async () => {
+    selectNothingWithSceneAttributes([sceneAttributeInstanceJson({ value: "model name" })]);
+
+    render(<AttributeWindow firstLevel />);
+    eventBus.publish("updateAttributeGui");
+
+    // static block: the scene's uuid and its name, labelled "Scene" rather than "Class"
+    await waitFor(() => expect(screen.getByDisplayValue(SCENE_INSTANCE_UUID)).toBeTruthy());
+    expect(screen.getByLabelText("Scene")).toBeTruthy();
+    expect(screen.getByDisplayValue("my model")).toBeTruthy();
+    // and its own dynamic attributes
+    expect(screen.getByText("Dynamic Attributes")).toBeTruthy();
+    expect(screen.getByDisplayValue("model name")).toBeTruthy();
+  });
+
+  it("edits a scene attribute and flags the scene dirty", async () => {
+    const sceneInstance = selectNothingWithSceneAttributes([sceneAttributeInstanceJson({ value: "model name" })]);
+    const published: AttributeInstance[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (p) => published.push(p));
+
+    render(<AttributeWindow firstLevel />);
+    eventBus.publish("updateAttributeGui");
+    const input = await screen.findByDisplayValue("model name");
+
+    fireEvent.change(input, { target: { value: "renamed model" } });
+    fireEvent.blur(input);
+    sub.dispose();
+
+    expect(sceneInstance.attribute_instances[0].value).toBe("renamed model");
+    expect(published).toHaveLength(1);
+    await waitFor(() => expect(mocks.globalObject.doSceneInstancePatch).toBe(true));
+  });
+
+  it("rebuilds on tabChanged, which is all a tab switch publishes", async () => {
+    selectClassInstanceWith([attributeInstanceJson()]);
+
+    render(<AttributeWindow firstLevel />);
+    eventBus.publish("updateAttributeGui");
+    await screen.findByDisplayValue("hello");
+
+    // The new tab holds another scene, and the switch cleared the selection.
+    selectNothingWithSceneAttributes([sceneAttributeInstanceJson({ value: "other model" })]);
+    eventBus.publish("tabChanged");
+
+    await waitFor(() => expect(screen.getByDisplayValue("other model")).toBeTruthy());
+    expect(screen.queryByDisplayValue("hello")).toBeNull();
   });
 
   it("opens the reference dialog with the attribute as payload", async () => {

@@ -10,6 +10,7 @@ import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { eventBus } from "@/resources/services/event-bus";
+import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
 
 /**
  * P5 port of the old `resources/instance_creation_handler.ts` (631 lines,
@@ -155,6 +156,106 @@ export class InstanceCreationHandler {
     attribute_instance.name = attribute.name;
 
     return attribute_instance;
+  }
+
+  /**
+   * Instantiate the attributes the SCENE TYPE declares but the scene instance has no
+   * AttributeInstance for yet, and return the ones created.
+   *
+   * NOT IN THE OLD CLIENT (nor on the server): a class instance gets an
+   * AttributeInstance per meta attribute the moment it is created (see
+   * `createClassInstance` below), a scene instance got none — so scene-type attributes
+   * ("Name", "Comment", … — every example metamodel declares some) had no data behind
+   * them anywhere. The attribute window shows them now, which is what needs them to
+   * exist. Called when a scene is created and when one is loaded, so models saved
+   * before this change pick their attributes up as well; only what is MISSING is added,
+   * so loading a scene again is a no-op.
+   *
+   * Only the ACTIVE tab's scene is reconciled: `createAttributeInstance` re-resolves the
+   * owner through `instanceUtility.getSceneInstance`, which answers from the active tab
+   * first and falls back to the scene TREE — whose nodes are separate objects merged by
+   * uuid. Reconciling a background tab could therefore attach the new instances to a
+   * copy nobody renders or saves.
+   */
+  async createMissingSceneAttributeInstances(sceneInstance: SceneInstance): Promise<AttributeInstance[]> {
+    const created: AttributeInstance[] = [];
+    if (!sceneInstance) return created;
+
+    const activeSceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+    if (activeSceneInstance !== sceneInstance) return created;
+
+    // A shared scene the user may only read is left untouched: the instances could never
+    // be saved, and flagging the scene dirty would pop the auto-save's authorization
+    // alert on nothing more than opening it. The owner's client adds them instead.
+    if (this.globalObjectInstance.currentTabAccess === "read") return created;
+
+    // With collaborators already in the session, someone else's client either created
+    // these attributes already (they arrive over the Y.Doc) or will — two clients
+    // instantiating the same scene-type attribute would each mint their own uuid and the
+    // scene would end up holding the field twice.
+    const session = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
+    if (session && session.awareness.getStates().size > 1) return created;
+
+    const sceneType = await this.metaUtility.getTabContextSceneType();
+    if (!sceneType) return created;
+
+    for (const attribute of sceneType.attributes) {
+      const alreadyInstantiated = sceneInstance.attribute_instances.some(
+        (attribute_instance) => attribute_instance.uuid_attribute == attribute.uuid,
+      );
+      if (alreadyInstantiated) continue;
+
+      // Same value rule as createClassInstance: the meta default for a plain attribute,
+      // "" for a table one (its rows are added in the table dialog).
+      const value =
+        attribute.attribute_type.has_table_attribute.length == 0
+          ? attribute.default_value
+            ? attribute.default_value
+            : "not defined"
+          : "";
+
+      created.push(
+        await this.createAttributeInstance(
+          attribute,
+          sceneInstance.uuid,
+          null as any,
+          value,
+          null as any,
+          null as any,
+          null as any,
+          null as any,
+          null as any,
+          null as any,
+        ),
+      );
+    }
+
+    if (created.length > 0) {
+      this.logger.log(
+        `${created.length} attribute instance(s) created for scene_instance ${sceneInstance.uuid}`,
+        "done",
+      );
+      // Same dirty-flag rule as a newly dropped class instance (see onDrawingMode).
+      if (this.globalObjectInstance.autoSave) {
+        this.globalObjectInstance.doSceneInstancePatch = true;
+        if (this.globalObjectInstance.currentTabAccess) {
+          this.globalObjectInstance.doSceneInstancePatchLocal = true;
+        }
+      }
+      // Hand the very same instances to any collaborator joining later, so nobody mints
+      // a second set for the same scene-type attributes.
+      if (session && !session.applyingRemote) {
+        applyLocalChangeToYDoc(
+          session.ydoc,
+          { type: "add_scene_attribute_instances", attributeInstances: created },
+          session.localOrigin,
+        );
+      }
+      // The attribute window is showing this scene whenever nothing is selected.
+      this.eventAggregator.publish("updateAttributeGui");
+    }
+
+    return created;
   }
 
   //-------------------------------------------------

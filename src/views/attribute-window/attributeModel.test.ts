@@ -74,6 +74,8 @@ import { eventBus } from "@/resources/services/event-bus";
 
 const CLASS_INSTANCE_UUID = "ci-1";
 const CLASS_UUID = "class-1";
+const SCENE_INSTANCE_UUID = "si-1";
+const SCENE_TYPE_UUID = "st-1";
 
 /**
  * A meta attribute, shaped as the server sends it. Not revived into a gds `Attribute`
@@ -148,13 +150,13 @@ beforeEach(() => {
 });
 
 describe("buildAttributeGroups", () => {
-  it("returns the reset state when nothing is selected", async () => {
+  it("returns the reset state when no scene is open", async () => {
     mocks.globalSelectedObject.getObject.mockReturnValue(undefined);
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(undefined);
 
     const groups = await buildAttributeGroups();
 
     expect(groups).toEqual(emptyAttributeGroups());
-    expect(mocks.instanceUtility.getTabContextSceneInstance).not.toHaveBeenCalled();
   });
 
   it("resolves the selected mesh to its class instance and groups a plain attribute", async () => {
@@ -276,6 +278,91 @@ describe("buildAttributeGroups", () => {
     expect(groups.fileTypeUuids).toEqual(["ai-file"]);
   });
 
+  // --- the scene fallback: nothing selected -> the open scene instance's attributes ---
+
+  /** A scene carrying its own attribute instances (parented by `assigned_uuid_scene_instance`). */
+  function makeSceneWithOwnAttributes(attributeInstances: Record<string, unknown>[]): SceneInstance {
+    return SceneInstance.fromJS({
+      uuid: SCENE_INSTANCE_UUID,
+      uuid_scene_type: SCENE_TYPE_UUID,
+      name: "my model",
+      class_instances: [],
+      relationclasses_instances: [],
+      attribute_instances: attributeInstances,
+    }) as SceneInstance;
+  }
+
+  function sceneAttributeInstanceJson(overrides: Record<string, unknown> = {}) {
+    return attributeInstanceJson({
+      uuid: "ai-scene",
+      assigned_uuid_class_instance: undefined,
+      assigned_uuid_scene_instance: SCENE_INSTANCE_UUID,
+      ...overrides,
+    });
+  }
+
+  it("shows the open scene instance's attributes when nothing is selected", async () => {
+    const sceneInstance = makeSceneWithOwnAttributes([sceneAttributeInstanceJson({ value: "model name" })]);
+    mocks.globalSelectedObject.getObject.mockReturnValue(undefined);
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+    mocks.instanceUtility.getClassInstance.mockResolvedValue(undefined);
+    mocks.instanceUtility.getSceneInstance.mockResolvedValue(sceneInstance);
+
+    const groups = await buildAttributeGroups();
+
+    expect(groups.currentSceneInstance).toBe(sceneInstance);
+    expect(groups.currentClassInstance).toBeNull();
+    expect(groups.currentPortInstance).toBeNull();
+    expect(groups.currentRelationclassInstance).toBeNull();
+    expect(groups.plain.map((e) => e.attributeInstance.value)).toEqual(["model name"]);
+    // the meta attribute is resolved through the SCENE TYPE, not a class
+    expect(mocks.metaUtility.getMetaAttributeWithSequence).toHaveBeenCalledWith("attr-1", SCENE_TYPE_UUID);
+  });
+
+  it("falls back to the scene when a stale selection matches no instance", async () => {
+    // globalSelectedObject starts as an empty THREE.Mesh and keeps the last mesh after a
+    // deletion, so "nothing selected" reaches here as a uuid that resolves to nothing.
+    const sceneInstance = makeSceneWithOwnAttributes([sceneAttributeInstanceJson()]);
+    mocks.globalSelectedObject.getObject.mockReturnValue({ uuid: "not-an-instance" });
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+    mocks.instanceUtility.getClassInstance.mockResolvedValue(undefined);
+    mocks.instanceUtility.getSceneInstance.mockResolvedValue(sceneInstance);
+
+    const groups = await buildAttributeGroups();
+
+    expect(groups.currentSceneInstance).toBe(sceneInstance);
+    expect(groups.plain).toHaveLength(1);
+  });
+
+  it("prefers the selected element over the scene", async () => {
+    const { sceneInstance, classInstance } = makeSceneWithClassInstance([attributeInstanceJson()]);
+    sceneInstance.attribute_instances = [
+      AttributeInstance.fromJS(sceneAttributeInstanceJson()) as AttributeInstance,
+    ];
+    mocks.globalSelectedObject.getObject.mockReturnValue({ uuid: CLASS_INSTANCE_UUID });
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+    mocks.instanceUtility.getClassInstance.mockResolvedValue(classInstance);
+
+    const groups = await buildAttributeGroups();
+
+    expect(groups.currentSceneInstance).toBeNull();
+    expect(groups.currentClassInstance).toBe(classInstance);
+    expect(groups.plain.map((e) => e.attributeInstance.uuid)).toEqual(["ai-1"]);
+  });
+
+  it("shows the scene with no dynamic attributes when the scene type declares none", async () => {
+    const sceneInstance = makeSceneWithOwnAttributes([]);
+    mocks.globalSelectedObject.getObject.mockReturnValue(undefined);
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+
+    const groups = await buildAttributeGroups();
+
+    expect(groups.currentSceneInstance).toBe(sceneInstance);
+    expect(groups.plain).toEqual([]);
+    expect(groups.table).toEqual([]);
+    expect(groups.reference).toEqual([]);
+  });
+
   it("reads a port instance's attributes when the selection is a port", async () => {
     const sceneInstance = SceneInstance.fromJS({
       uuid: "si-1",
@@ -312,6 +399,7 @@ describe("applyFieldChange", () => {
     currentClassInstance: null,
     currentPortInstance: null,
     currentRelationclassInstance: null,
+    currentSceneInstance: null,
     ...over,
   });
 
@@ -360,6 +448,56 @@ describe("applyFieldChange", () => {
     await applyFieldChange(attributeInstance, ownerOf());
 
     expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).not.toHaveBeenCalled();
+  });
+
+  it("commits an attribute whose stored value is null instead of throwing", async () => {
+    const attributeInstance = AttributeInstance.fromJS(attributeInstanceJson({ value: null })) as AttributeInstance;
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentClassInstance: classInstance }));
+
+    expect(attributeInstance.value).toBe("");
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
+  });
+
+  it("flags the scene dirty for a scene-owned attribute, without hybrid algorithms", async () => {
+    const sceneInstance = { uuid: SCENE_INSTANCE_UUID } as never;
+    const attributeInstance = AttributeInstance.fromJS(
+      attributeInstanceJson({ assigned_uuid_class_instance: undefined, assigned_uuid_scene_instance: SCENE_INSTANCE_UUID }),
+    ) as AttributeInstance;
+    const received: AttributeInstance[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (payload) => received.push(payload));
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentSceneInstance: sceneInstance }));
+    sub.dispose();
+
+    // The vizrep checker resolves scene-parented attributes through the scene type.
+    expect(received).toEqual([attributeInstance]);
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
+    // Neither hybrid dispatch applies to a scene, and there is no Yjs case for one.
+    expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).not.toHaveBeenCalled();
+    expect(mocks.applyLocalChangeToYDoc).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts a scene-owned attribute as a scene_attribute_value change when shared", async () => {
+    const session = { ydoc: { fake: "ydoc" }, localOrigin: {}, applyingRemote: false };
+    mocks.sharedDocService.forTab.mockReturnValue(session);
+    const attributeInstance = AttributeInstance.fromJS(
+      attributeInstanceJson({ value: "shared model name" }),
+    ) as AttributeInstance;
+
+    await applyFieldChange(attributeInstance, ownerOf({ currentSceneInstance: { uuid: SCENE_INSTANCE_UUID } as never }));
+
+    // The scene owns the attribute, and a Y.Doc holds one scene -> no owner uuid.
+    expect(mocks.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      {
+        type: "scene_attribute_value",
+        attributeUuid: attributeInstance.uuid,
+        value: "shared model name",
+      },
+      session.localOrigin,
+    );
+    expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(true);
   });
 
   it("writes an attribute_value change to the YDoc and sets the local flag when shared", async () => {

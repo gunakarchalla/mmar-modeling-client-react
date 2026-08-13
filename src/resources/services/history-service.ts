@@ -26,6 +26,7 @@ import {
   type InstanceChange,
   type Json,
   type SceneDelta,
+  type SceneFieldsChange,
 } from "./scene-diff";
 
 /**
@@ -430,7 +431,8 @@ export class HistoryService {
     if (globalSelectedObject.object?.uuid === uuid) globalSelectedObject.getObject();
   }
 
-  private applySceneFields(scene: SceneInstance, fields: { name?: string; description?: string }): void {
+  private applySceneFields(scene: SceneInstance, fields: SceneFieldsChange): void {
+    if (fields.attributes) this.applySceneAttributes(scene, fields.attributes);
     if (fields.description !== undefined) scene.description = fields.description;
     if (fields.name === undefined) return;
 
@@ -445,6 +447,29 @@ export class HistoryService {
     const tabIndex = useTabsStore.getState().tabs.findIndex((tab) => tab.uuid === scene.uuid);
     if (tabIndex !== -1) useTabsStore.getState().renameTab(tabIndex, fields.name);
     eventBus.publish("updateSceneGroup");
+  }
+
+  /**
+   * Move the scene instance's OWN attribute values back (the fields the attribute window
+   * edits while nothing is selected). Same three follow-ups a class attribute's undo
+   * gets in `applyInstanceChange`: write the value in place, tell collaborators, re-run
+   * the vizrep in case the scene type's geometry reads the value.
+   */
+  private applySceneAttributes(scene: SceneInstance, attributes: { uuid: string; value: string }[]): void {
+    for (const attribute of attributes) {
+      const attributeInstance = (scene.attribute_instances ?? []).find(
+        (entry) => entry.uuid === attribute.uuid,
+      );
+      if (!attributeInstance) continue;
+      attributeInstance.value = attribute.value;
+
+      this.broadcast({
+        type: "scene_attribute_value",
+        attributeUuid: attribute.uuid,
+        value: attribute.value,
+      });
+      eventBus.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
+    }
   }
 
   // -----------------------------------------------------------------------

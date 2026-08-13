@@ -24,11 +24,17 @@ import UploadImageDialog from "@/views/dialogs/UploadImageDialog";
  * P8 port of `views/attribute-window/attribute-window.{ts,html}` (351 + 182 lines).
  * Shows the attribute instances of the currently selected class / port /
  * relationclass instance, grouped into plain, table and reference attributes.
+ * With nothing selected it shows the OPEN SCENE INSTANCE's own attributes instead —
+ * see the scene-fallback note on `buildAttributeGroups`.
  *
  * WIRING (replaces the Aurelia `attached()` subscriptions):
  *  - `updateAttributeGui` (bus) -> rebuild the groups. The interaction handler
  *    publishes `removeAttributeGui` and then `updateAttributeGui` 10 ms later.
- *  - `removeAttributeGui` (bus) -> the old `delayedReset()`: clear after 10 ms.
+ *  - `removeAttributeGui` (bus) -> the old `delayedReset()`, now a delayed REBUILD:
+ *    dropping the element's attributes means falling back to the scene's, not showing
+ *    an empty panel.
+ *  - `tabChanged` (bus) -> another tab means another scene instance, and the tab
+ *    switch clears the selection without touching the attribute channels.
  *  - `useSelectionStore` (P5) -> `revision` is an ADDITIONAL rebuild trigger, so an
  *    in-place attribute mutation that calls `bump()` re-renders the window without a
  *    bus round-trip. Selection identity still comes from the engine via the bus, so
@@ -72,15 +78,19 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
   // Old `delayedReset()`: reset with a 10 ms delay. The original comment says the
   // delay is "needed for text mesh update since we need the context of the old
   // values"; it also lets the interaction handler's paired `updateAttributeGui`
-  // (published 10 ms after `removeAttributeGui`) cancel the reset via `rebuild()`.
+  // (published 10 ms after `removeAttributeGui`) cancel it via `rebuild()`.
+  //
+  // It re-derives rather than blanking: "the selected element's attributes are gone"
+  // now means "show the open scene instance's attributes", which only
+  // `buildAttributeGroups` can decide. It still clears the window whenever there is
+  // nothing at all to show, since that is the state it returns with no scene open.
   const delayedReset = useCallback(() => {
     if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     resetTimerRef.current = setTimeout(() => {
       resetTimerRef.current = null;
-      runIdRef.current++;
-      setGroups(emptyAttributeGroups());
+      rebuild();
     }, 10);
-  }, []);
+  }, [rebuild]);
 
   // Old `gltfUploaded(message)` / `imageUploaded(message)`: both did nothing but run the
   // hybrid algorithms for the uploaded attribute instance — that is what swaps an
@@ -110,6 +120,10 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
       // algorithms, and its payload carries a fileUuid rather than the instance.
       eventBus.subscribe("fileUploaded", rebuild),
       eventBus.subscribe("tableAttributeChanged", rebuild),
+      // Switching (or closing) a tab swaps the scene instance whose attributes the
+      // fallback shows, and clears the selection without publishing on the attribute
+      // channels — see tabActions.applyEngineTabSelection.
+      eventBus.subscribe("tabChanged", rebuild),
     ];
     return () => {
       subs.forEach((s) => s.dispose());
@@ -122,18 +136,19 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
     rebuild();
   }, [revision, rebuild]);
 
-  const { currentClassInstance, currentPortInstance, currentRelationclassInstance } = groups;
+  const { currentClassInstance, currentPortInstance, currentRelationclassInstance, currentSceneInstance } =
+    groups;
   const hasDynamic = groups.plain.length !== 0 || groups.table.length !== 0 || groups.reference.length !== 0;
 
-  // The window is only shown while an element is selected. `buildAttributeGroups`
-  // resolves the selected THREE object back to its class / port / relationclass
-  // instance; when nothing is selected (clicking empty space, deleting an instance)
-  // all three are null, so there is nothing to display — render nothing rather than an
-  // empty panel. All hooks above run unconditionally, so this early return is safe.
-  const hasSelection = Boolean(
-    currentClassInstance || currentPortInstance || currentRelationclassInstance,
+  // `buildAttributeGroups` resolves the selected THREE object back to its class / port /
+  // relationclass instance, and falls back to the open scene instance when nothing is
+  // selected. All four are null only when no scene is open at all — then there is
+  // nothing to display, so render nothing rather than an empty panel. All hooks above
+  // run unconditionally, so this early return is safe.
+  const hasInstance = Boolean(
+    currentClassInstance || currentPortInstance || currentRelationclassInstance || currentSceneInstance,
   );
-  if (!hasSelection) return null;
+  if (!hasInstance) return null;
 
   // `openDialog(dialog, attributeInstance)` in the old view: publish the context on the
   // bus (plan §5 `openReferenceDialog`) AND open the single shared dialog. The old
@@ -143,6 +158,9 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
     openDialog("referenceAttribute", { attributeInstance: enhanced.attributeInstance });
   }
 
+  // No scene-instance field in the payload: the dialog only uses the owner to dispatch
+  // the hybrid algorithms (class / port only), and it resolves the column structure of a
+  // scene-owned table attribute through metaUtility instead — see its `load()`.
   function openTableDialog(enhanced: EnhancedAttributeInstance) {
     openDialog("tableAttribute", {
       attributeInstance: enhanced.attributeInstance,
@@ -165,6 +183,14 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
       )}
       {currentPortInstance && (
         <StaticAttributes uuid={currentPortInstance.uuid} name={currentPortInstance.name} />
+      )}
+      {/* nothing selected: the open scene instance itself */}
+      {currentSceneInstance && (
+        <StaticAttributes
+          uuid={currentSceneInstance.uuid}
+          name={currentSceneInstance.name}
+          nameLabel="Scene"
+        />
       )}
 
       {hasDynamic && (
@@ -243,8 +269,20 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
   );
 }
 
-/** The old "Static Attributes" block: read-only UUID + Class name. */
-function StaticAttributes({ uuid, name }: { uuid: string; name: string }) {
+/**
+ * The old "Static Attributes" block: read-only UUID + Class name. `nameLabel` is the
+ * one addition — the scene-instance block labels the same field "Scene", which is what
+ * tells the user at a glance that these are the model's attributes, not an element's.
+ */
+function StaticAttributes({
+  uuid,
+  name,
+  nameLabel = "Class",
+}: {
+  uuid: string;
+  name: string;
+  nameLabel?: string;
+}) {
   return (
     <Box>
       <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
@@ -261,7 +299,7 @@ function StaticAttributes({ uuid, name }: { uuid: string; name: string }) {
       <TextField
         InputProps={{ readOnly: true }}
         size="small"
-        label="Class"
+        label={nameLabel}
         value={name ?? ""}
         sx={{ width: "100%" }}
       />

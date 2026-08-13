@@ -147,6 +147,51 @@ describe("checkForVizRepUpdate", () => {
     await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
     expect(fakeGlobal.globalObject.readyForVizRepUpdate).toBe(true);
   });
+
+  // A SceneType has no vizRep of its own — `geometry` is null in every example
+  // metamodel — so editing a scene instance's own attribute used to throw
+  // "Cannot read properties of null (reading 'toString')" here.
+  it("skips the update for a scene-instance attribute whose scene type draws nothing", async () => {
+    const sceneAttribute = AttributeInstance.fromJS({
+      uuid: "ai-scene",
+      uuid_attribute: ATTR_UUID,
+      assigned_uuid_scene_instance: "si-1",
+      value: "my model",
+    }) as AttributeInstance;
+    utils.instanceUtility.getSceneInstance.mockResolvedValue({ uuid: "si-1", uuid_scene_type: "st-1" });
+    utils.metaUtility.getSceneTypeByUUID.mockResolvedValue({ uuid: "st-1", geometry: null });
+
+    await expect(vizrepUpdateChecker.checkForVizRepUpdate(sceneAttribute)).resolves.toBeUndefined();
+
+    expect(gcMock.graphicContext.runVizRepFunction).not.toHaveBeenCalled();
+    expect(fakeGlobal.globalObject.readyForVizRepUpdate).toBe(true);
+  });
+
+  it("redraws a scene instance whose scene type does have a geometry", async () => {
+    const sceneAttribute = AttributeInstance.fromJS({
+      uuid: "ai-scene",
+      uuid_attribute: ATTR_UUID,
+      assigned_uuid_scene_instance: "si-1",
+      value: "my model",
+    }) as AttributeInstance;
+    const sceneInstance = { uuid: "si-1", uuid_scene_type: "st-1", custom_variables: {} };
+    utils.instanceUtility.getSceneInstance.mockResolvedValue(sceneInstance);
+    utils.metaUtility.getSceneTypeByUUID.mockResolvedValue({ uuid: "st-1", geometry: GEOMETRY_REFERENCING_ATTR });
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(sceneAttribute);
+
+    expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR);
+    expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledWith(sceneInstance);
+  });
+
+  it("releases the lock even when the update throws", async () => {
+    gcMock.graphicContext.runVizRepFunction.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance())).rejects.toThrow("boom");
+
+    // Left false, expression-utility's `while (!readyForVizRepUpdate)` would spin forever.
+    expect(fakeGlobal.globalObject.readyForVizRepUpdate).toBe(true);
+  });
 });
 
 describe("event-bus channels", () => {

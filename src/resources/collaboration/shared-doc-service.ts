@@ -10,10 +10,12 @@ import { SYNC_URL } from "@/config";
 import { clearToken } from "@/resources/services/token";
 import { useCollabStore } from "@/resources/store/collabStore";
 import { useSelectionStore } from "@/resources/store/selectionStore";
+import { SCENE_FIELDS_KEY } from "@/resources/services/scene-diff";
 import {
   sceneInstanceToYDoc,
   applyYDocClassChangeToSceneInstance,
   applyYDocRelationChangeToSceneInstance,
+  applyYDocSceneAttributeChangeToSceneInstance,
   type YDocChangeResult,
 } from "./y-mapping";
 import { userColor, initials } from "./color-util";
@@ -292,6 +294,43 @@ export class SharedDocService {
         }
         this.notifyRemoteMutation(aggregate);
         this.notifyRemoteInstances(tabIndex, events);
+      } finally {
+        session.applyingRemote = false;
+      }
+    });
+
+    // Observer for the SCENE INSTANCE's own attributes (the ones the attribute window
+    // shows while nothing is selected). Same shape as the two above, minus the three.js
+    // work: a scene attribute has no object of its own in the scene graph.
+    const sceneAttributesMap = session.ydoc.getMap<Y.Map<unknown>>("attribute_instances");
+
+    sceneAttributesMap.observeDeep((events: Y.YEvent<Y.Map<unknown>>[], transaction: Y.Transaction) => {
+      if (transaction.origin === session.localOrigin) return;
+      if (session.applyingRemote) return;
+
+      const tabCtx = this.globalObjectInstance.tabContext[tabIndex];
+      if (!tabCtx) return;
+
+      session.applyingRemote = true;
+      try {
+        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+        for (const event of events) {
+          const r = applyYDocSceneAttributeChangeToSceneInstance(event, tabCtx.sceneInstance, this.globalObjectInstance);
+          aggregate.changedAttributeInstances.push(...r.changedAttributeInstances);
+        }
+
+        // A scene-type vizRep can read the scene's attributes, so the same refresh a
+        // class attribute triggers applies here.
+        for (const ai of aggregate.changedAttributeInstances) {
+          eventBus.publish("checkForVizRepUpdateByAttributeInstance", ai);
+        }
+        this.notifyRemoteMutation(aggregate);
+        // The scene instance itself is what changed; `notifyRemoteInstances` names
+        // instances by uuid for the undo history, and the scene's own key is the
+        // sentinel scene-diff uses for it.
+        if (aggregate.changedAttributeInstances.length > 0) {
+          eventBus.publish("remoteSceneInstanceChanged", { tabIndex, instanceUuids: [SCENE_FIELDS_KEY] });
+        }
       } finally {
         session.applyingRemote = false;
       }

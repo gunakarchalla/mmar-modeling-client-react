@@ -8,7 +8,7 @@
 // — neither is needed here). gds fixtures are REAL via fromJS. eventBus is REAL so we
 // can assert the publish. Node env: no THREE renderer is constructed.
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Class, SceneInstance, ClassInstance } from "@gds";
+import { Class, SceneInstance, SceneType, ClassInstance } from "@gds";
 
 const mocks = vi.hoisted(() => ({
   globalObject: {
@@ -19,11 +19,18 @@ const mocks = vi.hoisted(() => ({
     render: false,
     selectedTab: 0,
     tabContext: [] as unknown[],
+    autoSave: false,
+    doSceneInstancePatch: false,
+    doSceneInstancePatchLocal: false,
+    currentTabAccess: undefined as unknown,
+    sharedDocServiceRef: undefined as unknown,
   },
+  applyLocalChangeToYDoc: vi.fn(),
   metaUtility: {
     getMetaClass: vi.fn(),
     getMetaRelationclass: vi.fn(),
     getMetaPort: vi.fn(),
+    getTabContextSceneType: vi.fn(),
     parseMetaFunction: vi.fn(async () => () => ({})),
   },
   instanceUtility: {
@@ -43,6 +50,7 @@ vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject 
 vi.mock("@/engine/graphic-context", () => ({ graphicContext: mocks.graphicContext, GraphicContext: class {} }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
+vi.mock("@/resources/collaboration/y-mapping", () => ({ applyLocalChangeToYDoc: mocks.applyLocalChangeToYDoc }));
 
 const { instanceCreationHandler } = await import("./instance-creation-handler");
 const { eventBus } = await import("@/resources/services/event-bus");
@@ -50,6 +58,8 @@ const { eventBus } = await import("@/resources/services/event-bus");
 const CLASS_META_UUID = "88888888-8888-4888-8888-888888888888";
 const ATTR_UUID = "77777777-7777-4777-8777-777777777777";
 const SCENE_UUID = "99999999-9999-4999-8999-999999999999";
+const SCENE_TYPE_UUID = "st-1";
+const SCENE_ATTR_UUID = "66666666-6666-4666-8666-666666666666";
 
 /** A metaclass with exactly one non-table attribute and no ports. */
 function makeMetaClass(): Class {
@@ -67,6 +77,27 @@ function makeMetaClass(): Class {
     ],
     ports: [],
   }) as Class;
+}
+
+/** The scene type of the open tab, declaring one plain attribute of its own. */
+function makeSceneType(): SceneType {
+  return SceneType.fromJS({
+    uuid: SCENE_TYPE_UUID,
+    name: "MySceneType",
+    geometry: "function vizRep(gc){}",
+    classes: [],
+    relationclasses: [],
+    ports: [],
+    procedures: [],
+    attributes: [
+      {
+        uuid: SCENE_ATTR_UUID,
+        name: "Comment",
+        default_value: "a comment",
+        attribute_type: { uuid: "at-1", name: "String", has_table_attribute: [] },
+      },
+    ],
+  }) as SceneType;
 }
 
 function makeScene(): SceneInstance {
@@ -89,9 +120,20 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.globalObject.attribute_instances = [];
   mocks.globalObject.role_instances = [];
+  Object.assign(mocks.globalObject, {
+    autoSave: false,
+    doSceneInstancePatch: false,
+    doSceneInstancePatchLocal: false,
+    currentTabAccess: undefined,
+    sharedDocServiceRef: undefined,
+  });
   sceneInstance = makeScene();
   mocks.metaUtility.getMetaClass.mockResolvedValue(makeMetaClass());
+  mocks.metaUtility.getTabContextSceneType.mockResolvedValue(makeSceneType());
   mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+  mocks.instanceUtility.getSceneInstance.mockImplementation(async (uuid: string) =>
+    uuid === sceneInstance.uuid ? sceneInstance : undefined,
+  );
   // resolve the attribute's owner back to the instance the scene actually holds
   mocks.instanceUtility.getClassInstance.mockImplementation(async (uuid: string) => sceneInstance.class_instances.find((ci) => ci.uuid === uuid));
 });
@@ -132,5 +174,120 @@ describe("InstanceCreationHandler.createClassInstance", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0].sceneInstanceUuid).toBe(SCENE_UUID);
     expect(seen[0].action).toBe("added");
+  });
+});
+
+// The scene-level counterpart of "propagates the metamodel attributes": a scene
+// instance is created empty, so its scene type's attributes are instantiated here.
+describe("InstanceCreationHandler.createMissingSceneAttributeInstances", () => {
+  /** A shared session with `users` clients present in its awareness. */
+  const fakeSession = (users: number) => ({
+    ydoc: { fake: "ydoc" },
+    localOrigin: {},
+    applyingRemote: false,
+    awareness: { getStates: () => new Map(Array.from({ length: users }, (_, i) => [i, {}])) },
+  });
+
+  it("instantiates a scene-type attribute the scene instance does not have yet", async () => {
+    const created = await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+
+    expect(created).toHaveLength(1);
+    expect(sceneInstance.attribute_instances).toEqual(created);
+    const [attributeInstance] = created;
+    expect(attributeInstance.uuid_attribute).toBe(SCENE_ATTR_UUID);
+    expect(attributeInstance.name).toBe("Comment");
+    expect(attributeInstance.value).toBe("a comment");
+    // parented by the scene, which is how the attribute window and the vizrep checker
+    // resolve it back to the scene type
+    expect(attributeInstance.assigned_uuid_scene_instance).toBe(SCENE_UUID);
+    expect(mocks.globalObject.attribute_instances).toEqual(created);
+  });
+
+  it("is a no-op when the attribute is already instantiated (re-opening a scene)", async () => {
+    await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+    mocks.globalObject.attribute_instances = [];
+
+    const created = await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+
+    expect(created).toEqual([]);
+    expect(sceneInstance.attribute_instances).toHaveLength(1);
+    expect(mocks.globalObject.attribute_instances).toEqual([]);
+  });
+
+  it("flags the scene for the auto-save when it created something", async () => {
+    mocks.globalObject.autoSave = true;
+
+    await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
+    // not shared -> the shared-mode flag stays untouched
+    expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(false);
+  });
+
+  it("leaves a read-only shared scene alone", async () => {
+    mocks.globalObject.autoSave = true;
+    mocks.globalObject.currentTabAccess = "read";
+
+    const created = await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+
+    expect(created).toEqual([]);
+    expect(sceneInstance.attribute_instances).toEqual([]);
+    // nothing to save, and no authorization alert from the shared auto-save
+    expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(false);
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
+  });
+
+  it("flags a writable shared scene through the local-patch flag as well", async () => {
+    mocks.globalObject.autoSave = true;
+    mocks.globalObject.currentTabAccess = "edit";
+
+    await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
+    expect(mocks.globalObject.doSceneInstancePatchLocal).toBe(true);
+  });
+
+  it("hands the created instances to collaborators when alone in a shared session", async () => {
+    const session = fakeSession(1);
+    mocks.globalObject.sharedDocServiceRef = { forTab: () => session };
+
+    const created = await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+
+    expect(created).toHaveLength(1);
+    expect(mocks.applyLocalChangeToYDoc).toHaveBeenCalledWith(
+      session.ydoc,
+      { type: "add_scene_attribute_instances", attributeInstances: created },
+      session.localOrigin,
+    );
+  });
+
+  it("leaves the instantiation to the peers already in the session", async () => {
+    // Two clients each minting their own instance of the same scene-type attribute
+    // would leave the scene holding the field twice — whoever is already there either
+    // created them or will, and the Y.Doc carries them over.
+    mocks.globalObject.sharedDocServiceRef = { forTab: () => fakeSession(2) };
+
+    const created = await instanceCreationHandler.createMissingSceneAttributeInstances(sceneInstance);
+
+    expect(created).toEqual([]);
+    expect(sceneInstance.attribute_instances).toEqual([]);
+    expect(mocks.applyLocalChangeToYDoc).not.toHaveBeenCalled();
+  });
+
+  it("leaves a scene that is not the active tab's alone", async () => {
+    // Its attribute instances would attach to whatever getSceneInstance resolves, which
+    // for a background tab can be the scene tree's own copy.
+    const otherScene = SceneInstance.fromJS({
+      uuid: "other-scene",
+      uuid_scene_type: SCENE_TYPE_UUID,
+      class_instances: [],
+      relationclasses_instances: [],
+      attribute_instances: [],
+    }) as SceneInstance;
+
+    const created = await instanceCreationHandler.createMissingSceneAttributeInstances(otherScene);
+
+    expect(created).toEqual([]);
+    expect(otherScene.attribute_instances).toEqual([]);
   });
 });

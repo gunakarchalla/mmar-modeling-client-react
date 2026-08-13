@@ -376,7 +376,11 @@ function getClassInstanceName(classInstance: ClassInstance): string {
 /**
  * The meta half of the old `setMetaInformation()`: which Role does this reference
  * attribute's attribute type carry? Resolved from the currently selected class or
- * port instance, exactly like the original.
+ * port instance, exactly like the original, with one fallback added: a reference
+ * attribute of the open SCENE INSTANCE (shown when nothing is selected) belongs to
+ * neither, and `current_class_instance` may still hold the last selected element, which
+ * does not carry this attribute either. metaUtility searches the scene type first, so it
+ * covers both — without it the pickers stay empty because no Role is found.
  */
 async function resolveAttributeRole(attributeInstance: AttributeInstance): Promise<Role | undefined> {
   const attributeUUID = attributeInstance.uuid_attribute;
@@ -390,6 +394,9 @@ async function resolveAttributeRole(attributeInstance: AttributeInstance): Promi
   let currentAttribute = currentClass?.attributes.find((attribute) => attribute.uuid === attributeUUID);
   if (currentPort) {
     currentAttribute = currentPort.attributes.find((attribute) => attribute.uuid === attributeUUID) ?? currentAttribute;
+  }
+  if (!currentAttribute) {
+    currentAttribute = await metaUtility.getMetaAttribute(attributeUUID);
   }
   return currentAttribute?.attribute_type?.role;
 }

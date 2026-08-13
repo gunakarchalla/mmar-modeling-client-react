@@ -25,6 +25,9 @@ const classInstance = (uuid: string, overrides: Record<string, unknown> = {}) =>
   ...overrides,
 });
 
+/** An attribute of the scene instance itself (what the attribute window edits). */
+const sceneAttribute = (value: string, uuid = "scene-attr-1") => ({ uuid, value });
+
 const scene = (overrides: Partial<SceneSnapshot> = {}): SceneSnapshot => ({
   uuid: "scene-1",
   name: "scene",
@@ -51,6 +54,23 @@ describe("touchedUuids", () => {
 
   it("flags a scene-level rename with the scene sentinel", () => {
     expect(touchedUuids(scene(), scene({ name: "renamed" }))).toEqual([SCENE_FIELDS_KEY]);
+  });
+
+  // The scene instance's own attributes belong to the scene, so they ride along under
+  // the same sentinel — without this, editing one is not a step at all and Ctrl+Z skips
+  // straight past it.
+  it("flags an edited scene-owned attribute with the scene sentinel", () => {
+    const before = scene({ attribute_instances: [sceneAttribute("before")] });
+    const after = scene({ attribute_instances: [sceneAttribute("after")] });
+
+    expect(touchedUuids(before, after)).toEqual([SCENE_FIELDS_KEY]);
+  });
+
+  it("ignores a scene-owned attribute that did not change", () => {
+    const before = scene({ attribute_instances: [sceneAttribute("same")] });
+    const after = scene({ attribute_instances: [sceneAttribute("same")] });
+
+    expect(touchedUuids(before, after)).toEqual([]);
   });
 
   it("returns nothing for identical snapshots", () => {
@@ -143,6 +163,26 @@ describe("diffScene", () => {
 
     expect(diffScene(from, to, new Set(["a"])).sceneFields).toBeNull();
     expect(diffScene(from, to, new Set([SCENE_FIELDS_KEY])).sceneFields).toEqual({ name: "after" });
+  });
+
+  it("reports the scene's own attribute values under sceneFields", () => {
+    const from = scene({ attribute_instances: [sceneAttribute("live value")] });
+    const to = scene({ attribute_instances: [sceneAttribute("wanted value")] });
+
+    const delta = diffScene(from, to);
+
+    expect(delta.sceneFields).toEqual({ attributes: [{ uuid: "scene-attr-1", value: "wanted value" }] });
+    expect(isEmptyDelta(delta)).toBe(false);
+  });
+
+  it("keeps a scene attribute change out of a restricted diff that does not name the scene", () => {
+    const from = scene({ attribute_instances: [sceneAttribute("before")], class_instances: [classInstance("a")] });
+    const to = scene({ attribute_instances: [sceneAttribute("after")], class_instances: [classInstance("a")] });
+
+    expect(diffScene(from, to, new Set(["a"])).sceneFields).toBeNull();
+    expect(diffScene(from, to, new Set([SCENE_FIELDS_KEY])).sceneFields).toEqual({
+      attributes: [{ uuid: "scene-attr-1", value: "after" }],
+    });
   });
 
   it("is empty for identical scenes", () => {

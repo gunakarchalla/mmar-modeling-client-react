@@ -4,6 +4,7 @@ import type {
   ClassInstance,
   PortInstance,
   RelationclassInstance,
+  SceneInstance,
 } from "@gds";
 import { globalObject, globalSelectedObject } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
@@ -49,6 +50,12 @@ export interface AttributeGroups {
   currentClassInstance: ClassInstance | null;
   currentPortInstance: PortInstance | null;
   currentRelationclassInstance: RelationclassInstance | null;
+  /**
+   * The open tab's SceneInstance — set ONLY when the selection resolves to no model
+   * element, so the window falls back to the scene's own attributes. Never set at the
+   * same time as one of the three above.
+   */
+  currentSceneInstance: SceneInstance | null;
   /** `attributeInstancesNoTable` — plain fields (text / dropdown / slider / upload). */
   plain: EnhancedAttributeInstance[];
   /** `attributeInstanceTable` — attributes that own table_attributes. */
@@ -59,12 +66,13 @@ export interface AttributeGroups {
   fileTypeUuids: string[];
 }
 
-/** The `reset()` state: nothing selected, nothing to show. */
+/** The `reset()` state: no scene open, nothing to show. */
 export function emptyAttributeGroups(): AttributeGroups {
   return {
     currentClassInstance: null,
     currentPortInstance: null,
     currentRelationclassInstance: null,
+    currentSceneInstance: null,
     plain: [],
     table: [],
     reference: [],
@@ -100,28 +108,39 @@ async function getFileTypeAttributeInstanceUuids(
  * its meta attribute (sequence, ui_component, facets), sorts by sequence and splits
  * the result into the three groups the window renders.
  *
- * Returns the `reset()` state when nothing is selected.
+ * SCENE FALLBACK (not in the old client): when the selection resolves to no model
+ * element, the attribute instances of the OPEN SCENE INSTANCE are shown instead — the
+ * scene type's own attributes, which had no UI at all before. The rest of the function
+ * is untouched by this: an attribute instance parented by a scene already resolves its
+ * meta attribute through `assigned_uuid_scene_instance` -> `uuid_scene_type` below.
+ *
+ * The fallback is keyed on "no element resolved" rather than on "no selected object"
+ * because `globalSelectedObject` starts out holding an empty `THREE.Mesh` (truthy, but
+ * matching no instance) and keeps a stale mesh after the object behind it is deleted.
+ *
+ * Returns the `reset()` state when no scene is open.
  */
 export async function buildAttributeGroups(): Promise<AttributeGroups> {
   const groups = emptyAttributeGroups();
 
-  //if there is a selected object
-  const selectedObject = globalSelectedObject.getObject();
-  if (!selectedObject) return groups;
-
-  //get classInstance and its AttributeInstances
+  //get the sceneInstance of the open tab -> the attributes shown belong either to the
+  //selected element inside it, or (nothing selected) to the sceneInstance itself
   const sceneInstance = await instanceUtility.getTabContextSceneInstance();
   if (!sceneInstance) return groups;
 
-  groups.currentClassInstance =
-    sceneInstance.class_instances.find((class_instance) => class_instance.uuid == selectedObject.uuid) ?? null;
-  const portInstances = await instanceUtility.getAllPortInstancesOfTabContext();
-  groups.currentPortInstance =
-    portInstances.find((port_instance) => port_instance.uuid == selectedObject.uuid) ?? null;
-  groups.currentRelationclassInstance =
-    sceneInstance.relationclasses_instances.find(
-      (relationclass_instance) => relationclass_instance.uuid == selectedObject.uuid,
-    ) ?? null;
+  //if there is a selected object, resolve it back to its instance
+  const selectedObject = globalSelectedObject.getObject();
+  if (selectedObject) {
+    groups.currentClassInstance =
+      sceneInstance.class_instances.find((class_instance) => class_instance.uuid == selectedObject.uuid) ?? null;
+    const portInstances = await instanceUtility.getAllPortInstancesOfTabContext();
+    groups.currentPortInstance =
+      portInstances.find((port_instance) => port_instance.uuid == selectedObject.uuid) ?? null;
+    groups.currentRelationclassInstance =
+      sceneInstance.relationclasses_instances.find(
+        (relationclass_instance) => relationclass_instance.uuid == selectedObject.uuid,
+      ) ?? null;
+  }
 
   let attributeInstances: AttributeInstance[] = [];
   //if there is a classInstance
@@ -135,6 +154,11 @@ export async function buildAttributeGroups(): Promise<AttributeGroups> {
   //if there is a relationclassInstance
   else if (groups.currentRelationclassInstance) {
     attributeInstances = groups.currentRelationclassInstance.attribute_instance;
+  }
+  //nothing selected -> the attributes of the opened sceneInstance
+  else {
+    groups.currentSceneInstance = sceneInstance;
+    attributeInstances = sceneInstance.attribute_instances ?? [];
   }
 
   //for sorting after sequence number
@@ -244,6 +268,8 @@ export interface AttributeOwner {
   currentClassInstance: ClassInstance | null;
   currentPortInstance: PortInstance | null;
   currentRelationclassInstance: RelationclassInstance | null;
+  /** Set instead of the three above for an attribute of the open scene instance. */
+  currentSceneInstance: SceneInstance | null;
 }
 
 /**
@@ -261,6 +287,13 @@ export interface AttributeOwner {
  * (P8 ordering, P12). The hybrid algorithms that draw (ObjectSpace) use their own
  * private GraphicContext precisely so that overlap is safe — see
  * engine/hybrid-algorithms/objectspace-algorithms.ts.
+ *
+ * SCENE-OWNED ATTRIBUTES (`owner.currentSceneInstance`) take the same path: they
+ * broadcast as a `scene_attribute_value` change (the scene's own `attribute_instances`
+ * Y.Map) and refresh the vizrep like any other — vizrep-update-checker resolves an
+ * attribute instance through `assigned_uuid_scene_instance` to the scene type's
+ * geometry. Only the hybrid algorithms do not apply: they dispatch on a class or a
+ * port, so a scene attribute runs none, exactly as it did when nothing was selected.
  */
 export async function applyFieldChange(attributeInstance: AttributeInstance, owner: AttributeOwner): Promise<void> {
   const session = sharedDocService.forTab(globalObject.selectedTab);
@@ -269,7 +302,10 @@ export async function applyFieldChange(attributeInstance: AttributeInstance, own
   if (session?.applyingRemote) return;
 
   //update attribute value
-  attributeInstance.value = attributeInstance.value.toString();
+  // `?? ""` because the value column is nullable: an attribute instance the server sends
+  // with a null value would otherwise throw the same "Cannot read properties of null
+  // (reading 'toString')" on the first edit. Unchanged for every non-null value.
+  attributeInstance.value = (attributeInstance.value ?? "").toString();
 
   eventBus.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
 
@@ -299,6 +335,18 @@ export async function applyFieldChange(attributeInstance: AttributeInstance, own
         {
           type: "relation_attribute_value",
           relationClassInstanceUuid: owner.currentRelationclassInstance.uuid,
+          attributeUuid: attributeInstance.uuid,
+          value: attributeInstance.value,
+        },
+        session.localOrigin,
+      );
+    } else if (owner.currentSceneInstance) {
+      // The scene's own attributes live in their own top-level Y.Map — the scene is the
+      // owner, and a Y.Doc holds exactly one scene, so the change needs no owner uuid.
+      applyLocalChangeToYDoc(
+        session.ydoc,
+        {
+          type: "scene_attribute_value",
           attributeUuid: attributeInstance.uuid,
           value: attributeInstance.value,
         },

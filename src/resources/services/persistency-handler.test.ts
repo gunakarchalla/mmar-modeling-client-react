@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
     sceneInstancesPATCH: vi.fn(),
     sceneInstancesPOST: vi.fn(),
   } as any,
+  instanceCreationHandler: {
+    createMissingSceneAttributeInstances: vi.fn(async () => []),
+  } as any,
 }));
 
 vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject }));
@@ -33,6 +36,9 @@ vi.mock("@/engine/global-state-object", () => ({ globalStateObject: mocks.global
 vi.mock("@/engine/graphic-context", () => ({
   GraphicContext: class {},
   graphicContext: mocks.graphicContext,
+}));
+vi.mock("@/engine/instance-creation-handler", () => ({
+  instanceCreationHandler: mocks.instanceCreationHandler,
 }));
 vi.mock("./meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("./instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
@@ -117,6 +123,30 @@ describe("persistency-handler.persistSceneInstanceToDB", () => {
 
     expect(mocks.backendService.sceneInstancesPATCH).not.toHaveBeenCalled();
     expect(mocks.snapshotService.setSceneInstanceSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("persistency-handler.loadPersistedModel", () => {
+  // A scene saved before scene-type attributes were instantiated has none, so loading
+  // one is where the missing ones get created — that is what puts a model's own
+  // attributes in the attribute window for existing scenes.
+  it("instantiates the scene type's missing attributes for the loaded scene", async () => {
+    const scene = makeScene("s-3", "Scene 3");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+
+    await persistencyHandler.loadPersistedModel(scene);
+
+    expect(mocks.instanceCreationHandler.createMissingSceneAttributeInstances).toHaveBeenCalledWith(scene);
+  });
+
+  it("still loads the scene when the attribute instantiation fails", async () => {
+    const scene = makeScene("s-4", "Scene 4");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.instanceCreationHandler.createMissingSceneAttributeInstances.mockRejectedValueOnce(
+      new Error("boom"),
+    );
+
+    await expect(persistencyHandler.loadPersistedModel(scene)).resolves.toBeUndefined();
   });
 });
 

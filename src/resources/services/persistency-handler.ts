@@ -3,6 +3,8 @@ import { Class, Relationclass, SceneInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { globalStateObject } from "@/engine/global-state-object";
 import { GraphicContext, graphicContext } from "@/engine/graphic-context";
+import { instanceCreationHandler } from "@/engine/instance-creation-handler";
+import { describeError } from "@/resources/util/describe-error";
 import { metaUtility } from "./meta-utility";
 import { instanceUtility } from "./instance-utility";
 import { snapshotService } from "./snapshot-service";
@@ -16,7 +18,8 @@ import { logger } from "./logger";
  * injection becomes a module-singleton import.
  *
  * DROPPED INJECTIONS (unused in the source, same treatment as P5's handlers):
- *   - `instanceCreationHandler` — only appeared in the ctor, never called.
+ *   - `instanceCreationHandler` — only appeared in the ctor, never called. It is
+ *     imported again now, for the one call in `loadPersistedModel`.
  *   - `expression` (ExpressionUtility) — only fed into the per-port
  *     `new GraphicContext(...)`, whose ctor is no-arg in this repo.
  * The per-port GraphicContext is therefore built with the no-arg `new
@@ -363,9 +366,20 @@ export class PersistencyHandler {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async loadPersistedModel(modelToLoad: SceneInstance) {
     await this.importInstances();
+
+    // A scene saved before scene-type attributes were instantiated (i.e. every scene the
+    // old client ever wrote) carries none, so the attribute window would show an empty
+    // dynamic section for it. Adding the missing ones on load is what makes the scene's
+    // attributes appear for existing models too; it is a no-op once they exist. The
+    // parameter is used for this and nothing else — importInstances() reads the active
+    // tab itself, which is why the parameter used to be ignored.
+    await instanceCreationHandler
+      .createMissingSceneAttributeInstances(modelToLoad)
+      .catch((error) =>
+        this.logger.log(`Scene attribute instantiation failed: ${describeError(error)}`, "error"),
+      );
   }
 
   //function to import stored instances to the model
