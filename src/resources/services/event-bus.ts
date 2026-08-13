@@ -89,7 +89,6 @@ export interface RemoteSceneInstanceChangedPayload {
 export interface EventPayloads {
   // Auth / scenegroup lifecycle
   login: boolean;
-  initSceneGroup: void;
   updateSceneGroup: void;
 
   // Tab / instance lifecycle

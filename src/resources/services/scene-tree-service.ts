@@ -84,9 +84,9 @@ export async function loadSceneInstancesForType(sceneTypeUuid: UUID): Promise<vo
     try {
       const instances = await backendService.sceneInstancesAllGET(sceneTypeUuid);
       // A reset landed while this was in flight, so the tree we were fetching for has
-      // been rebuilt ('initSceneGroup' / a re-login). This response describes the old
-      // tree — applying it could resurrect a scene that has since gone. Drop it;
-      // initTree re-requests whatever is still expanded.
+      // been rebuilt (a re-login remounts SceneGroup and re-runs initTree). This
+      // response describes the old tree — applying it could resurrect a scene that has
+      // since gone. Drop it; initTree re-requests whatever is still expanded.
       if (startedAt !== generation) return;
 
       const node = ((globalObject.sceneTree ?? []) as SceneTypeNode[]).find(
@@ -120,9 +120,9 @@ export async function loadSceneInstancesForType(sceneTypeUuid: UUID): Promise<vo
  * WHY THIS EXISTS: the tree is otherwise append-only. `loadSceneInstancesForType` above
  * merges by uuid and never removes (deliberately — see its note), and SceneGroup's
  * `updateTree` only adds. So the only way to make a row disappear used to be a full
- * `initTree()`, which the delete dialog reached for by publishing 'initSceneGroup'.
- * That rebuilt the entire tree from the database — refetching every metamodel file and
- * every SceneType — to remove one node whose uuid the caller already had in hand.
+ * `initTree()`, which the delete dialog asked for over its own event channel. That
+ * rebuilt the entire tree from the database — refetching every metamodel file and every
+ * SceneType — to remove one node whose uuid the caller already had in hand.
  * Deleting a SceneInstance cannot change the metamodel, so none of that work was
  * answering a question the delete had raised, and the rebuild took the tree's
  * local-only nodes down with it: an imported SceneType (ImportMetamodelDialog pushes

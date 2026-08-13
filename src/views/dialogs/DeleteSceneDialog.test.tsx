@@ -120,12 +120,12 @@ describe("DeleteSceneDialog", () => {
     sub.dispose();
   });
 
-  it("removes just the deleted node instead of asking for a full tree rebuild", async () => {
-    // The regression this guards: publishing 'initSceneGroup' made SceneGroup refetch
-    // every metamodel file and SceneType to drop one instance the dialog already had
-    // the uuid of — and wiped the tree's local-only nodes on the way through.
-    const initSceneGroup = vi.fn();
-    const sub = eventBus.subscribe("initSceneGroup", initSceneGroup);
+  it("removes just the deleted node instead of rebuilding the tree", async () => {
+    // The regression this guards: the dialog used to ask SceneGroup for a full
+    // initTree() rebuild, which refetched every metamodel file and SceneType to drop one
+    // instance it already had the uuid of — and wiped the tree's local-only nodes on the
+    // way through. The never-expanded second type still having no `children` at all is
+    // what shows nothing was rebuilt: initTree gives every type a fresh empty array.
     openConfirm();
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete SceneInstance" }));
@@ -135,8 +135,7 @@ describe("DeleteSceneDialog", () => {
         "scene-b-uuid",
       ]),
     );
-    expect(initSceneGroup).not.toHaveBeenCalled();
-    sub.dispose();
+    expect(mocks.globalObject.sceneTree[1].children).toBeUndefined();
   });
 
   it("leaves the tree alone when the delete is rejected", async () => {

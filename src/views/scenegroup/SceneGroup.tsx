@@ -261,16 +261,18 @@ export default function SceneGroup() {
     syncTreeFromGlobal();
   }, [syncTreeFromGlobal]);
 
-  // Init on mount (only reached post-login) + subscribe to the re-init/update channels.
+  // Init on mount (only reached post-login) + subscribe to the update channel.
+  //
+  // There is no re-init channel: the tree is built here on mount and edited in place
+  // afterwards (updateTree adds, scene-tree-service's removeSceneInstanceFromTree
+  // removes), so nothing outside needs to ask for a rebuild. A re-login remounts this
+  // component, which re-runs initTree anyway. The delete dialog used to publish an
+  // 'initSceneGroup' channel to get one; it now removes the node it deleted.
   useEffect(() => {
     mountedRef.current = true;
     void initTree().catch((err) => logger.log(`SceneGroup init failed: ${err}`, "error"));
 
     const subUpdate = eventBus.subscribe("updateSceneGroup", () => updateTree());
-    const subInit = eventBus.subscribe(
-      "initSceneGroup",
-      () => void initTree().catch((err) => logger.log(`SceneGroup re-init failed: ${err}`, "error")),
-    );
 
     // P10 — the two collaboration subscriptions the old scenegroup ctor registered.
     // Non-async callbacks per plan §3.1 (the bus never awaits a handler).
@@ -323,7 +325,6 @@ export default function SceneGroup() {
     return () => {
       mountedRef.current = false;
       subUpdate.dispose();
-      subInit.dispose();
       subReconnect.dispose();
       subRevoked.dispose();
       subGranted.dispose();

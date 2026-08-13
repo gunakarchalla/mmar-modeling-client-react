@@ -22,9 +22,9 @@ import { closeTab } from "@/views/layout/tabActions";
 // re-render. Opened from the SceneGroup tree's "Delete" context-menu item via uiStore
 // 'deleteScene', with the right-clicked scene as its `{ sceneInstance }` payload.
 //
-// It used to publish 'initSceneGroup' instead, which made SceneGroup rebuild the whole
-// tree: refetch every metamodel file, every SceneType and every expanded type's fully
-// hydrated scenes. None of that can have changed — the delete touched the instance
+// It used to publish an 'initSceneGroup' event instead, which made SceneGroup rebuild
+// the whole tree: refetch every metamodel file, every SceneType and every expanded
+// type's fully hydrated scenes. (That channel is gone — this was its only publisher.) None of that can have changed — the delete touched the instance
 // layer only — and the rebuild dropped the tree's local-only nodes (imported metamodels
 // and models, scenes created with autoSave off). scene-tree-service's
 // `removeSceneInstanceFromTree` does the one thing the delete actually implies; see its
