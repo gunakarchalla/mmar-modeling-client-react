@@ -3,10 +3,6 @@ import { AwarenessRenderer, type RenderedEntry } from "./awareness-renderer";
 import { createNameTag, scaleLabel } from "./label-sprite";
 
 /**
- * P11 port of the old `resources/collaboration/remote_selection_renderer.ts` (116 lines).
- * DI stripped: the GlobalDefinition / SharedDocService injections are inherited as
- * module singletons from {@link AwarenessRenderer}, so the constructor disappears.
- *
  * Draws a bounding box around the object each *remote* collaborator has selected, in
  * that collaborator's own colour, with their name above it. This is the shared-presence
  * counterpart to the local red selection box created in `engine/global-selected-object`.
@@ -140,5 +136,5 @@ export class RemoteSelectionRenderer extends AwarenessRenderer<SelectionEntry> {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one instance shared by the whole app.
 export const remoteSelectionRenderer = new RemoteSelectionRenderer();

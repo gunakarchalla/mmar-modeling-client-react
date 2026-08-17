@@ -5,17 +5,15 @@ import { globalObject } from "@/engine/global-definition";
 import type { SharedDocService } from "@/resources/collaboration/shared-doc-service";
 
 /**
- * Port of the old `resources/ray_helper.ts` (DI-stripping recipe): the Aurelia
- * `@singleton()` + injected GlobalDefinition become the `globalObject` module
- * singleton. `shootRay` / `shootRayFromObject` are unchanged.
+ * Pointer raycasting for the modeling canvas: `shootRay` builds the picking ray for
+ * every pointer event, and doubles as the emission site of the collaboration cursor
+ * (`broadcastCursor` / `clearCursor`), publishing the `cursor` awareness field that
+ * RemoteCursorRenderer draws on remote clients.
  *
- * The old client also injected `SharedDocService` for the collaboration cursor
- * broadcast (`broadcastCursor` / `clearCursor`). Here those bits reach the shared
- * session through `globalObject.sharedDocServiceRef` instead of a direct import — the
- * back-reference that breaks the old circular DI (P10). The ref is non-null from the
- * moment `shared-doc-service` is first imported, so the cursor broadcast is LIVE since
- * P11: it publishes the `cursor` awareness field that RemoteCursorRenderer draws.
- * On a non-shared tab `forTab()` returns null and both methods are no-ops.
+ * The shared session is reached through `globalObject.sharedDocServiceRef` rather
+ * than a direct import: the collaboration service sits downstream of the engine in
+ * the import graph, and the back-reference keeps the engine free of that cycle. On a
+ * non-shared tab `forTab()` returns null and both cursor methods are no-ops.
  */
 /**
  * What a broadcast cursor ray terminated on. The SENDER resolves this because only it
@@ -89,12 +87,13 @@ export class RayHelper {
    * lets a peer read WHERE someone is looking from — a 2D user's ray drops vertically,
    * a 3D user's rakes in at an angle), head on the point the ray lands on.
    *
-   * ANCHOR, IN PRIORITY ORDER: the first object the ray hits, else the modelling plane.
-   * The old far-plane fallback is deliberately gone — it put the arrow head at the far
-   * clipping distance, nowhere near what the sender was looking at, and every receiver
-   * had to guess whether a coordinate meant "hit that object" or "hit nothing". A ray
-   * that reaches neither (3D only: pointing away from the plane at empty space) has
-   * nothing to say, so the cursor goes inactive instead of being drawn somewhere wrong.
+   * ANCHOR, IN PRIORITY ORDER: the first object the ray hits, else the modelling
+   * plane. A ray that reaches neither (3D only: pointing away from the plane at empty
+   * space) has nothing to say, so the cursor goes inactive instead of being drawn
+   * somewhere wrong. Resolving the anchor HERE, on the sender, is deliberate: only the
+   * sender can tell a geometry hit from a miss — a receiver sees only coordinates —
+   * and naming the hit object (`objectUuid`) is what lets receivers outline the object
+   * a peer is pointing at.
    *
    * Because the unprojection runs through the active camera's inverse projection
    * matrix, this works for both the orthographic (2D) and perspective (3D) cameras
@@ -161,5 +160,5 @@ export class RayHelper {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one instance shared by the whole engine.
 export const rayHelper = new RayHelper();

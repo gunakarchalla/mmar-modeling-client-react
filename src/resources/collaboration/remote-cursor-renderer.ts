@@ -4,10 +4,6 @@ import { createNamedCursor, scaleLabel } from "./label-sprite";
 import type { CursorAnchorKind } from "@/engine/ray-helper";
 
 /**
- * P11 port of the old `resources/collaboration/remote_cursor_renderer.ts` (123 lines).
- * DI stripped: the GlobalDefinition / SharedDocService injections are inherited as
- * module singletons from {@link AwarenessRenderer}, so the constructor disappears.
- *
  * Draws each *remote* collaborator's pointer as a named cursor in their own colour: a
  * translucent shaft from their eye to the point their ray lands on, a solid arrow head
  * marking that point, an initials pill beside it, and — when they are pointing at an
@@ -244,5 +240,5 @@ export class RemoteCursorRenderer extends AwarenessRenderer<CursorEntry> {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one instance shared by the whole app.
 export const remoteCursorRenderer = new RemoteCursorRenderer();

@@ -4,18 +4,16 @@ import { SceneInstance, ClassInstance, AttributeInstance, RelationclassInstance,
 import type { GlobalDefinition } from "@/engine/global-definition";
 
 /**
- * P10 port of the old `resources/collaboration/y_mapping.ts` (690 lines). Plan §9
- * P10: "port faithfully; it is pure data mapping". It has no DI to strip — the old
- * file was already plain exported functions taking `GlobalDefinition` as a
- * parameter, so the module-singleton recipe does not apply. The `GlobalDefinition`
- * import is type-only (the instance arrives as an argument from shared-doc-service),
- * which keeps this module out of the engine's runtime import graph.
+ * The bidirectional mapping between gds instances and the shared Y.Doc: the `*ToYMap`
+ * builders seed and extend the document from local state, and the `applyYDoc*`
+ * handlers fold remote events back onto the SceneInstance and THREE scene. Pure data
+ * mapping — plain exported functions taking `GlobalDefinition` as a parameter; the
+ * import is type-only, which keeps this module out of the engine's runtime import
+ * graph.
  *
  * REVIVING: the `*FromYMap` helpers build gds instances with `new ClassInstance(...)`
- * etc. rather than `fromJS`, exactly as the original did. That is correct here and
- * does NOT contradict P3's class-transformer rule (which is about `plainToInstance`
- * on server JSON): a real constructor call already produces a real prototype, so
- * `instanceof ClassInstance` holds for remotely-added instances.
+ * etc. — a real constructor call produces a real prototype, so `instanceof
+ * ClassInstance` holds for remotely-added instances.
  */
 
 // ---------------------------------------------------------------------------

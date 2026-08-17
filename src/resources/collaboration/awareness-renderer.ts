@@ -4,15 +4,10 @@ import { sharedDocService } from "./shared-doc-service";
 import { disposeLabelSprite } from "./label-sprite";
 
 /**
- * P11 port of the old `resources/collaboration/awareness_renderer.ts` (73 lines).
- * DI stripped per the established recipe: the injected GlobalDefinition and
- * SharedDocService become the `globalObject` / `sharedDocService` module singletons.
- *
- * Unlike the engine handlers (interaction / deletion / ray-helper), which deliberately
- * reach the service through `globalObject.sharedDocServiceRef` to break the old
- * circular DI, the renderers import `shared-doc-service` DIRECTLY — exactly as the old
- * renderers injected it. They live in `resources/collaboration/`, downstream of the
- * service, so there is no cycle to break here.
+ * Unlike the engine handlers (interaction / deletion / ray-helper), which reach the
+ * service through `globalObject.sharedDocServiceRef` to stay out of an import cycle,
+ * the renderers import `shared-doc-service` directly: they live in
+ * `resources/collaboration/`, downstream of the service, so there is no cycle here.
  *
  * Shared lifecycle for renderers that draw one THREE helper per remote collaborator
  * from Yjs awareness state — remote cursors ({@link RemoteCursorRenderer}) and remote
@@ -59,7 +54,7 @@ export abstract class AwarenessRenderer<TEntry extends RenderedEntry> {
   /**
    * Remove all helpers for a tab and unsubscribe.
    * Call this before sharedDocService.detach() — the session must still exist for the
-   * awareness unsubscribe to find it (the old main-body-tab-bar ordered it the same way).
+   * awareness unsubscribe to find it (tab teardown in tabActions orders it that way).
    */
   clearForTab(tabIndex: number): void {
     const scene = this.globalObjectInstance.tabContext[tabIndex]?.threeScene;

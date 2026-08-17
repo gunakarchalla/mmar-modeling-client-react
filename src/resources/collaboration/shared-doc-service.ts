@@ -22,31 +22,23 @@ import { userColor, initials } from "./color-util";
 import { collectUsers } from "./awareness-users";
 
 /**
- * P10 port of the old `resources/collaboration/shared_doc_service.ts` (325 lines).
- * DI stripped per the established recipe: GlobalDefinition / FetchHelper /
- * EventAggregator injections become module-singleton imports (globalObject /
- * backendService / eventBus). `process.env.SYNC_URL` becomes `config.SYNC_URL`
- * (plan §3.4 pitfall 8 — never read import.meta.env outside config.ts).
- *
- * It owns one SharedSession per TAB INDEX: a Y.Doc + WebsocketProvider connected to
- * the sync server, with deep observers that fold remote changes back into the tab's
+ * Owns one SharedSession per TAB INDEX: a Y.Doc + WebsocketProvider connected to the
+ * sync server, with deep observers that fold remote changes back into the tab's
  * in-memory gds SceneInstance and THREE.Scene. Room name = the SceneInstance uuid,
- * auth = `?token=<jwt>` (verified against mmar-sync-server/src/connection.ts).
+ * auth = `?token=<jwt>` (the contract mmar-sync-server/src/connection.ts verifies).
  *
  * TWO SOURCES OF TRUTH, ON PURPOSE: the SharedSession object is authoritative for
- * engine/service code (`forTab()` — the `getState()`-equivalent), and `collabStore`
- * is the one-way reactive mirror React reads (plan §3.2). Every mutation of
- * `access` / `connectionStatus` / `disconnectBanner` must patch the store too, which
- * is why those writes go through `setSessionStatus` / `setSessionAccess` /
- * `setSessionBanner` rather than assigning the fields directly.
+ * engine/service code (`forTab()`), and `collabStore` is the one-way reactive mirror
+ * React reads. Every mutation of `access` / `connectionStatus` / `disconnectBanner`
+ * must patch the store too, which is why those writes go through `setSessionStatus` /
+ * `setSessionAccess` / `setSessionBanner` rather than assigning the fields directly.
  *
  * The constructor sets `globalObject.sharedDocServiceRef = this` — the back-reference
  * that lets the engine handlers (interaction / deletion / transform-control-events /
- * ray-helper) reach the service without importing it, exactly as the old client did
- * to break its circular DI. That assignment only happens once this module is
- * evaluated, so the import in `engine/coordinates-updater.ts` (which mirrors the old
- * file's `SharedDocService` injection) is LOAD-BEARING: it is what guarantees the ref
- * is wired before any engine code looks for it. See state.json → P10 notes.
+ * ray-helper) reach the service without importing it, keeping the engine out of a
+ * circular import. That assignment only happens once this module is evaluated, so the
+ * import in `engine/coordinates-updater.ts` is LOAD-BEARING: it is what guarantees
+ * the ref is wired before any engine code looks for it.
  */
 
 // ---------------------------------------------------------------------------
@@ -70,7 +62,7 @@ export interface SharedSession {
   connectionStatus: ConnectionStatus;
   /** Human-readable banner shown while disconnected. Null when connected. */
   disconnectBanner: string | null;
-  /** P11: awareness 'change' handler feeding collabStore.users (kept so detach can unsubscribe). */
+  /** Awareness 'change' handler feeding collabStore.users (kept so detach can unsubscribe). */
   usersHandler?: () => void;
 }
 
@@ -212,10 +204,9 @@ export class SharedDocService {
   }
 
   /**
-   * P11: keep `collabStore.tabs[tabIndex].users` in step with the session's awareness.
-   * This replaces the old user-legend's 500 ms `setInterval` poll (plan §9 P11), which
-   * only existed because awareness callbacks fired outside Aurelia's change-detection.
-   * The store is written ONLY from this service (the one-way mirror contract, P10).
+   * Keep `collabStore.tabs[tabIndex].users` in step with the session's awareness, so
+   * the user legend updates the instant a peer joins or leaves. The store is written
+   * ONLY from this service (the one-way mirror contract).
    */
   private installAwarenessUsers(session: SharedSession, tabIndex: number): void {
     const handler = () => {
@@ -258,7 +249,7 @@ export class SharedDocService {
           eventBus.publish("remoteClassInstanceAdded", { tabIndex });
         }
         // A remote edit mutated the gds objects in place; the attribute window only
-        // re-renders when selectionStore's revision changes (P8's bump() contract).
+        // re-renders when selectionStore's revision changes (its bump() contract).
         this.notifyRemoteMutation(aggregate);
         this.notifyRemoteInstances(tabIndex, events);
       } finally {
@@ -362,11 +353,10 @@ export class SharedDocService {
   }
 
   /**
-   * REACT-ONLY ADDITION (no old-client counterpart — Aurelia dirty-checked the gds
-   * objects, React does not): a remote change mutates the gds instances in place, so
-   * the attribute window would keep rendering stale values. P8's contract is that
-   * anything mutating the selected instance's attributes in place must bump the
-   * selection store's revision (see state.json → P8 notes).
+   * A remote change mutates the gds instances in place, which React cannot observe on
+   * its own — the attribute window would keep rendering stale values. The selection
+   * store's contract is that anything mutating the selected instance's attributes in
+   * place must bump its revision.
    */
   private notifyRemoteMutation(aggregate: YDocChangeResult): void {
     if (aggregate.changedAttributeInstances.length === 0) return;
@@ -411,8 +401,7 @@ export class SharedDocService {
         session.provider.disconnect();
         this.setSessionBanner(tabIndex, session, "Session expired. Please log in again.");
         window.alert("Your session has expired. Please log in again.");
-        // The old client did localStorage.removeItem('jwtToken') directly; token.ts is
-        // the single writer of that key in this port (P1), so go through it.
+        // token.ts is the single writer of the stored credential, so go through it.
         clearToken();
         location.reload();
       } else if (code === 4403) {
@@ -467,6 +456,6 @@ export class SharedDocService {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration). Constructing
-// it is what sets globalObject.sharedDocServiceRef — see the class docstring.
+// Module singleton. Constructing it is what sets globalObject.sharedDocServiceRef —
+// see the class docstring.
 export const sharedDocService = new SharedDocService();

@@ -1,8 +1,7 @@
 /**
- * P10 port of the old `resources/collaboration/color_util.ts` (17 lines), verbatim.
- * Pure functions, no DI to strip. Used by shared-doc-service to build the awareness
- * user state; P11's user legend + cursor renderers consume the same two helpers so
- * every client paints a given user in the same colour.
+ * Pure helpers shared by everything that paints a collaborator: shared-doc-service
+ * builds the awareness user state from them, and the user legend + presence renderers
+ * consume the same two functions, so every client paints a given user identically.
  */
 
 /** djb2 hash -> deterministic HSL colour per user UUID (stable across all clients). */
