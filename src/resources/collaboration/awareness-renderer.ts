@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { globalObject } from "@/engine/global-definition";
 import { sharedDocService } from "./shared-doc-service";
+import { disposeLabelSprite } from "./label-sprite";
 
 /**
  * P11 port of the old `resources/collaboration/awareness_renderer.ts` (73 lines).
@@ -25,6 +26,12 @@ export interface RenderedEntry {
   /** The THREE helper drawn for this collaborator (ArrowHelper, BoxHelper, …). */
   helper: THREE.Object3D & { dispose: () => void };
   tabIndex: number;
+  /**
+   * Optional text sprite drawn alongside the helper — the named cursor at a peer's
+   * ray anchor, or the name tag above their selection box. Kept on the base entry so
+   * both subclasses inherit its teardown from {@link disposeEntry}.
+   */
+  label?: THREE.Sprite;
 }
 
 export abstract class AwarenessRenderer<TEntry extends RenderedEntry> {
@@ -71,11 +78,16 @@ export abstract class AwarenessRenderer<TEntry extends RenderedEntry> {
     this.handlers.delete(tabIndex);
   }
 
-  /** Remove an entry's helper from the scene and free its GPU resources. */
+  /** Remove an entry's helper (and its label, if any) and free their GPU resources. */
   protected disposeEntry(entry: TEntry, scene: THREE.Scene | undefined): void {
     if (!scene) return;
     scene.remove(entry.helper);
     entry.helper.dispose();
+    if (entry.label) {
+      scene.remove(entry.label);
+      disposeLabelSprite(entry.label);
+      entry.label = undefined;
+    }
   }
 
   /** Rebuild this tab's helpers from the current awareness state. */

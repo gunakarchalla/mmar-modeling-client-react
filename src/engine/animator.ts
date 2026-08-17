@@ -8,6 +8,7 @@ import { rayHelper } from "@/engine/ray-helper";
 import { mechanismUtility } from "@/resources/services/mechanism-utility";
 import { coordinatesUpdater } from "@/engine/coordinates-updater";
 import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
+import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-renderer";
 
 /**
  * Port of the old `resources/animator.ts` (the 416-line modeling animator — the
@@ -39,6 +40,7 @@ export class Animator {
   private mechanismUtility = mechanismUtility;
   private coordinatesUpdater = coordinatesUpdater;
   private remoteSelectionRenderer = remoteSelectionRenderer;
+  private remoteCursorRenderer = remoteCursorRenderer;
 
   async animate() {
     // P3: `instanceUtility.getTabContextSceneInstance()` was fetched here into a
@@ -56,8 +58,11 @@ export class Animator {
 
     if (this.globalObjectInstance.render) {
       this.globalObjectInstance.render = false;
-      // Keep collaborators' selection boxes glued to objects they move.
+      // Keep collaborators' selection boxes glued to objects they move, and their
+      // labels at a constant on-screen size as OUR camera moves (awareness only fires
+      // when a peer acts, so neither can be driven by awareness alone).
       this.remoteSelectionRenderer.refreshBoxes();
+      this.remoteCursorRenderer.refreshCursors();
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);
 
       if (this.globalObjectInstance.runMechanism) {

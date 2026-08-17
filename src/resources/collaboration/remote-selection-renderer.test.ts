@@ -40,9 +40,13 @@ let meshA: THREE.Mesh;
 let meshB: THREE.Mesh;
 
 const boxes = () => scene.children.filter((c) => c instanceof THREE.BoxHelper);
+const tags = () => scene.children.filter((c) => c instanceof THREE.Sprite);
 
 /** A selection awareness state, as globalSelectedObject.publishSelection writes it. */
-const selecting = (uuid: string | null, color = "#ff0000") => ({ user: { color }, selection: { uuid } });
+const selecting = (uuid: string | null, color = "#ff0000") => ({
+  user: { color, username: "ada", initials: "AD" },
+  selection: { uuid },
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -53,6 +57,7 @@ beforeEach(() => {
   scene.add(meshA, meshB);
   mocks.globalObject.tabContext = [{ threeScene: scene }];
   mocks.globalObject.render = false;
+  mocks.globalObject.camera = new THREE.OrthographicCamera(-1, 1, 1, -1);
   mocks.sharedDocService.forTab = vi.fn((tabIndex: number) =>
     tabIndex === 0 ? ({ awareness } as unknown) : null,
   ) as any;
@@ -163,5 +168,51 @@ describe("RemoteSelectionRenderer", () => {
 
     expect(boxes()).toHaveLength(0);
     expect(awareness.handlers).toHaveLength(0);
+  });
+
+  // --- name tag -----------------------------------------------------------
+
+  it("names the box's owner above it (the box outlives their cursor, so it must)", () => {
+    renderer.bindToSession(0);
+    awareness.states.set(2, selecting(meshA.uuid));
+    awareness.emit();
+
+    expect(tags()).toHaveLength(1);
+    // meshA is a unit cube at the origin, so its top edge is y = 0.5.
+    expect(tags()[0].position.y).toBeGreaterThan(0.5);
+    expect(tags()[0].position.x).toBeCloseTo(0);
+  });
+
+  it("refreshBoxes carries the name tag along when the target moves", () => {
+    renderer.bindToSession(0);
+    awareness.states.set(2, selecting(meshA.uuid));
+    awareness.emit();
+
+    meshA.position.set(10, 4, 0);
+    meshA.updateMatrixWorld(true);
+    renderer.refreshBoxes();
+
+    expect(tags()[0].position.x).toBeCloseTo(10);
+    expect(tags()[0].position.y).toBeGreaterThan(4.5);
+  });
+
+  it("depth-tests the name tag, unlike the cursor pill — it sits in the scene", () => {
+    renderer.bindToSession(0);
+    awareness.states.set(2, selecting(meshA.uuid));
+    awareness.emit();
+
+    expect((tags()[0] as THREE.Sprite).material.depthTest).toBe(true);
+  });
+
+  it("removes the name tag with its box", () => {
+    renderer.bindToSession(0);
+    awareness.states.set(2, selecting(meshA.uuid));
+    awareness.emit();
+    expect(tags()).toHaveLength(1);
+
+    awareness.states.set(2, selecting(null));
+    awareness.emit();
+
+    expect(tags()).toHaveLength(0);
   });
 });
