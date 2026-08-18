@@ -8,24 +8,21 @@ import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 
 /**
- * P4 port of the old `services/vizrep_update_checker.ts` (144 lines). DI stripped
- * per the established recipe: InstanceUtility / MetaUtility / GraphicContext /
- * GlobalDefinition / EventAggregator injections become module-singleton imports
- * (EventAggregator -> eventBus).
+ * Re-runs a concept's vizRep when one of the attributes it reads changes.
  *
- * Two deliberate deviations from the metamodeling twin:
- *  1. The twin subscribes with `async` callbacks; plan §3.1 forbids that, so the
- *     handlers wrap the promise (`() => void run().catch(...)`) — an async bus
- *     callback returns a floating promise the bus never awaits, so a rejection
- *     would be an unhandled rejection instead of a logged error.
- *  2. The twin's extra `checkForVizRepUpdateForce()` is NOT ported — it does not
- *     exist in the modeling client, which is the functional source of truth.
+ * Both entry points are bus channels, subscribed in the constructor — which is why
+ * importing this module is load-bearing: `checkForVizRepUpdate` re-evaluates every
+ * instance of the open scene, `checkForVizRepUpdateByAttributeInstance` just the
+ * instance owning one attribute.
  *
- * The `readyForVizRepUpdate` lock/unlock semantics and the modeling original's
- * null-guard on the meta attribute (`metaAttribute ? metaAttribute.name : null`,
- * which the twin dropped) are preserved exactly. Strict-TS: meta lookups are
- * non-null-asserted and `custom_variables` ({}) is indexed via `as any`, same
- * runtime behaviour as the untyped original.
+ * An update only runs when the meta attribute's NAME or uuid actually appears in the
+ * concept's vizRep code string, so editing a value nothing draws costs nothing. Custom
+ * variables that are not `user_locked` are dropped first so the re-run recomputes them,
+ * while anything the user positioned by hand survives.
+ *
+ * `globalObject.readyForVizRepUpdate` is the lock that serialises all of this; it is
+ * released in a `finally`, because leaving it set would wedge every later refresh in a
+ * spin.
  */
 export class VizrepUpdateChecker {
   private instanceUtility = instanceUtility;
@@ -49,8 +46,8 @@ export class VizrepUpdateChecker {
 
   /**
    * A concept without a vizRep function (`geometry` is nullable, and EVERY example
-   * metamodel's SceneType has it null) has nothing to re-run — the original
-   * dereferenced it anyway, so editing a scene-instance attribute threw
+   * metamodel's SceneType has it null) has nothing to re-run — dereferencing it anyway
+   * meant editing a scene-instance attribute threw
    * "Cannot read properties of null (reading 'toString')" before it could do anything.
    * Both the null geometry and a missing owner instance now short-circuit the update.
    */
@@ -106,9 +103,10 @@ export class VizrepUpdateChecker {
       }
       //if it was not a class instance or relationclass instance, check if it is a port instance
       else if (attributeInstance.assigned_uuid_port_instance) {
-        objectInstance = await this.instanceUtility.getPortInstance(attributeInstance.assigned_uuid_port_instance);
-        if (!objectInstance) return;
-        geometryAsString = this.geometryOf(await this.metaUtility.getMetaPort(objectInstance.uuid_port));
+        const portInstance = await this.instanceUtility.getPortInstance(attributeInstance.assigned_uuid_port_instance);
+        if (!portInstance) return;
+        objectInstance = portInstance;
+        geometryAsString = this.geometryOf(await this.metaUtility.getMetaPort(portInstance.uuid_port));
       }
       //if it was not a port instance, check if it is a scene instance
       else if (attributeInstance.assigned_uuid_scene_instance) {
@@ -135,7 +133,7 @@ export class VizrepUpdateChecker {
 
         // for each custom_variable (key) in the customVariables object, check if it the value user_locked is true, if not, store it in an array to be updated
         // this is necessary because we only want to update the custom variables that are not user_locked
-        // -> e.g., if we shift the position of a text, we don't want to update the position of the text again to the original position
+        // e.g. a label the user dragged must not snap back to its computed position
         const customVariablesToUpdate: string[] = [];
         for (const key in customVariables) {
           if (customVariables[key].user_locked === false) {
@@ -182,5 +180,5 @@ export class VizrepUpdateChecker {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const vizrepUpdateChecker = new VizrepUpdateChecker();

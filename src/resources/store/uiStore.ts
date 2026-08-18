@@ -1,17 +1,13 @@
 import { create } from "zustand";
 
-// Replaces the Aurelia DialogHelper (resources/dialog_helper.ts) + the MDC dialog
-// refs each view kept, and the old `openDialog*` EventAggregator channels. Every
-// dialog in the app is opened/closed through this single store: components read
-// `dialogs[name]` to know whether to render open, and imperative code calls
-// `openDialog(name, payload)` / `closeDialog(name)` instead of publishing an
-// `openDialog*` event.
+// Every dialog in the app is opened and closed through this one store: components read
+// `dialogs[name]` to decide whether to render open, and imperative code calls
+// `openDialog(name, payload)` / `closeDialog(name)`.
 //
-// Payload-carrying dialogs (createNewScene<SceneType>, shareScene, copyScene,
-// deleteScene, referenceAttribute, tableAttribute, upload*) stash their payload
-// in `dialogPayloads[name]`; the owning view reads it with `getDialogPayload`.
-// Payload types firm up in the phase that ports each dialog (P7-P10) — kept
-// loose (`unknown`) here so P1 does not depend on not-yet-ported view code.
+// Dialogs that act on something (createNewScene, shareScene, copyScene, deleteScene,
+// referenceAttribute, tableAttribute, upload*) stash it in `dialogPayloads[name]`, which
+// the owning view reads with `getDialogPayload` — that is what lets a dialog be opened
+// against the scene or attribute the user clicked, with nothing to re-select inside it.
 
 export type DialogName =
   | "saveAs"

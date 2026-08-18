@@ -1,22 +1,17 @@
 import { create } from "zustand";
 
 /**
- * selectionStore (plan §3.2, created in P5) — the reactive mirror of the currently
- * selected instance in the THREE scene. The old client had NO store for this: the
- * interaction handler drove the attribute GUI purely through the `updateAttributeGui`
- * / `removeAttributeGui` event-bus channels and the DOM. Those channels still exist
- * (P8 AttributeWindow subscribes to them for the "re-render everything" signal), but
- * React components read the *identity* of the selection from this store.
+ * The reactive mirror of the current selection in the THREE scene.
  *
- * The engine is the source of truth (globalObject.current_class_instance /
- * current_port_instance); this store is written ONE WAY by the interaction handler
- * (engine -> store), the same relationship stateStore has with globalStateObject.
- * Never write engine state from a React subscriber to this store.
+ * The engine is the source of truth (`globalObject.current_class_instance` /
+ * `current_port_instance`) and writes here ONE WAY from the interaction handler; React
+ * components read the identity of the selection from the store. The
+ * `updateAttributeGui` / `removeAttributeGui` bus channels still exist alongside it as
+ * the coarse "re-render everything" signal.
  *
- * `revision` is bumped whenever an in-place mutation of the selected instance's
- * object graph must force a re-render even though `selectedInstanceUuid` did not
- * change (e.g. an attribute edit) — mirrors the metamodeling `reref`/`commit`
- * pattern (plan §3.1). Call `bump()` after such a mutation.
+ * `revision` covers the case the uuid cannot: gds objects are mutated IN PLACE, so an
+ * attribute edit changes nothing React can observe. Bump it after such a mutation and
+ * subscribers re-render.
  */
 export type SelectionType = "class" | "relationclass" | "port" | null;
 

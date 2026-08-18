@@ -4,14 +4,11 @@ import { create } from "zustand";
 export type LogEntry = { value: string; status: string };
 
 /**
- * Cap on retained log entries. The old Aurelia `Logger` kept an unbounded array, but
- * it mutated it in place (`unshift`) and Aurelia batched the DOM updates. Here every
- * `log()` allocates a fresh array and synchronously re-renders LogWindow (mounted in
- * RightNav), which maps a heavy MUI <Tooltip> per entry. Bulk operations that log
- * thousands of times (e.g. a URDF import mapping a file to a scene instance) would
- * otherwise be O(n²) in both the array copy and the rendered row count. Keeping only
- * the most recent entries bounds both — the log is a live status panel, not an audit
- * trail, so trimming old rows is safe.
+ * Cap on retained log entries. Every `log()` allocates a fresh array and re-renders the
+ * LogWindow, which maps a heavy MUI <Tooltip> per entry, so an unbounded array makes a
+ * bulk operation that logs thousands of times (a URDF import, say) O(n²) in both the
+ * array copy and the rendered row count. The log is a live status panel rather than an
+ * audit trail, so dropping the oldest rows is safe.
  */
 const MAX_LOG_ENTRIES = 500;
 
@@ -26,7 +23,7 @@ export interface SnackbarState {
 interface LogState {
   logArray: LogEntry[];
   snackbar: SnackbarState;
-  /** Mirrors Logger.log: console.error + snackbar on error, prepends to logArray. */
+  /** Prepend an entry; a status of "error" also raises the snackbar. */
   log: (value: string, status: string) => void;
   closeSnackbar: () => void;
 }
@@ -40,9 +37,8 @@ export const useLogStore = create<LogState>((set) => ({
       console.error(value);
       set({ snackbar: { open: true, message: value, severity: "error" } });
     }
-    // original Logger uses unshift -> newest first. Slice before spreading so the copy
-    // (and the downstream LogWindow render) stays bounded to MAX_LOG_ENTRIES rather
-    // than growing with every call.
+    // Newest first. Slicing before spreading keeps the copy — and the LogWindow render
+    // behind it — bounded to MAX_LOG_ENTRIES instead of growing with every call.
     set((s) => ({ logArray: [{ value, status }, ...s.logArray.slice(0, MAX_LOG_ENTRIES - 1)] }));
   },
 
@@ -57,8 +53,7 @@ export const useLogStore = create<LogState>((set) => ({
  * class/attribute instances and logs "created"/"done" for each — fire thousands of
  * log calls in a tight (micro-task) chain. Subscribing to `logArray` directly (a new
  * array reference every call) would re-render LogWindow, and reconcile its up-to-500
- * MUI <Tooltip> rows, once *per log entry* — seconds of wasted work that made the
- * import feel ~10s slower than the old Aurelia client (which batched its DOM updates).
+ * MUI <Tooltip> rows, once *per log entry* — seconds of wasted work on a single import.
  *
  * This hook instead coalesces bursts into a single React update: each store change
  * schedules at most one trailing flush (a macro-task), so all the log calls emitted

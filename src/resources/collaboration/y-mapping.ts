@@ -7,7 +7,7 @@ import type { GlobalDefinition } from "@/engine/global-definition";
  * The bidirectional mapping between gds instances and the shared Y.Doc: the `*ToYMap`
  * builders seed and extend the document from local state, and the `applyYDoc*`
  * handlers fold remote events back onto the SceneInstance and THREE scene. Pure data
- * mapping — plain exported functions taking `GlobalDefinition` as a parameter; the
+ * mapping: plain exported functions taking `GlobalDefinition` as a parameter, and the
  * import is type-only, which keeps this module out of the engine's runtime import
  * graph.
  *
@@ -677,7 +677,7 @@ function relationClassInstanceToYMap(ri: RelationclassInstance): Y.Map<unknown> 
 }
 
 function relationClassInstanceFromYMap(yMap: Y.Map<unknown>): RelationclassInstance {
-  // The gds ctor types role_from/role_to as required; the original passed `undefined`
+  // The gds constructor types role_from/role_to as required; `undefined` is passed
   // here (they are restored from the JSON-encoded copies further down) — the cast
   // keeps that behaviour under this repo's strict TS.
   const ri = new RelationclassInstance(
@@ -789,7 +789,7 @@ function attrInstancesFromYMap(attrMap: Y.Map<Y.Map<unknown>> | undefined, paren
     const ai = new AttributeInstance(
       attrEntry.get("uuid") as string,
       attrEntry.get("uuid_attribute") as string,
-      // assigned_uuid_scene_instance: the original passed null (gds types it UUID).
+      // assigned_uuid_scene_instance: null, though gds types it UUID.
       null as unknown as string,
       parentUuid,
       (attrEntry.get("value") as string) ?? "",

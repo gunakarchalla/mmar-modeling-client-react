@@ -21,38 +21,24 @@ import UploadGltfDialog from "@/views/dialogs/UploadGltfDialog";
 import UploadImageDialog from "@/views/dialogs/UploadImageDialog";
 
 /**
- * P8 port of `views/attribute-window/attribute-window.{ts,html}` (351 + 182 lines).
- * Shows the attribute instances of the currently selected class / port /
- * relationclass instance, grouped into plain, table and reference attributes.
- * With nothing selected it shows the OPEN SCENE INSTANCE's own attributes instead —
- * see the scene-fallback note on `buildAttributeGroups`.
+ * Shows the attribute instances of the selected class, port or relation class instance,
+ * grouped into plain, table and reference attributes. With nothing selected it shows the
+ * OPEN SCENE INSTANCE's own attributes instead — see the scene-fallback note on
+ * `buildAttributeGroups`.
  *
- * WIRING (replaces the Aurelia `attached()` subscriptions):
- *  - `updateAttributeGui` (bus) -> rebuild the groups. The interaction handler
- *    publishes `removeAttributeGui` and then `updateAttributeGui` 10 ms later.
- *  - `removeAttributeGui` (bus) -> the old `delayedReset()`, now a delayed REBUILD:
- *    dropping the element's attributes means falling back to the scene's, not showing
- *    an empty panel.
- *  - `tabChanged` (bus) -> another tab means another scene instance, and the tab
- *    switch clears the selection without touching the attribute channels.
- *  - `useSelectionStore` (P5) -> `revision` is an ADDITIONAL rebuild trigger, so an
- *    in-place attribute mutation that calls `bump()` re-renders the window without a
- *    bus round-trip. Selection identity still comes from the engine via the bus, so
- *    the store and the channels agree.
- *
- * The old `buttons.forEach(b => b.addEventListener('click', e => e.preventDefault()))`
- * from `attached()` is dropped: it existed to stop `mdc-button`s inside the window
- * from submitting a form. MUI `Button` defaults to `type="button"`, which does not
- * submit, so there is nothing to prevent.
- *
- * `firstLevel` is kept for parity but has NO behaviour left — see AttributeWindowDialog.
+ * Four things rebuild the panel:
+ *  - `updateAttributeGui` — a new selection. The interaction handler publishes
+ *    `removeAttributeGui` and then this, 10 ms later.
+ *  - `removeAttributeGui` — a delayed rebuild rather than a clear: losing the selected
+ *    element's attributes means falling back to the scene's, not showing an empty panel.
+ *  - `tabChanged` — another tab means another scene instance, and a tab switch clears
+ *    the selection without touching the attribute channels.
+ *  - `selectionStore.revision` — an in-place attribute mutation that calls `bump()`
+ *    re-renders the window without a bus round-trip. Selection IDENTITY still comes from
+ *    the engine over the bus, so the store and the channels agree.
  */
-interface AttributeWindowProps {
-  /** Old `@bindable firstLevel`. Vestigial: see AttributeWindowDialog.tsx. */
-  firstLevel?: boolean;
-}
 
-export default function AttributeWindow({ firstLevel = true }: AttributeWindowProps) {
+export default function AttributeWindow() {
   const [groups, setGroups] = useState<AttributeGroups>(emptyAttributeGroups);
   const revision = useSelectionStore((s) => s.revision);
   const openDialog = useUiStore((s) => s.openDialog);
@@ -75,15 +61,15 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
       .catch((err) => logger.log("attribute window update failed: " + describeError(err), "error"));
   }, []);
 
-  // Old `delayedReset()`: reset with a 10 ms delay. The original comment says the
-  // delay is "needed for text mesh update since we need the context of the old
-  // values"; it also lets the interaction handler's paired `updateAttributeGui`
-  // (published 10 ms after `removeAttributeGui`) cancel it via `rebuild()`.
+  // A rebuild delayed by 10 ms. The delay lets the text meshes finish updating against
+  // the previous values, and it lets the interaction handler's paired
+  // `updateAttributeGui` — published 10 ms after `removeAttributeGui` — supersede this
+  // one with an immediate `rebuild()`.
   //
-  // It re-derives rather than blanking: "the selected element's attributes are gone"
-  // now means "show the open scene instance's attributes", which only
-  // `buildAttributeGroups` can decide. It still clears the window whenever there is
-  // nothing at all to show, since that is the state it returns with no scene open.
+  // It re-derives rather than blanking, because "the selected element's attributes are
+  // gone" means "show the open scene instance's attributes", which only
+  // `buildAttributeGroups` can decide. It still clears the window when there is nothing
+  // at all to show, which is what it returns with no scene open.
   const delayedReset = useCallback(() => {
     if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     resetTimerRef.current = setTimeout(() => {
@@ -92,12 +78,10 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
     }, 10);
   }, [rebuild]);
 
-  // Old `gltfUploaded(message)` / `imageUploaded(message)`: both did nothing but run the
-  // hybrid algorithms for the uploaded attribute instance — that is what swaps an
-  // ObjectSpace Augmentation's mesh for the uploaded GLTF, or re-sizes a Detectable's
-  // plane for the uploaded image. P8 subscribed these channels to rebuild the FIELDS
-  // instead (the value changed underneath us) and left the hybrid call for P12; both
-  // now run. The attributeInstance rides along in the P8 upload payload.
+  // An upload changed an attribute value underneath us, so the fields are rebuilt, and
+  // the hybrid algorithms are run for that attribute instance — which is what swaps an
+  // ObjectSpace Augmentation's mesh for the uploaded glTF, or resizes a Detectable's
+  // plane for the uploaded image.
   const uploaded = useCallback(
     (payload: UploadEventPayload) => {
       rebuild();
@@ -116,7 +100,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
       eventBus.subscribe("removeAttributeGui", delayedReset),
       eventBus.subscribe("gltfUploaded", uploaded),
       eventBus.subscribe("imageUploaded", uploaded),
-      // fileUploaded only rebuilds: the old window never subscribed it for the hybrid
+      // fileUploaded only rebuilds — it is not wired to the hybrid
       // algorithms, and its payload carries a fileUuid rather than the instance.
       eventBus.subscribe("fileUploaded", rebuild),
       eventBus.subscribe("tableAttributeChanged", rebuild),
@@ -131,7 +115,7 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
     };
   }, [rebuild, delayedReset, uploaded]);
 
-  // Rebuild when the P5 selection store changes (selection identity or a bump()).
+  // Rebuild when the selection store changes (a new selection, or a bump()).
   useEffect(() => {
     rebuild();
   }, [revision, rebuild]);
@@ -150,9 +134,8 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
   );
   if (!hasInstance) return null;
 
-  // `openDialog(dialog, attributeInstance)` in the old view: publish the context on the
-  // bus (plan §5 `openReferenceDialog`) AND open the single shared dialog. The old
-  // client did exactly this pair — one dialog view reused by every reference button.
+  // One reference dialog is shared by every reference button, so opening it means both
+  // publishing the clicked attribute as its context and raising the dialog's flag.
   function openReferenceDialog(enhanced: EnhancedAttributeInstance) {
     eventBus.publish("openReferenceDialog", { attributeInstance: enhanced.attributeInstance });
     openDialog("referenceAttribute", { attributeInstance: enhanced.attributeInstance });
@@ -263,14 +246,14 @@ export default function AttributeWindow({ firstLevel = true }: AttributeWindowPr
       <ReferenceAttributeDialog onChanged={rebuild} />
       <TableAttributeDialog />
       <UploadFileDialog />
-      <UploadGltfDialog firstLevel={firstLevel} />
-      <UploadImageDialog firstLevel={firstLevel} />
+      <UploadGltfDialog />
+      <UploadImageDialog />
     </Box>
   );
 }
 
 /**
- * The old "Static Attributes" block: read-only UUID + Class name. `nameLabel` is the
+ * The "Static Attributes" block: read-only UUID and class name. `nameLabel` is the
  * one addition — the scene-instance block labels the same field "Scene", which is what
  * tells the user at a glance that these are the model's attributes, not an element's.
  */

@@ -5,17 +5,11 @@ import { metaUtility } from "./meta-utility";
 import { expressionUtility } from "./expression-utility";
 
 /**
- * Port of the old modeling `resources/services/procedure_utility.ts` — DATA HALF
- * (plan §10: ★, P3). DI stripped: GlobalDefinition / FetchHelper / MetaUtility /
- * ExpressionUtility become module-singleton imports.
+ * The data half of the "Algorithms" feature: fetches the procedures stored in the
+ * metamodel — the server-wide independent ones, and those assigned to a scene type —
+ * and runs a chosen procedure's code string against the expression API.
  *
- * The old class also injected `VizrepUpdateChecker` (a P4 module), but every use of
- * it (`this.updateChecker.checkForVisualizationUpdate()`) is commented out in the
- * original, so the dependency is DROPPED — that keeps P3 from reaching forward into
- * P4. The Algorithms-dialog execution UI is wired in P12; this is the fetch/`fromJS`
- * + run-code-string half.
- *
- * Utility class for handling procedures.
+ * The dialog owns the UI; this module owns the fetching and the execution.
  */
 export class ProcedureUtility {
   procedureCode!: string;
@@ -116,5 +110,5 @@ export class ProcedureUtility {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const procedureUtility = new ProcedureUtility();

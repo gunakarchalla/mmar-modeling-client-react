@@ -27,20 +27,13 @@ import { useUiStore } from "@/resources/store/uiStore";
 import type { AccessLevel } from "@/resources/collaboration/shared-doc-service";
 
 /**
- * P10 port of `dialogs/share-scene-instance/{ts,html,css}` (147 lines + css). Manages
- * the access list of a SceneInstance through the `sceneAccess*` endpoints; a scene
- * with >= 2 entries is what makes SceneGroup attach a shared yjs session on open.
- * Opened from the SceneGroup tree's "Share" context-menu item via uiStore, with a
- * `{ sceneInstance }` payload.
+ * Manages the access list of a SceneInstance through the `sceneAccess*` endpoints. A
+ * scene with at least two entries is what makes the scene tree attach a shared yjs
+ * session when it is opened.
  *
- * The payload is REQUIRED — the dialog no longer picks a scene, so it opens straight
- * onto the thing the user came for: that scene's access list. The old view took the
- * scene list through a `@bindable tree` prop (later a flattened <Select>), which had to
- * call loadAllSceneInstances() first — every scene in the database, fully hydrated, to
- * render a list of names (see CopySceneDialog's note).
- *
- * The .css is gone: the three class rules (`user-row`, `access-pill--<level>`,
- * `share-error`) become `sx` props (plan §10: "port stray rules into sx/styled").
+ * Opened from the scene tree's "Share" context-menu item, and the `{ sceneInstance }`
+ * payload is REQUIRED: the dialog does not pick a scene, it opens straight onto the
+ * access list of the one the user right-clicked.
  */
 
 interface Payload {
@@ -53,14 +46,14 @@ interface JwtPayload {
   exp?: number;
 }
 
-/** Colours of the old `.access-pill--read | --edit | --delete` rules. */
+/** Pill colour per access level. */
 const PILL_COLOURS: Record<string, { bg: string; fg: string }> = {
   read: { bg: "#e3f2fd", fg: "#1565c0" },
   edit: { bg: "#e8f5e9", fg: "#2e7d32" },
   delete: { bg: "#fff3e0", fg: "#e65100" },
 };
 
-/** Port of `levelLabel(entry)` — the flags collapse to the highest level granted. */
+/** The access flags collapse to the highest level granted. */
 function levelLabel(entry: AccessEntry): string {
   if (entry.delete_access) return "delete";
   if (entry.edit_access) return "edit";
@@ -110,7 +103,7 @@ export default function ShareSceneDialog() {
         backendService.sceneAccessMeGET(sceneInstanceUuid),
       ]);
       setExistingAccess(list ?? []);
-      // Only a 'delete'-level holder may manage the list (the old `canManage`).
+      // Only a 'delete'-level holder may manage the list.
       setCanManage(me?.level === "delete");
     } catch {
       setExistingAccess([]);
@@ -119,7 +112,7 @@ export default function ShareSceneDialog() {
     setLoading(false);
   }, []);
 
-  // Port of attached(): decode our own uuid (so we cannot revoke our own access), then
+  // Decode our own uuid (so we cannot revoke our own access), then
   // load the payload scene's access list. Re-runs per open, which is what the old
   // dialog's attached() + treeChanged() achieved between openings.
   useEffect(() => {
@@ -145,7 +138,7 @@ export default function ShareSceneDialog() {
     void loadAccessList(target.uuid);
   }, [open, loadAccessList]);
 
-  // Port of add(). The status branches are why backend-service throws ApiError for
+  // The status branches are why backend-service throws ApiError for
   // these endpoints rather than swallowing (see api.ts → ApiError).
   async function add() {
     if (!usernameInput.trim() || !sceneInstance) {
@@ -185,7 +178,7 @@ export default function ShareSceneDialog() {
     }
   }
 
-  // Port of removeAccess(entry).
+  // Revoke one user's access.
   async function removeAccess(entry: AccessEntry) {
     if (!sceneInstance) return;
     try {
@@ -199,7 +192,7 @@ export default function ShareSceneDialog() {
     }
   }
 
-  // Port of cancel(): clears the form, then closes (the old button also carried
+  // Clear the form, then close (the button also carries
   // data-mdc-dialog-action="cancel", which is what actually dismissed the dialog).
   function cancel() {
     setUsernameInput("");

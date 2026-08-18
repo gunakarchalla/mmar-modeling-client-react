@@ -9,48 +9,43 @@ import {
 } from "@/constants";
 
 /**
- * P12 port of `resources/hybridAlgorithms/objectspace_algorithms.ts` (plan §10 ★ —
- * no metamodeling twin). DI stripped: InstanceUtility / GlobalDefinition become
- * module-singleton imports.
+ * Hybrid algorithms for the ObjectSpace metamodel, reached through
+ * `hybridAlgorithmsService` and never directly.
  *
- * These are the ObjectSpace "hybrid algorithms": they replace an instance's mesh
- * geometry/material in place — with an uploaded GLTF (augmentation), or with a
- * textured plane sized from an uploaded image (detectable) — instead of going through
- * the normal vizRep pipeline. Reached from `hybridAlgorithmsService`, never directly.
+ * They replace an instance's geometry and material IN PLACE rather than going through
+ * the vizRep pipeline: an Augmentation adopts an uploaded glTF, and a Detectable
+ * becomes a textured plane sized from an uploaded image.
  *
- * DELIBERATE DEVIATION — a PRIVATE `new GraphicContext()` per call, where the old
- * class injected the SHARED `@singleton()` one and wiped it before/after each use
- * (`gc.resetInstance()`). This is a fix for a hazard THIS PORT introduced, not a
- * cleanup: `graphic_gltf`/`graphic_cube` accumulate into `gc.object3D` and
- * `getMergedObjects()` merges whatever is in there. The old client could safely share
- * one context because it `await`ed the vizrep update to completion BEFORE running the
- * hybrid algorithms. P8 replaced that await with a fire-and-forget
- * `checkForVizRepUpdateByAttributeInstance` publish (plan §5/§9 P8), so the shared
- * `vizrepUpdateChecker.gc` draw is now genuinely in flight when we get here — and a
- * shared `resetInstance()` would drop its half-built meshes (silently: nothing throws).
- * A private context cannot race it, and the ctor is no-arg here (P5/P7 precedent).
- * The resetInstance() calls are kept so the drawing sequence stays byte-faithful.
- * See state.json → discoveries (P8 ordering note, P12).
+ * Each call builds its OWN `GraphicContext` instead of using the shared one. That is
+ * load-bearing: `graphic_gltf` / `graphic_cube` accumulate into `gc.object3D` and
+ * `getMergedObjects()` merges whatever is in there, while the vizRep refresh that ran
+ * just before is fire-and-forget and may still be drawing into the shared context. A
+ * private context cannot race it; sharing one would silently drop half-built meshes.
  */
+/** The uuid of whatever instance an attribute instance hangs off. */
+function ownerUuidOf(attributeInstance: AttributeInstance): string {
+  return (
+    attributeInstance.assigned_uuid_class_instance ??
+    attributeInstance.assigned_uuid_port_instance ??
+    attributeInstance.assigned_uuid_scene_instance ??
+    ""
+  );
+}
+
 export class ObjectspaceAlgorithms {
   private globalObjectInstance = globalObject;
   private instanceUtility = instanceUtility;
 
-  //99ccdf26-98ec-4424-9443-490bcb825307 is the uuid for the augmentation metaclass
+  /**
+   * An Augmentation's "Object 3D" attribute holds a glTF document. Parse it and give
+   * the instance's mesh that geometry and material.
+   */
   async checkAugmentationsInstance(attributeInstance?: AttributeInstance) {
     if (!attributeInstance) return;
 
-    // get the uuid of instance the attributeInstance belongs to
-    let uuidInstance = "";
-    if (attributeInstance.assigned_uuid_class_instance) {
-      uuidInstance = attributeInstance.assigned_uuid_class_instance;
-    } else if (attributeInstance.assigned_uuid_port_instance) {
-      uuidInstance = attributeInstance.assigned_uuid_port_instance;
-    } else if (attributeInstance.assigned_uuid_scene_instance) {
-      uuidInstance = attributeInstance.assigned_uuid_scene_instance;
-    }
+    const uuidInstance = ownerUuidOf(attributeInstance);
 
-    //if there is an attributeInstance
+    // A glTF document is JSON, so anything else is not one.
     if (attributeInstance.value?.startsWith("{") && uuidInstance) {
       const gc = new GraphicContext();
       //create object3d
@@ -69,24 +64,20 @@ export class ObjectspaceAlgorithms {
     }
   }
 
-  //a8e78bba-087e-407f-974a-18c36d830bc8 is the uuid for the detectable metaclass
+  /**
+   * A Detectable's mesh becomes a thin plane carrying its "Image to detect" as a
+   * texture, sized so the plane is "size in meters" wide at the image's aspect ratio.
+   */
   async checkDetectableInstance(attributeInstance?: AttributeInstance) {
     if (!attributeInstance) return;
 
-    // get the uuid of instance the attributeInstance belongs to
-    let uuidInstance = "";
-    if (attributeInstance.assigned_uuid_class_instance) {
-      uuidInstance = attributeInstance.assigned_uuid_class_instance;
-    }
-
-    const classInstance = await this.instanceUtility.getClassInstance(uuidInstance);
+    // Only a class instance can be a Detectable.
+    const classInstance = await this.instanceUtility.getClassInstance(attributeInstance.assigned_uuid_class_instance ?? "");
 
     if (classInstance) {
-      //get the attributeInstance of the attribute d334dd62-5651-4d0f-a7a0-13718f20da36 -> image to detect
       const imageToDetectAttributeInstances: AttributeInstance[] = classInstance.attribute_instance.filter(
         (attribute_instance) => attribute_instance.uuid_attribute == IMAGE_TO_DETECT_ATTRIBUTE_UUID,
       );
-      //get the attributeInstance of the attribute c1d9b467-08d8-4350-aa62-a47d6939b6ec -> size in meters
       const widthInMeters: AttributeInstance[] = classInstance.attribute_instance.filter(
         (attribute_instance) => attribute_instance.uuid_attribute == SIZE_IN_METERS_ATTRIBUTE_UUID,
       );
@@ -142,5 +133,5 @@ export class ObjectspaceAlgorithms {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const objectspaceAlgorithms = new ObjectspaceAlgorithms();

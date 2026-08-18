@@ -1,67 +1,55 @@
 /**
- * Hardcoded UUIDs / sentinel values the modeling client's behaviour depends on.
+ * UUIDs of concrete metamodel objects the modeling client's behaviour depends on.
  *
- * The old client scattered these string literals through the views (attribute-window,
- * dialog-table-attribute, dialog-reference-attribute, simulation-window, the hybrid
- * algorithms). Plan §9 P12 asks for the robotics uuids to be "lifted into a
- * src/constants.ts"; P8 needed four of them first, so the file starts here and P12
- * appended the rest (see the "P12" block at the bottom).
- *
- * These are contracts with the DATABASE, not arbitrary constants: they identify
- * concrete rows of the demo metamodel. Do not "clean them up" or regenerate them.
+ * These are contracts with the DATABASE, not arbitrary constants: each one identifies a
+ * row of the demo metamodel. They live here rather than inline at their use sites so the
+ * mapping stays greppable — do not regenerate or "tidy" them.
  */
 
 /**
  * AttributeType "File". Attribute instances whose meta attribute has this type get
  * the upload / delete / download buttons in the attribute window.
- * (attribute-window.ts:122 — `metaAttribute.attribute_type.uuid == "2df15b5e-..."`)
  *
- * NOTE: the demo metamodel on mmar-server currently contains NO attribute of this
- * type (verified in P8 across all 8 scene types), so that branch is unreachable with
- * demo data — the file endpoints themselves are covered by the P8 integration test.
+ * NOTE: no attribute of this type exists in the demo metamodel, so that branch is
+ * unreachable with demo data; the file endpoints themselves are covered by an
+ * integration test.
  */
 export const FILE_ATTRIBUTE_TYPE_UUID = "2df15b5e-6b43-4911-b38b-0fc5747a8ee6";
 
 /**
- * The meta Attribute "Object 3D" — rendered as a GLTF upload button instead of a
- * text field (attribute-window.html:115). Present on ObjectSpace's Detectable and
- * Augmentation classes in the demo metamodel.
+ * The meta Attribute "Object 3D" — rendered as a glTF upload button instead of a text
+ * field. Present on ObjectSpace's Detectable and Augmentation classes.
  */
 export const OBJECT_3D_ATTRIBUTE_UUID = "b058b3b4-b523-4ffe-b08e-4f8dda2831c8";
 
 /**
- * The meta Attribute "Image to detect" — rendered as an image upload button
- * (attribute-window.html:127). Also on ObjectSpace's Detectable / Augmentation.
+ * The meta Attribute "Image to detect" — rendered as an image upload button. Also on
+ * ObjectSpace's Detectable / Augmentation classes.
  */
 export const IMAGE_TO_DETECT_ATTRIBUTE_UUID = "d334dd62-5651-4d0f-a7a0-13718f20da36";
 
 /**
  * The meta Attribute "Name". The reference dialog resolves a referenced instance's
- * display name through this attribute (dialog-reference-attribute.ts:105 etc.).
+ * display name through this attribute.
  */
 export const NAME_ATTRIBUTE_UUID = "d6632c72-89fa-4210-9d01-18e911505608";
 
 /**
- * SceneType "Robotic system" — the table dialog runs the robotics hybrid algorithm
- * only for scenes of this type (dialog-table-attribute.ts:240). P12 uses it too.
+ * SceneType "Robotic system" — the table dialog and the simulation window run the
+ * robotics algorithms only for scenes of this type.
  */
 export const ROBOTIC_SYSTEM_SCENETYPE_UUID = "113c3133-bf77-493a-a36f-553e77832280";
 
 /**
- * Sentinel default values. The old upload buttons flip their label by comparing the
- * attribute value against the meta default ("Upload" vs "Replace"), rather than
- * checking whether real content is present (attribute-window.html:117/129).
+ * Sentinel default values. The upload buttons flip their label ("Upload" vs "Replace")
+ * by comparing the attribute value against the meta default, rather than by checking
+ * whether real content is present.
  */
 export const OBJECT_3D_DEFAULT_VALUE = "3D Object String";
 export const IMAGE_DEFAULT_VALUE = "Image";
 
 /* ------------------------------------------------------------------------- *
- * P12 — hybrid algorithms + simulation window.
- *
- * The old client inlined every one of these, each with a `// <uuid> is the uuid for
- * X` comment next to it (hybrid_algorithms_service.ts, objectspace_algorithms.ts,
- * statechange_algorithms.ts, simulation-window.ts). Plan §9 P12 asks for them to be
- * lifted here; the comments come along so the mapping stays greppable.
+ * Hybrid algorithms + simulation window.
  * ------------------------------------------------------------------------- */
 
 /** SceneType "ObjectSpace" — gates the augmentation / detectable algorithms. */
@@ -69,6 +57,12 @@ export const OBJECTSPACE_SCENETYPE_UUID = "a3b35b86-2636-4987-8cc4-814f468f6c4b"
 
 /** SceneType "Statechange" — gates the reference algorithm. */
 export const STATECHANGE_SCENETYPE_UUID = "239c5597-6cc9-498a-bf61-432cf85b3835";
+
+/**
+ * AttributeType "Mechanism". An attribute of this type holds a function body that the
+ * animator runs on every render tick while `globalObject.runMechanism` is set.
+ */
+export const MECHANISM_ATTRIBUTE_TYPE_UUID = "a8e33bad-9eed-4a24-a4b2-406c5439d13a";
 
 /** Class "Joint" of the Robotic system metamodel — one slider per instance. */
 export const META_JOINT_UUID = "c5cf9a3c-988a-4fd4-87e5-0ad8fcc7234b";
@@ -84,9 +78,9 @@ export const SIZE_IN_METERS_ATTRIBUTE_UUID = "c1d9b467-08d8-4350-aa62-a47d6939b6
 
 /**
  * The Reference class's pose attributes. `updateReferenceClassAttributeInstanceValues`
- * writes the three.js object's pose into them each second (ThreeCanvas heartbeat #2)
- * and `updateThreejsObject` reads them back — but only while the corresponding
- * Set Position / Set Rotation flag attribute holds the string "true".
+ * writes the three.js object's pose into them once a second (the canvas heartbeat) and
+ * `updateThreejsObject` reads them back — but only while the corresponding Set Position
+ * / Set Rotation flag attribute holds the string "true".
  */
 export const REFERENCE_POSITION_X_ATTRIBUTE_UUID = "5a038d67-bc1a-4881-86e8-f53f37dae5d6";
 export const REFERENCE_POSITION_Y_ATTRIBUTE_UUID = "455eae8f-35c7-44f9-8909-468972f53341";

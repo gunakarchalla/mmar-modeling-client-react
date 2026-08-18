@@ -19,7 +19,7 @@ import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { switchToTab, closeTab, renameTab } from "./tabActions";
 
-// Port of the tab bar half of `main-body-tab-bar.html` (the mdc-tab-bar repeat over
+// The tab bar: one tab per open scene (
 // tabContext). Each tab shows the SceneInstance name + a close ×. Selecting a tab
 // runs switchToTab (engine scene swap + store), closing runs closeTab. Both keep
 // tabsStore and globalObject.tabContext in sync (see tabActions).

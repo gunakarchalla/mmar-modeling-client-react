@@ -81,12 +81,18 @@ vi.mock("@/resources/services/history-service", () => ({ historyService: mocks.h
 vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
   hybridAlgorithmsService: { checkHybridAlgorithms: vi.fn(async () => undefined) },
 }));
+// Modules that reach the engine's global-definition LEAF (rather than the `@/engine`
+// barrel below) need it mocked in its own right: importing it for real constructs a
+// WebGLRenderer at module scope, which needs a DOM.
+vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject }));
 vi.mock("@/engine", () => ({
   globalObject: mocks.globalObject,
   globalSelectedObject: mocks.globalSelectedObject,
   instanceCreationHandler: mocks.instanceCreationHandler,
 }));
 vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
+// The change publisher resolves the shared session through this back-reference.
+mocks.globalObject.sharedDocServiceRef = mocks.sharedDocService;
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("@/resources/services/expression-utility", () => ({ expressionUtility: mocks.expressionUtility }));
@@ -202,7 +208,7 @@ describe("AttributeWindow", () => {
   it("shows the static attributes and the plain fields of the selected class instance", async () => {
     selectClassInstanceWith([attributeInstanceJson()]);
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
 
     await waitFor(() => expect(screen.getByDisplayValue(CLASS_INSTANCE_UUID)).toBeTruthy());
@@ -216,7 +222,7 @@ describe("AttributeWindow", () => {
     const published: AttributeInstance[] = [];
     const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (p) => published.push(p));
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
     const input = await screen.findByDisplayValue("hello");
 
@@ -239,7 +245,7 @@ describe("AttributeWindow", () => {
     const published: AttributeInstance[] = [];
     const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (p) => published.push(p));
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
     const input = await screen.findByDisplayValue("hello");
 
@@ -259,7 +265,7 @@ describe("AttributeWindow", () => {
       metaAttribute({ ui_component: "Dropdown", facets: "catching|throwing" }),
     );
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
 
     await waitFor(() => expect(screen.getByText("catching")).toBeTruthy());
@@ -273,7 +279,7 @@ describe("AttributeWindow", () => {
   it("drops the element's attributes on removeAttributeGui (the old delayedReset)", async () => {
     selectClassInstanceWith([attributeInstanceJson()]);
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
     await screen.findByDisplayValue("hello");
 
@@ -291,7 +297,7 @@ describe("AttributeWindow", () => {
     mocks.globalSelectedObject.getObject.mockReturnValue(undefined);
     mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(undefined);
 
-    const { container } = render(<AttributeWindow firstLevel />);
+    const { container } = render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
 
     await waitFor(() => expect(container.firstChild).toBeNull());
@@ -302,7 +308,7 @@ describe("AttributeWindow", () => {
   it("shows the opened scene instance's attributes when no element is selected", async () => {
     selectNothingWithSceneAttributes([sceneAttributeInstanceJson({ value: "model name" })]);
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
 
     // static block: the scene's uuid and its name, labelled "Scene" rather than "Class"
@@ -319,7 +325,7 @@ describe("AttributeWindow", () => {
     const published: AttributeInstance[] = [];
     const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (p) => published.push(p));
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
     const input = await screen.findByDisplayValue("model name");
 
@@ -335,7 +341,7 @@ describe("AttributeWindow", () => {
   it("rebuilds on tabChanged, which is all a tab switch publishes", async () => {
     selectClassInstanceWith([attributeInstanceJson()]);
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
     await screen.findByDisplayValue("hello");
 
@@ -355,7 +361,7 @@ describe("AttributeWindow", () => {
       }),
     );
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
 
     await waitFor(() => expect(screen.getByText("Reference Attributes")).toBeTruthy());
@@ -377,7 +383,7 @@ describe("AttributeWindow", () => {
       }),
     ]);
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
 
     await waitFor(() => expect(screen.getByText("Table Attributes")).toBeTruthy());
@@ -402,7 +408,7 @@ describe("AttributeWindow", () => {
       }),
     ]);
 
-    render(<AttributeWindow firstLevel />);
+    render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
 
     const button = await screen.findByRole("button", { name: "Upload 3D Object" });

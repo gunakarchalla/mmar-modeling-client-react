@@ -29,8 +29,8 @@ import { useUiStore } from "@/resources/store/uiStore";
 import { eventBus } from "@/resources/services/event-bus";
 import { useKeyboardShortcuts } from "@/views/hooks/useKeyboardShortcuts";
 
-// Draggable divider (copied from the metamodeling twin's MainBody). The library
-// handles the drag mechanics; autoSaveId on the PanelGroup persists column widths.
+// Draggable divider between the three body columns. The library handles the drag
+// mechanics; `autoSaveId` on the PanelGroup persists the column widths.
 const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
   width: 5,
   flex: "0 0 auto",
@@ -42,25 +42,24 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
   },
 }));
 
-// Port of `my-app.{ts,html}` + `main-body-tab-bar.html` — the whole page skeleton:
-// TopNavBar, the toolbar row, the tab row (tabs | state window), the resizable
-// 3-column body (LeftNav | ThreeCanvas | RightNav), the footer, plus the two
-// always-present overlays (sign-in dialog + snackbar). The body is gated behind
-// authentication; the sign-in dialog auto-opens when no user is logged in.
+// The whole page skeleton: the top nav, the toolbar row, the tab row (tabs | state
+// window), the resizable three-column body (LeftNav | ThreeCanvas | RightNav), the
+// footer, and the always-present overlays (sign-in dialog and snackbar). Every dialog
+// in the app is mounted here and shows itself from `uiStore`.
 //
-// my-app.attached() ran initiator.init()/initEventListeners() — that boot now
-// happens inside ThreeCanvas via engine.mount(). AppLayout owns the app-level
-// keyboard shortcuts (Ctrl+S/Delete/arrows) and the Ctrl+S -> Save dialog wiring.
+// The body is gated behind authentication; the sign-in dialog opens itself when no user
+// is logged in. The engine boots inside ThreeCanvas, not here. AppLayout owns the
+// app-level keyboard shortcuts and the Ctrl+S to Save-dialog wiring.
 export default function AppLayout() {
   const currentUser = useAuthStore((s) => s.currentUser);
   const openDialog = useUiStore((s) => s.openDialog);
 
-  // Mount the keyboard shortcuts once for the app (plan §5/§9 P6: Delete/arrows/Ctrl+S).
+  // Mount the app-wide keyboard shortcuts once (Delete, arrows, Ctrl+S, undo/redo).
   useKeyboardShortcuts();
 
   // Ctrl+S publishes `ctrlPlusSPressed` (from useKeyboardShortcuts); the old
   // top-nav-bar opened the Save dialog on that event. Wire it to the uiStore saveAs
-  // dialog (rendered in P9). Subscription is torn down on unmount.
+  // dialog. The subscription is torn down on unmount.
   useEffect(() => {
     const sub = eventBus.subscribe("ctrlPlusSPressed", () => openDialog("saveAs"));
     return () => sub.dispose();
@@ -98,9 +97,8 @@ export default function AppLayout() {
             </Panel>
             <ResizeHandle />
             <Panel minSize={30}>
-              {/* MiddleBody: the 3D canvas fills the panel; the AR/VR XRButton is an
-                  absolutely-positioned overlay on top of it (plan §9 P13, replacing the
-                  old document.body @ bottom:60px placement). */}
+              {/* The 3D canvas fills the panel; the AR/VR entry button is an
+                  absolutely-positioned overlay on top of it. */}
               <Box sx={{ position: "relative", height: "100%", width: "100%", backgroundColor: "#ffffff" }}>
                 <ThreeCanvas />
                 <XrButton />
@@ -122,14 +120,14 @@ export default function AppLayout() {
       <SignInDialog open={!currentUser} onClose={() => undefined} />
       <AppSnackbar />
 
-      {/* P7 dialogs: loading window (driven by uiStore.loading) + create-new-scene. */}
+      {/* Loading window (driven by uiStore.loading) + create-new-scene. */}
       <LoadingWindow />
       <CreateNewSceneDialog />
 
-      {/* P9 model-ops dialogs. All are uiStore-driven and render closed until their
-          flag opens (TopNavBar's File menu, SceneGroup's buttons, StateWindow's Info
-          button, Ctrl+S). The attribute-window dialogs deliberately live inside
-          AttributeWindow instead — see P8's dialog-ownership note. */}
+      {/* Model-operation dialogs. All are uiStore-driven and render closed until
+          something opens their flag (the File menu, a scene-tree context menu, the
+          Info button, Ctrl+S). The attribute dialogs deliberately live inside
+          AttributeWindow instead, next to the state they act on. */}
       <SaveAsDialog />
       <CopySceneDialog />
       <DeleteSceneDialog />

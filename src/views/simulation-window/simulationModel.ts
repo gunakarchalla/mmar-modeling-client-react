@@ -5,17 +5,12 @@ import { urdfPoseService } from "@/engine/hybrid-algorithms/urdf-pose-service";
 import { ROBOTIC_SYSTEM_SCENETYPE_UUID, META_JOINT_UUID } from "@/constants";
 
 /**
- * The data half of `views/simulation-window/simulation-window.ts` (P12) — everything
- * the Aurelia class did outside its template, as plain functions so the joint-slider
- * maths is unit-testable without rendering. Same split P6 used for tabActions.ts, P8
- * for attributeModel.ts and P9 for copySceneModel.ts.
+ * The data half of the simulation window, as plain functions so the joint-slider maths
+ * is unit-testable without rendering.
  *
  * The component owns the subscriptions, the coalescing timer and the React state; this
- * module owns "what are the sliders for the open tab, and what happens when one moves".
- *
- * The two hardcoded uuids the old class held as private statics
- * (ROBOTIC_SYSTEM_SCENETYPE_UUID / META_JOINT_UUID) now live in src/constants.ts, per
- * plan §9 P12.
+ * module answers "which sliders does the open tab have, and what happens when one
+ * moves".
  */
 
 export type JointControl = {
@@ -125,9 +120,8 @@ export async function buildSimulationState(): Promise<SimulationState> {
 }
 
 /**
- * Slider callback. Returns the clamped value the UI should show — the old method
- * mutated `ctrl.value` in place (Aurelia two-way binding); React re-renders from the
- * returned value instead, so the caller decides what to store.
+ * Slider callback. Returns the clamped value the UI should show rather than mutating
+ * the control, so the caller decides what to store and React re-renders from it.
  */
 export async function applyJointValue(ctrl: JointControl, rawValue: unknown): Promise<number> {
   const value = toNumber(rawValue);

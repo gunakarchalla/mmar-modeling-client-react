@@ -7,28 +7,22 @@ import { getToken } from "@/resources/services/token";
 import type { SharedDocService } from "@/resources/collaboration/shared-doc-service";
 
 /**
- * Port of the old `resources/global_definitions.ts` — the engine "god object":
- * renderer, cameras, controls, raycasters, per-tab context and the many mutable
- * flags the three.js world shares. The Aurelia `@singleton()` decorator is dropped;
- * instead this module exports a single instance `globalObject` that every engine
- * port + utility imports (the DI -> module-singleton recipe, plan §3.1).
+ * The engine's shared mutable state: the renderer, the cameras and controls, the
+ * raycasters, the per-tab context and the flags the three.js world coordinates on.
+ * Every engine module and utility imports the single `globalObject` instance below.
  *
- * Modeling-specific members kept verbatim from the original (they do NOT exist in
- * the metamodeling twin): the `isShared` flag on `tabContext`, `allScales`,
- * `runMechanism`, `localFiles`, `autoSave`, `doSceneInstancePatch[Local]`,
- * `sharedDocServiceRef` and the `currentTabAccess` getter. P10 wired collaboration:
- * `sharedDocServiceRef` is the back-reference SharedDocService sets on itself at
- * construction (the old client's trick for breaking its circular DI), and it stays
- * `null` until that module is first imported. The `SharedDocService` import below is
- * TYPE-ONLY, so it is erased at build time and no runtime cycle exists — the old
- * client typed this field `any`; a real type makes every engine call site
- * (interaction / deletion / transform-control-events / ray-helper) type-checked.
+ * `tabContext` holds one entry per open scene tab. `dragObjects` is the pick list the
+ * raycasters test against, `updateLinesArray` the relation lines the animator re-routes,
+ * and `allPositions` / `allRotations` / `allScales` the previous frame's transforms the
+ * animator diffs against to decide whether anything moved.
  *
- * accessToken: the old client stored the JWT here (`user-management` wrote it, the
- * fetchHelper + shared_doc_service read it). In the React port the single source of
- * truth is `resources/services/token.ts` (written by `authStore`); this field is a
- * read-only getter mirroring it (plan §3.2 + P1 notes) so ported engine code that
- * reads `globalObject.accessToken` keeps working.
+ * Two members are deliberate indirections:
+ *  - `accessToken` is a read-only mirror of the JWT held in `services/token.ts` (written
+ *    by `authStore`), so engine code can read the token without depending on the store.
+ *  - `sharedDocServiceRef` is the back-reference SharedDocService sets on itself at
+ *    construction. It is what lets the engine reach a shared session without importing
+ *    the collaboration layer; the import below is TYPE-ONLY and erased at build time, so
+ *    no runtime cycle exists. It stays `null` until that module is first imported.
  */
 export class GlobalDefinition {
   selectedTab: number;
@@ -73,7 +67,7 @@ export class GlobalDefinition {
   relationObjects: THREE.Mesh[];
   sceneTypes: SceneType[];
   // Holds the bound interaction-handler `onDocumentMouseDown` so the same reference
-  // can be added/removed as the renderer `pointerdown` listener. The original typed
+  // can be added and removed as the renderer's `pointerdown` listener. Typed
   // this `void`; under strict TS that cannot hold a function, so it is widened to
   // `any` (runtime behaviour is identical).
   onDocumentMouseDownEventListener: any;
@@ -90,7 +84,7 @@ export class GlobalDefinition {
   doSceneInstancePatch: boolean;
   /** Set only for local-origin mutations in a shared scene; remote Yjs updates must NOT set this. */
   doSceneInstancePatchLocal: boolean;
-  /** Back-reference to SharedDocService, set on its construction to avoid circular DI (P10). */
+  /** Back-reference to SharedDocService, set when that module is first evaluated. */
   sharedDocServiceRef: SharedDocService | null;
 
   /** Read-only mirror of the JWT held in token.ts (single source of truth, written by authStore). */
@@ -129,8 +123,8 @@ export class GlobalDefinition {
     this.dragObjects = [];
     this.buttonObjects = [];
     // current_meta_port / current_class_instance / current_port_instance start
-    // undefined; the original's explicit `= undefined` is dropped (strict TS —
-    // strictPropertyInitialization is off, so leaving them uninitialised is fine).
+    // undefined until something selects or creates one (strictPropertyInitialization
+    // is off, so they need no explicit initialiser).
     this.attribute_instances = [];
     this.role_instances = [];
     this.relationObjects = [];
@@ -150,6 +144,6 @@ export class GlobalDefinition {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration). Every
+// Module singleton — one shared instance. Every
 // engine port + utility imports this instance.
 export const globalObject = new GlobalDefinition();

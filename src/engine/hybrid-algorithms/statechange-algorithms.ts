@@ -17,25 +17,23 @@ import {
 } from "@/constants";
 
 /**
- * P12 port of `resources/hybridAlgorithms/statechange_algorithms.ts` (plan §10 ★ —
- * no metamodeling twin). DI stripped: InstanceUtility / GlobalDefinition become
- * module-singleton imports. Reached from `hybridAlgorithmsService`, never directly.
+ * Hybrid algorithms for the Statechange metamodel, reached through
+ * `hybridAlgorithmsService` and never directly.
  *
- * The Statechange metamodel's "Reference" class points at an instance in ANOTHER open
- * scene. These three algorithms keep the reference's three.js object in sync with it:
- *   - checkForReference()  — adopt the referenced object's geometry + material.
- *   - updateThreejsObject(ci) — push the instance's pose ATTRIBUTES onto its object.
- *   - updateReferenceClassAttributeInstanceValues() — the reverse: read the object's
- *     pose back into the attributes (driven by ThreeCanvas heartbeat #2, 1 Hz).
- * The last two are gated on the instance's own Set Position / Set Rotation flags.
+ * Its "Reference" class points at an instance in another open scene. These three
+ * algorithms keep the reference's three.js object in sync with it:
+ *   - `checkForReference()` adopts the referenced object's geometry and material.
+ *   - `updateThreejsObject(ci)` pushes the instance's pose ATTRIBUTES onto its object.
+ *   - `updateReferenceClassAttributeInstanceValues()` does the reverse, reading the
+ *     object's pose back into the attributes (driven by the canvas heartbeat, 1 Hz).
+ * The last two only act while the instance's own "Set Position" / "Set Rotation" flag
+ * attributes hold the string "true".
  *
- * FAITHFUL TYPE NOTE: gds types `AttributeInstance.value` as `string`, but
- * `updateReferenceClassAttributeInstanceValues` assigns raw NUMBERS to it and
- * `updateThreejsObject` feeds those values straight into `new THREE.Quaternion(...)`.
- * The old client relied on JS coercion for both (`'0.5' != 0.5` is false; THREE's
- * quaternion math coerces strings through `*`). Ported byte-identically with casts
- * rather than "fixing" the types — Number()-ing the values would change what a `""`
- * or `"undefined"` value does. Same judgement as P10's gds ctor casts.
+ * TYPES: gds declares `AttributeInstance.value` as a string, but the pose values are
+ * written and read here as raw numbers and fed straight into `new THREE.Quaternion(...)`,
+ * relying on JS coercion (`"0.5" != 0.5` is false, and THREE's maths coerces through `*`).
+ * The casts keep that behaviour: running the values through `Number()` would change what
+ * an empty or "undefined" value does.
  */
 export class StatechangeAlgorithms {
   private globalObjectInstance = globalObject;
@@ -64,9 +62,6 @@ export class StatechangeAlgorithms {
       ) {
         const roleInstanceFrom = augmentationReferenceAttributeInstances[0].role_instance_from;
         const uuid_has_reference_class_instance = roleInstanceFrom.uuid_has_reference_class_instance;
-        const uuid_has_reference_scene_instance = roleInstanceFrom.uuid_has_reference_scene_instance;
-        const uuid_has_reference_relationclass_instance = roleInstanceFrom.uuid_has_reference_relationclass_instance;
-        const uuid_has_reference_port_instance = roleInstanceFrom.uuid_has_reference_port_instance;
 
         //case 1: reference to class instance
         //we replace the referenceInstance object with the referenced object
@@ -97,13 +92,9 @@ export class StatechangeAlgorithms {
               referenceObject.material = object.material;
             }
           }
-        } else if (uuid_has_reference_scene_instance) {
-          console.info("not implemented yet");
-        } else if (uuid_has_reference_relationclass_instance) {
-          console.info("not implemented yet");
-        } else if (uuid_has_reference_port_instance) {
-          console.info("not implemented yet");
         }
+        // References to a scene, a relation class or a port instance are recognised by
+        // the metamodel but have no adoption behaviour yet.
       }
     }
   }
@@ -149,7 +140,7 @@ export class StatechangeAlgorithms {
         // get the attributeInstance of the attribute 043daf98-2cdd-4b85-9e7a-8d983c43f565 -> Set Position
         const setPosition = find(REFERENCE_SET_POSITION_ATTRIBUTE_UUID);
 
-        // The original dereferences setPosition/setRotation unguarded; `?.value` keeps
+        // `?.value` rather than a bare dereference keeps
         // the same outcome (a missing flag !== "true" -> skip) without the TypeError.
         if (positionX && positionY && positionZ && setPosition?.value == "true") {
           positionX.value = position.x as unknown as string;
@@ -196,7 +187,7 @@ export class StatechangeAlgorithms {
       // get the attributeInstance of the attribute 043daf98-2cdd-4b85-9e7a-8d983c43f565 -> Set Position
       const setPosition = find(REFERENCE_SET_POSITION_ATTRIBUTE_UUID);
 
-      // The original dereferences referenceObject / setPosition / setRotation / the
+      // Guarded access to referenceObject / setPosition / setRotation / the
       // rotation* cells unguarded — it throws a TypeError for a Reference instance
       // that is not (yet) drawn, or whose pose attributes are absent. Guarded here so
       // one bad instance cannot abort the whole hybrid pass; the reachable behaviour
@@ -223,14 +214,11 @@ export class StatechangeAlgorithms {
       );
       // check if the rotation of an object corresponds to the quaternion values
       //
-      // PRECEDENCE ODDITY, PORTED AS-IS (the parentheses below are explicit, but the
-      // grouping is exactly the original's): `&&` binds tighter than `||`, so the
-      // `Set Rotation == "true"` gate gates ONLY the x comparison. A Reference whose
-      // y/z/w differ therefore gets rotated even with Set Rotation off — almost
-      // certainly not the intent (contrast the position block above, where the flag
-      // gates every axis), but it is the shipped behaviour and the demo data depends
-      // on whatever it currently does. Fixing it is a behaviour change, not a port:
-      // flagged for P13's parity audit (state.json → discoveries).
+      // KNOWN ODDITY, kept deliberately: `&&` binds tighter than `||`, so the
+      // "Set Rotation" gate applies ONLY to the x comparison. A Reference whose y/z/w
+      // differ is therefore rotated even with the flag off — almost certainly not the
+      // intent (the position block above gates every axis), but it is the shipped
+      // behaviour, and changing it changes what existing models do.
       if (
         (setRotation?.value == "true" && referenceObject.quaternion.x != quaternion.x) ||
         referenceObject.quaternion.y != quaternion.y ||
@@ -245,5 +233,5 @@ export class StatechangeAlgorithms {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const statechangeAlgorithms = new StatechangeAlgorithms();

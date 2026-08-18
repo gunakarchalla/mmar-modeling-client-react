@@ -13,30 +13,19 @@ import { metaUtility } from "@/resources/services/meta-utility";
 import { eventBus } from "@/resources/services/event-bus";
 import { historyService } from "@/resources/services/history-service";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
-import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
+import { publishLocalChange, markActiveSceneDirty } from "@/resources/collaboration/local-change-publisher";
 import { FILE_ATTRIBUTE_TYPE_UUID } from "@/constants";
 
 /**
- * The data half of the old `views/attribute-window/attribute-window.ts` — its
- * `updater()` / `reset()` / `getAttributeInstancesOfFileType()` methods, extracted
- * into a plain async function so it is unit-testable without rendering (the same
- * split P6 used for `views/layout/tabActions.ts`). `AttributeWindow.tsx` owns the
- * React state and the event wiring; this module owns the "which attributes, in what
- * order, in which group" logic.
+ * The data half of the attribute window, as plain async functions so the grouping and
+ * the field-change pipeline are unit-testable without rendering.
  *
- * DEAD STATE NOT PORTED (verified by grepping the old .ts AND .html — none of these
- * is ever read, neither by the template nor by any other file in the old client):
- *   - `oldAttributeValues`: written in updater(), cleared in reset(), never read.
- *     Plan §9 P8 calls it "`oldAttributeValues` diffing", but no diffing exists.
- *   - `attributeTypesFor{NoTable,Table,Reference}AttributeInstances`: three arrays
- *     pushed in lockstep with the groups below and never read.
- *   - `visible`: set true whenever a plain/table attribute exists, never read (the
- *     template gates on the group lengths instead).
- * Reproducing them as React state would cause re-render churn for no behaviour.
- * See state.json → discoveries (P8).
+ * `AttributeWindow.tsx` owns the React state and the event wiring; this module answers
+ * "which attributes, in what order, in which group" and "what happens when one is
+ * edited".
  */
 
-/** One row of the old `enhancedAttributeInstanceArray`. */
+/** An attribute instance plus everything the window needs from its meta attribute. */
 export interface EnhancedAttributeInstance {
   attributeInstance: AttributeInstance;
   sequence: number;
@@ -81,7 +70,7 @@ export function emptyAttributeGroups(): AttributeGroups {
 }
 
 /**
- * Port of `attribute-window.getAttributeInstancesOfFileType()`: the uuids of those
+ * The uuids of those
  * attribute instances whose META attribute is of the File attribute type.
  */
 async function getFileTypeAttributeInstanceUuids(
@@ -103,16 +92,15 @@ async function getFileTypeAttributeInstanceUuids(
 }
 
 /**
- * Port of `attribute-window.updater()`. Resolves the selected THREE object back to
- * its class / port / relationclass instance, enriches every attribute instance with
- * its meta attribute (sequence, ui_component, facets), sorts by sequence and splits
- * the result into the three groups the window renders.
+ * Resolves the selected THREE object back to its class / port / relationclass instance,
+ * enriches every attribute instance with its meta attribute (sequence, ui_component,
+ * facets), sorts by sequence and splits the result into the three groups the window
+ * renders.
  *
- * SCENE FALLBACK (not in the old client): when the selection resolves to no model
- * element, the attribute instances of the OPEN SCENE INSTANCE are shown instead — the
- * scene type's own attributes, which had no UI at all before. The rest of the function
- * is untouched by this: an attribute instance parented by a scene already resolves its
- * meta attribute through `assigned_uuid_scene_instance` -> `uuid_scene_type` below.
+ * SCENE FALLBACK: when the selection resolves to no model element, the OPEN SCENE
+ * INSTANCE's own attributes are shown instead. The rest of the function needs no special
+ * case for them — an attribute instance parented by a scene resolves its meta attribute
+ * through `assigned_uuid_scene_instance` -> `uuid_scene_type` below.
  *
  * The fallback is keyed on "no element resolved" rather than on "no selected object"
  * because `globalSelectedObject` starts out holding an empty `THREE.Mesh` (truthy, but
@@ -200,7 +188,7 @@ export async function buildAttributeGroups(): Promise<AttributeGroups> {
       }
     }
 
-    // The original dereferences `metaAttribute` unguarded here (it would throw for an
+    // Guarded: an unguarded dereference would throw for an
     // orphaned attribute instance). Skipping such a row is the closest safe
     // equivalent — a throw inside a React effect would blank the whole window.
     if (!metaAttribute) continue;
@@ -259,7 +247,7 @@ export async function buildAttributeGroups(): Promise<AttributeGroups> {
 }
 
 /**
- * Which instance owns the attribute being edited. The old `attribute-window` read
+ * Which instance owns the attribute being edited. This is read
  * these off its own component state (`this.currentClassInstance` etc.); here they are
  * passed in, because `applyFieldChange` is a free function. `AttributeGroups` is
  * assignable to this, so callers just hand over the groups they already render.
@@ -273,27 +261,20 @@ export interface AttributeOwner {
 }
 
 /**
- * Port of `attribute-window.fieldChange()`: normalise the edited value, refresh the
- * vizrep, propagate to collaborators, and mark the scene dirty so the 5 s auto-save
- * loop patches it.
+ * Handles an edited attribute value: normalise it, refresh the vizrep, run any hybrid
+ * algorithm it affects, propagate it to collaborators, and mark the scene dirty so the
+ * auto-save loop patches it.
  *
- * DEVIATION (plan-mandated): the old method awaited
- * `vizrepUpdateChecker.checkForVizRepUpdate(attributeInstance)` directly. Plan §5/§9
- * P8 require publishing `checkForVizRepUpdateByAttributeInstance` instead, which the
- * P4 vizrep-update-checker subscribes to. Same effect and it keeps the view out of the
- * engine's import graph, but the update is now fire-and-forget rather than awaited —
- * so the hybrid-algorithms call below is NOT sequenced after the vizrep update the way
- * the original sequenced it; the two now run concurrently. See state.json → discoveries
- * (P8 ordering, P12). The hybrid algorithms that draw (ObjectSpace) use their own
- * private GraphicContext precisely so that overlap is safe — see
- * engine/hybrid-algorithms/objectspace-algorithms.ts.
+ * The vizrep refresh is requested over the bus rather than by calling
+ * vizrep-update-checker, which keeps this view out of the engine's import graph. That
+ * makes it fire-and-forget, so it runs CONCURRENTLY with the hybrid-algorithms call
+ * below. The hybrid algorithms that draw use their own private GraphicContext precisely
+ * so that overlap is safe (see engine/hybrid-algorithms/objectspace-algorithms.ts).
  *
- * SCENE-OWNED ATTRIBUTES (`owner.currentSceneInstance`) take the same path: they
- * broadcast as a `scene_attribute_value` change (the scene's own `attribute_instances`
- * Y.Map) and refresh the vizrep like any other — vizrep-update-checker resolves an
- * attribute instance through `assigned_uuid_scene_instance` to the scene type's
- * geometry. Only the hybrid algorithms do not apply: they dispatch on a class or a
- * port, so a scene attribute runs none, exactly as it did when nothing was selected.
+ * SCENE-OWNED ATTRIBUTES take the same path: they broadcast as a `scene_attribute_value`
+ * change and refresh the vizrep like any other, since vizrep-update-checker resolves them
+ * through `assigned_uuid_scene_instance` to the scene type's geometry. Only the hybrid
+ * algorithms do not apply — they dispatch on a class or a port.
  */
 export async function applyFieldChange(attributeInstance: AttributeInstance, owner: AttributeOwner): Promise<void> {
   const session = sharedDocService.forTab(globalObject.selectedTab);
@@ -309,54 +290,25 @@ export async function applyFieldChange(attributeInstance: AttributeInstance, own
 
   eventBus.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
 
-  // check if there are changes that require a hybrid algorithm to run (P12: live)
+  // Some attribute changes drive a hybrid algorithm (an ObjectSpace mesh swap, say).
   if (owner.currentClassInstance) {
     await hybridAlgorithmsService.checkHybridAlgorithms(null, [owner.currentClassInstance]);
   } else if (owner.currentPortInstance) {
     await hybridAlgorithmsService.checkHybridAlgorithms(null, null, [owner.currentPortInstance]);
   }
 
-  if (session) {
-    // Shared mode: propagate attribute change through Yjs and mark local dirty flag
-    if (owner.currentClassInstance) {
-      applyLocalChangeToYDoc(
-        session.ydoc,
-        {
-          type: "attribute_value",
-          classInstanceUuid: owner.currentClassInstance.uuid,
-          attributeUuid: attributeInstance.uuid,
-          value: attributeInstance.value,
-        },
-        session.localOrigin,
-      );
-    } else if (owner.currentRelationclassInstance) {
-      applyLocalChangeToYDoc(
-        session.ydoc,
-        {
-          type: "relation_attribute_value",
-          relationClassInstanceUuid: owner.currentRelationclassInstance.uuid,
-          attributeUuid: attributeInstance.uuid,
-          value: attributeInstance.value,
-        },
-        session.localOrigin,
-      );
-    } else if (owner.currentSceneInstance) {
-      // The scene's own attributes live in their own top-level Y.Map — the scene is the
-      // owner, and a Y.Doc holds exactly one scene, so the change needs no owner uuid.
-      applyLocalChangeToYDoc(
-        session.ydoc,
-        {
-          type: "scene_attribute_value",
-          attributeUuid: attributeInstance.uuid,
-          value: attributeInstance.value,
-        },
-        session.localOrigin,
-      );
-    }
-    globalObject.doSceneInstancePatchLocal = true;
-  } else {
-    globalObject.doSceneInstancePatch = true;
+  // Propagate the new value to collaborators. Which change kind applies depends on what
+  // owns the attribute; a scene's own attributes need no owner uuid, because a Y.Doc
+  // holds exactly one scene.
+  const value = attributeInstance.value;
+  if (owner.currentClassInstance) {
+    publishLocalChange({ type: "attribute_value", classInstanceUuid: owner.currentClassInstance.uuid, attributeUuid: attributeInstance.uuid, value });
+  } else if (owner.currentRelationclassInstance) {
+    publishLocalChange({ type: "relation_attribute_value", relationClassInstanceUuid: owner.currentRelationclassInstance.uuid, attributeUuid: attributeInstance.uuid, value });
+  } else if (owner.currentSceneInstance) {
+    publishLocalChange({ type: "scene_attribute_value", attributeUuid: attributeInstance.uuid, value });
   }
+  markActiveSceneDirty();
 
   // Undo step for the edit. Keyed on the attribute instance so a slider being dragged
   // (which commits on every release) and a value re-edited straight away collapse into

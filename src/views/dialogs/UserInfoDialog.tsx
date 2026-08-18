@@ -17,19 +17,15 @@ import { useUiStore } from "@/resources/store/uiStore";
 import { useStateStore } from "@/resources/store/stateStore";
 
 /**
- * P9 port of `dialogs/dialog-user-info/{ts,html}` — the help panel behind the
- * StateWindow's blinking "Info" button (which already opens this uiStore flag, P6).
+ * The help panel behind the state window's Info button: one section per interaction
+ * mode, with the section for the CURRENT mode expanded.
  *
- * The old template `show.bind`s five mode sections against
- * `globalStateObject.activeState`; here that comes from stateStore, the engine's
- * one-way reactive mirror of the same field (P2), so the panel tracks the mode
- * without reaching into the engine. The mode strings must stay byte-identical to
- * GlobalStateObject.stateNames — they are compared, not displayed.
+ * The active mode comes from `stateStore`, the engine's one-way mirror, so the panel
+ * tracks it without reaching into the engine. The mode strings below must stay
+ * byte-identical to `GlobalStateObject.stateNames` — they are compared, not displayed.
  *
- * mdc-expandable → MUI Accordion. The old "Report Problem" button had an EMPTY
- * handler (dialog-user-info.ts:22 `reportProblem(){}`), so it does nothing here
- * either; it is left enabled to match the original's appearance rather than
- * inventing a destination for it.
+ * "Report Problem" is an intentionally inert button: there is no destination to send a
+ * report to. It is left visible rather than removed.
  */
 const SELECTION_MODE = "SelectionMode (drag)";
 const VIEW_MODE = "ViewMode";
@@ -232,7 +228,7 @@ export default function UserInfoDialog() {
       </DialogContent>
       <DialogActions>
         <Button onClick={cancel}>Cancel</Button>
-        {/* reportProblem() is an empty method in the old client — no destination exists. */}
+        {/* Inert: there is no destination to report to. See the header. */}
         <Button onClick={() => undefined}>Report Problem</Button>
       </DialogActions>
     </Dialog>

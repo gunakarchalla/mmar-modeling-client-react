@@ -1,6 +1,5 @@
 import {
   UUID,
-  SceneType,
   SceneInstance,
   ClassInstance,
   RelationclassInstance,
@@ -13,17 +12,34 @@ import { globalObject } from "@/engine/global-definition";
 import { eventBus } from "./event-bus";
 import { logger } from "./logger";
 import { metaUtility } from "./meta-utility";
-import { backendService } from "./backend-service";
 import { useTabsStore } from "@/resources/store/tabsStore";
 
 /**
- * Port of the old modeling `instance_utility.ts`. DI stripped: globalObject /
- * metaUtility / logger / eventBus (was EventAggregator) / backendService (was
- * FetchHelper) become module-singleton imports. Bodies unchanged EXCEPT
- * `createTabContextSceneInstance`, which keeps the modeling-only `isShared` flag +
- * scene-type guard AND additionally drives the reactive `tabsStore` (the "single
- * mutation path" the plan/P1 note require — see that method).
+ * Lookups over the INSTANCE side of the model: finding class, relation class, port,
+ * scene and attribute instances by uuid, and collecting them across the open tabs.
+ *
+ * "Local" here means the scene tree already in memory (`globalObject.sceneTree`), not
+ * the database — these are hot paths called from the render loop and from every vizRep
+ * expression, so they never hit the network unless the method says so in its name.
+ *
+ * `createTabContextSceneInstance` is the single place a tab is created: it pushes onto
+ * `globalObject.tabContext` and drives `tabsStore` in lockstep, which is what keeps the
+ * store's index authoritative for the rest of the app.
  */
+/**
+ * Find an attribute instance in a list, by the uuid or the name of its meta attribute.
+ * Which of the two `searchValue` means is decided by `searchBy`.
+ */
+function findAttributeInstance(
+  instances: AttributeInstance[],
+  searchValue: string | UUID,
+  searchBy: "uuid" | "name",
+): AttributeInstance | undefined {
+  return searchBy === "uuid"
+    ? instances.find((instance) => instance.uuid_attribute == searchValue)
+    : instances.find((instance) => instance.name == searchValue);
+}
+
 export class InstanceUtility {
   private globalObjectInstance = globalObject;
   private metaUtility = metaUtility;
@@ -39,14 +55,6 @@ export class InstanceUtility {
     }
     this.logger.log("no sceneInstance found", "close");
     return undefined;
-  }
-
-  async getTabContextThreeInstance() {
-    const tabContext: { threeScene: any } = this.globalObjectInstance.tabContext[
-      this.globalObjectInstance.selectedTab
-    ] as { threeScene: any };
-    const threeScene = tabContext.threeScene;
-    return threeScene as THREE.Scene;
   }
 
   async getAllOpenThreeScenes() {
@@ -90,10 +98,10 @@ export class InstanceUtility {
     this.globalObjectInstance.tabContext.push(newTabContext);
     this.globalObjectInstance.selectedTab = this.globalObjectInstance.tabContext.length - 1;
 
-    // SINGLE MUTATION PATH (plan §3.1 + P1 tabsStore note): this is the one place a
-    // tab is created, so it drives the reactive tabsStore in lockstep with
-    // globalObject.tabContext. openTab appends + selects at the same index we just
-    // set on the engine, so store.selectedTab stays === globalObject.selectedTab.
+    // SINGLE MUTATION PATH: this is the one place a tab is created, so it drives the
+    // reactive tabsStore in lockstep with globalObject.tabContext. openTab appends and
+    // selects at the same index just set on the engine, which keeps
+    // store.selectedTab === globalObject.selectedTab.
     useTabsStore.getState().openTab({
       name: sceneInstance.name ?? "",
       uuid: sceneInstance.uuid,
@@ -148,23 +156,6 @@ export class InstanceUtility {
     return classInstances;
   }
 
-  async getAllClassInstancesOfMetaClass(metaClassUuid: UUID) {
-    let classInstances: ClassInstance[] = [];
-    const sceneInstances = await this.getAllSceneInstancesFromLocal();
-    for (const sceneInstance of sceneInstances) {
-      // if classInstance is not yet in classInstances
-      for (const classInstance of sceneInstance.class_instances) {
-        if (classInstances.filter((instance) => instance.uuid == classInstance.uuid).length == 0) {
-          classInstances = classInstances.concat(sceneInstance.class_instances);
-        }
-      }
-    }
-    const instancesOfClass = classInstances.filter(
-      (classInstance) => classInstance.uuid_class == metaClassUuid,
-    );
-    return instancesOfClass;
-  }
-
   // retrieves all class and relation class instances of the open scene instance
   async getAllClassInstancesFromOpenSceneInstance() {
     const sceneInstance = await this.getTabContextSceneInstance();
@@ -211,89 +202,39 @@ export class InstanceUtility {
     return sceneInstances;
   }
 
-  async getAllSceneInstancesFromDB() {
-    const sceneTypes = await this.metaUtility.getAllSceneTypesFromDB();
-    let sceneInstances: SceneInstance[] = [];
-    for (const sceneType of sceneTypes) {
-      // fetch sceneInstances of scene type from db
-      const sceneInstancesOfSceneType = await backendService.sceneInstancesAllGET(sceneType.uuid);
-      // add sceneInstances to sceneInstances array
-      sceneInstances = sceneInstances.concat(sceneInstancesOfSceneType);
-    }
-    return sceneInstances;
+  /**
+   * Every port instance of a scene: the scene's own, plus those of its class and
+   * relation class instances.
+   */
+  private portInstancesOf(sceneInstance: SceneInstance): PortInstance[] {
+    return [
+      ...sceneInstance.port_instances,
+      ...sceneInstance.class_instances.flatMap((classInstance) => classInstance.port_instance),
+      ...sceneInstance.relationclasses_instances.flatMap((relationclassInstance) => relationclassInstance.port_instance),
+    ];
   }
 
-  // Function to get all portInstances
+  // Function to get all portInstances of every locally loaded scene
   async getAllPortInstances() {
     const sceneInstances = await this.getAllSceneInstancesFromLocal();
-    let sceneInstancePortInstances: any[] = [];
-    let classesPortInstances: any[] = [];
-    let relationclassesPortInstances: any[] = [];
-
-    for (const sceneInstance of sceneInstances) {
-      sceneInstancePortInstances = sceneInstancePortInstances.concat(sceneInstance.port_instances);
-
-      // Get all portInstances of all classInstances
-      for (const classInstance of sceneInstance.class_instances) {
-        classesPortInstances = classesPortInstances.concat(classInstance.port_instance);
-      }
-      // Get all portInstances of all relationclassInstances
-      for (const relationclassInstance of sceneInstance.relationclasses_instances) {
-        relationclassesPortInstances = relationclassesPortInstances.concat(
-          relationclassInstance.port_instance,
-        );
-      }
-    }
-
-    // Concatenate all portInstances
-    let allPortInstances = sceneInstancePortInstances.concat(classesPortInstances);
-    allPortInstances = allPortInstances.concat(relationclassesPortInstances);
-    return allPortInstances;
+    return sceneInstances.flatMap((sceneInstance) => this.portInstancesOf(sceneInstance));
   }
 
-  // Function to get the portInstance of open tab context
+  // Function to get the portInstances of the open tab context
   async getAllPortInstancesOfTabContext() {
     const tabContext = this.globalObjectInstance.tabContext[this.globalObjectInstance.selectedTab];
-    const sceneInstance = tabContext.sceneInstance;
-    const sceneInstancePortInstances = sceneInstance.port_instances;
-    let classesPortInstances: any[] = [];
-    let relationclassesPortInstances: any[] = [];
-
-    // Get all portInstances of all classInstances
-    for (const classInstance of sceneInstance.class_instances) {
-      classesPortInstances = classesPortInstances.concat(classInstance.port_instance);
-    }
-    // Get all portInstances of all relationclassInstances
-    for (const relationclassInstance of sceneInstance.relationclasses_instances) {
-      relationclassesPortInstances = relationclassesPortInstances.concat(
-        relationclassInstance.port_instance,
-      );
-    }
-
-    // Concatenate all portInstances
-    let allPortInstances = sceneInstancePortInstances.concat(classesPortInstances);
-    allPortInstances = allPortInstances.concat(relationclassesPortInstances);
-    return allPortInstances;
+    return this.portInstancesOf(tabContext.sceneInstance);
   }
 
   // Function to get the portInstance with the given UUID
-  async getPortInstance(uuid: UUID): Promise<PortInstance> {
+  async getPortInstance(uuid: UUID): Promise<PortInstance | undefined> {
     const allPortInstances = await this.getAllPortInstances();
-
-    // Find portInstance with given UUID
-    const instance_of_uuid = allPortInstances.find((portInstance) => portInstance.uuid == uuid);
-    return instance_of_uuid;
+    return allPortInstances.find((portInstance) => portInstance.uuid == uuid);
   }
 
   // Function to get the UUID of the last created classInstance (class or relation)
   async get_current_class_instance_uuid() {
     const uuid: UUID = this.globalObjectInstance.current_class_instance.uuid;
-    return uuid;
-  }
-
-  // Function to get the UUID of the last created portInstance
-  async get_current_port_instance_uuid() {
-    const uuid: UUID = this.globalObjectInstance.current_port_instance.uuid;
     return uuid;
   }
 
@@ -314,19 +255,12 @@ export class InstanceUtility {
     let attributeInstance: AttributeInstance | undefined = undefined;
     let allAttributeInstances = [];
 
-    // Helper function to find the attributeInstance based on the search criteria
-    const findAttributeInstance = (instances: any[]) => {
-      return searchBy === "uuid"
-        ? instances.find((instance) => instance.uuid_attribute == searchValue)
-        : instances.find((instance) => instance.name == searchValue);
-    };
-
     // Search in classInstances
     const classInstances = await this.getAllClassInstances();
     const classInstanceFound = classInstances.find((instance) => instance.uuid == classInstanceUUID);
     if (classInstanceFound) {
       allAttributeInstances = classInstanceFound.attribute_instance;
-      attributeInstance = await findAttributeInstance(allAttributeInstances);
+      attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
     return attributeInstance;
@@ -341,13 +275,6 @@ export class InstanceUtility {
     let attributeInstance: AttributeInstance | undefined = undefined;
     let allAttributeInstances = [];
 
-    // Helper function to find the attributeInstance based on the search criteria
-    const findAttributeInstance = (instances: any[]) => {
-      return searchBy === "uuid"
-        ? instances.find((instance) => instance.uuid_attribute == searchValue)
-        : instances.find((instance) => instance.name == searchValue);
-    };
-
     // Search in relationclassInstances
     const relationclassInstances = await this.getAllRelationClassInstances();
     const relationclassInstanceFound = relationclassInstances.find(
@@ -355,34 +282,7 @@ export class InstanceUtility {
     );
     if (relationclassInstanceFound) {
       allAttributeInstances = relationclassInstanceFound.attribute_instance;
-      attributeInstance = findAttributeInstance(allAttributeInstances);
-    }
-
-    return attributeInstance;
-  }
-
-  // get an attributeInstance based on the UUID or the name of the meta attribute and the UUID of a sceneInstance
-  async getAttributeInstanceFromSceneInstance(
-    searchValue: string | UUID,
-    sceneInstanceUUID: UUID,
-    searchBy: "uuid" | "name",
-  ) {
-    let attributeInstance: AttributeInstance | undefined = undefined;
-    let allAttributeInstances = [];
-
-    // Helper function to find the attributeInstance based on the search criteria
-    const findAttributeInstance = (instances: any[]) => {
-      return searchBy === "uuid"
-        ? instances.find((instance) => instance.uuid_attribute == searchValue)
-        : instances.find((instance) => instance.name == searchValue);
-    };
-
-    // Search in sceneInstances
-    const sceneInstances = await this.getAllSceneInstancesFromLocal();
-    const sceneInstanceFound = sceneInstances.find((instance) => instance.uuid == sceneInstanceUUID);
-    if (sceneInstanceFound) {
-      allAttributeInstances = sceneInstanceFound.attribute_instances;
-      attributeInstance = findAttributeInstance(allAttributeInstances);
+      attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
     return attributeInstance;
@@ -429,19 +329,12 @@ export class InstanceUtility {
     let attributeInstance: AttributeInstance | undefined = undefined;
     let allAttributeInstances = [];
 
-    // Helper function to find the attributeInstance based on the search criteria
-    const findAttributeInstance = (instances: any[]) => {
-      return searchBy === "uuid"
-        ? instances.find((instance) => instance.uuid_attribute == searchValue)
-        : instances.find((instance) => instance.name == searchValue);
-    };
-
     // Search in portInstances
     const portInstances: PortInstance[] = await this.getAllPortInstances();
     const portInstanceFound = portInstances.find((instance) => instance.uuid == portInstanceUUID);
     if (portInstanceFound) {
       allAttributeInstances = portInstanceFound.attribute_instances;
-      attributeInstance = findAttributeInstance(allAttributeInstances);
+      attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
     return attributeInstance;
@@ -456,19 +349,12 @@ export class InstanceUtility {
     let attributeInstance: AttributeInstance | undefined = undefined;
     let allAttributeInstances = [];
 
-    // Helper function to find the attributeInstance based on the search criteria
-    const findAttributeInstance = async (instances: any[]) => {
-      return searchBy === "uuid"
-        ? instances.find((instance) => instance.uuid_attribute == searchValue)
-        : instances.find((instance) => instance.name == searchValue);
-    };
-
     // Search in classInstances
     const classInstances = await this.getAllClassInstances();
     const classInstanceFound = classInstances.find((instance) => instance.uuid == instanceUUID);
     if (classInstanceFound) {
       allAttributeInstances = classInstanceFound.attribute_instance;
-      attributeInstance = await findAttributeInstance(allAttributeInstances);
+      attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
     // If not found in classInstances, search in relationclassInstances
@@ -479,7 +365,7 @@ export class InstanceUtility {
       );
       if (relationclassInstanceFound) {
         allAttributeInstances = relationclassInstanceFound.attribute_instance;
-        attributeInstance = await findAttributeInstance(allAttributeInstances);
+        attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
       }
     }
 
@@ -489,7 +375,7 @@ export class InstanceUtility {
       const sceneInstanceFound = sceneInstances.find((instance) => instance.uuid == instanceUUID);
       if (sceneInstanceFound) {
         allAttributeInstances = sceneInstanceFound.attribute_instances;
-        attributeInstance = await findAttributeInstance(allAttributeInstances);
+        attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
       }
     }
 
@@ -499,7 +385,7 @@ export class InstanceUtility {
       const portInstanceFound = portInstances.find((instance) => instance.uuid == instanceUUID);
       if (portInstanceFound) {
         allAttributeInstances = portInstanceFound.attribute_instances;
-        attributeInstance = await findAttributeInstance(allAttributeInstances);
+        attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
       }
     }
 
@@ -536,10 +422,7 @@ export class InstanceUtility {
       instance = (
         await this.getAllAttributeInstancesFromObjectInstanceRecursively(currentSceneInstance)
       ).find((inst) => inst.uuid === uuid);
-      if (instance) {
-        console.log("instance in current tab found", instance);
-        return instance;
-      }
+      if (instance) return instance;
     }
 
     // Check in all scene instances' attribute instances
@@ -547,10 +430,7 @@ export class InstanceUtility {
       instance = (
         await this.getAllAttributeInstancesFromObjectInstanceRecursively(sceneInstance)
       ).find((inst) => inst.uuid === uuid);
-      if (instance) {
-        console.log("instance in all sceneInstances found", instance);
-        return instance;
-      }
+      if (instance) return instance;
     }
 
     return null;
@@ -581,5 +461,5 @@ export class InstanceUtility {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const instanceUtility = new InstanceUtility();

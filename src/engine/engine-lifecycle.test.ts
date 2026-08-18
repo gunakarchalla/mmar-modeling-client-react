@@ -52,7 +52,6 @@ vi.mock("@/engine/global-relationclass-object", () => ({ globalRelationclassObje
 vi.mock("@/engine/ray-helper", () => ({ rayHelper: {} }));
 vi.mock("@/engine/mouse-object", () => ({ mouseObject: {} }));
 vi.mock("@/engine/resize", () => ({ resize: { resize: vi.fn() } }));
-vi.mock("@/engine/interval-handler", () => ({ intervalHandler: {} }));
 vi.mock("@/engine/transform-control-events", () => ({ transformControlsEvents: {} }));
 vi.mock("@/engine/interaction-handler", () => ({ interactionHandler: {} }));
 vi.mock("@/engine/animator", () => ({ animator: {} }));

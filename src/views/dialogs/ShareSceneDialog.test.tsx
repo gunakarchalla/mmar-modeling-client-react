@@ -12,7 +12,7 @@
 // flags AND the payloads are module-global and leak); MUI's Select is not reachable via
 // getByLabelText — open it by role and pick from the listbox.
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   globalObject: {

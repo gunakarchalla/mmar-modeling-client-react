@@ -160,5 +160,5 @@ export class RayHelper {
   }
 }
 
-// Module singleton — one instance shared by the whole engine.
+// Module singleton — one shared instance.
 export const rayHelper = new RayHelper();

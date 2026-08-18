@@ -1,7 +1,6 @@
 import { Box, Typography, Link } from "@mui/material";
 
-// Port of the old `views/footer/footer.html`: centered copyright + GNU AGPLv3
-// notice + GitHub badge. Purely presentational (footer.ts was an empty class).
+// Page footer: copyright, the GNU AGPLv3 notice and the GitHub badge.
 export default function AppFooter() {
   return (
     <Box

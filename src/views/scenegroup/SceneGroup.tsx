@@ -46,48 +46,29 @@ import { remoteSelectionRenderer } from "@/resources/collaboration/remote-select
 import { closeTab, switchToTab, renameSceneInstance } from "@/views/layout/tabActions";
 
 /**
- * Port of `views/scenegroup/scenegroup.{ts,html}` (plan §10: ★ modeling-unique).
- * Builds the SceneType -> SceneInstance tree and opens a SceneInstance on double-click
- * (with snapshot rollback).
+ * The scene tree: SceneTypes at the top level, their SceneInstances underneath, and a
+ * double-click to open one in a tab.
  *
- * CONTEXT MENUS: the four scene actions used to be a row of buttons above the tree,
- * each opening a dialog that then made the user pick the scene back out of a dropdown —
- * even though they had just clicked the scene in the tree. They are now right-click
- * menus on the tree rows themselves, and the node under the cursor is passed to the
- * dialog as its payload:
- *   SceneType     -> Create (that type preselected)
- *   SceneInstance -> Open / Create (its parent type preselected) / Duplicate / Rename /
- *                    Share / Delete, each prefilled with that scene.
- *   empty space   -> Create with nothing preselected (the old toolbar button's job)
- * Because the scene is now always known, the Duplicate/Delete/Share dialogs no longer
- * have a scene picker at all — and so no longer call loadAllSceneInstances(), which
- * hydrated every scene in the database to fill one (see each dialog's note). Delete is
- * a confirmation. Double-click to open (and its red hint) is unchanged.
+ * CONTEXT MENUS carry their target with them — the node under the cursor is passed to
+ * the dialog as its payload, so nothing has to be re-selected inside it:
+ *   SceneType      Create (that type preselected)
+ *   SceneInstance  Open / Create (its parent type preselected) / Duplicate / Rename /
+ *                  Share / Delete, each prefilled with that scene
+ *   empty space    Create with nothing preselected
+ * Because the scene is always known, the Duplicate, Delete and Share dialogs have no
+ * scene picker, and so never call `loadAllSceneInstances()` — which hydrates every
+ * scene in the database just to fill a dropdown.
  *
- * WIDGET CHOICE (plan §4 left this to the P7 agent, recorded in state.json): nested
- * MUI `List` + `Collapse` (a 2-level tree), NOT @mui/x-tree-view — no new dependency
- * for a two-level structure. The old `mdc-tree-view` selected on click and used a
- * 500 ms double-click counter; here we use the native `onDoubleClick` and a plain
- * selection/expand state (the counter is unnecessary in React).
+ * LAZY LOADING: the tree is built to the SceneType level on mount; each type's
+ * SceneInstances are fetched the first time its arrow is expanded. That matters because
+ * the server hydrates each scene in full (classes, relations, ports, attributes, roles),
+ * so an eager fetch would scale startup with the whole database rather than with the
+ * scene being opened. The one consumer that genuinely needs every scene — the reference
+ * dialog, since a reference may point into a scene the user never expanded — calls
+ * `loadAllSceneInstances()` behind its own spinner.
  *
- * COLLABORATION (P10): `maybeAttachSharedSession` attaches a shared yjs session when
- * a scene has >=2 access entries, and the component subscribes 'sharedSceneReconnected'
- * (reload the scene from the freshly fetched SceneInstance) / 'sceneAccessRevoked'
- * (alert + close the tab), which the old client wired in its constructor.
- *
- * The tree is loaded once the component mounts (which only happens after login), but
- * ONLY down to the SceneType level: each type's SceneInstances are fetched the first
- * time its arrow is expanded, by scene-tree-service. The old eager version fetched
- * every instance of every type at mount, and the server hydrates each scene in full
- * (classes, relations, ports, attributes, roles), so startup cost scaled with the whole
- * database instead of with the scene being opened. The one consumer that still needs
- * all scenes at once (the reference-attribute dialog — a reference may point into a
- * scene the user never expanded) calls `loadAllSceneInstances()` behind its own
- * spinner.
- *
- * The canonical arrays live on globalObject.sceneTypes / globalObject.sceneTree (the
- * old design — instance-utility.getAllSceneInstancesFromLocal reads sceneTree); the
- * component mirrors them into local state to render.
+ * The canonical arrays live on `globalObject.sceneTypes` / `globalObject.sceneTree`;
+ * this component mirrors them into local state to render.
  */
 
 type SceneTypeNode = SceneType & { children?: SceneInstance[] };
@@ -97,24 +78,18 @@ type SceneTypeNode = SceneType & { children?: SceneInstance[] };
 let initInFlight: Promise<void> | null = null;
 
 /**
- * Port of `scenegroup.maybeAttachSharedSession` (P10). A scene becomes collaborative
- * as soon as at least two users hold access to it; the caller's own level decides
- * whether the session is read-only.
+ * Attach a shared session to a tab when its scene is collaborative — which it is as soon
+ * as at least two users hold access to it. The caller's own access level decides whether
+ * the session is read-only, and the cursor and selection renderers bind to it right
+ * after, so remote presence starts drawing as soon as peers publish it.
  *
- * The old body wrapped everything in try/catch because a fetchHelper failure threw;
- * this port's backendService logs-and-returns `[]` / `{level:null}` instead (P1's
- * convention), which lands on exactly the same outcomes: `[]` -> fewer than 2 entries
- * -> stays non-shared, and a null level -> keeps the 'edit' fallback. The try/catch is
- * kept anyway for a genuinely unexpected throw (e.g. attach itself failing).
+ * `tabIndex` defaults to the tab just opened, which is the open-scene case. The
+ * `sceneAccessGranted` handler passes an explicit index instead, so a tab that is
+ * ALREADY open can be promoted to shared the moment it crosses the two-user threshold,
+ * without a reload; the early `isShared` return makes that idempotent.
  *
- * P11: the two renderers subscribe the session's awareness right after attach, so
- * remote cursors/selection boxes start drawing as soon as peers publish them.
- *
- * `tabIndex` defaults to the just-opened (last) tab, which is the open-scene caller's
- * case. The `sceneAccessGranted` handler passes an explicit index so an ALREADY-open
- * tab can be promoted to shared the moment it crosses the 2-user threshold, without a
- * window reload (the old client only ever evaluated this at open time). The early
- * `isShared` return makes that path idempotent if the tab is already collaborative.
+ * Failures are non-fatal: a user without delete access cannot read the access list, and
+ * a scene that cannot be checked simply stays non-shared.
  */
 async function maybeAttachSharedSession(
   sceneInstance: SceneInstance,
@@ -232,7 +207,7 @@ export default function SceneGroup() {
     return initInFlight;
   }, [setLoading, syncTreeFromGlobal, ensureTypeLoaded]);
 
-  // Port of updateTree(): fold imported scene instances + open tabs into the tree.
+  // Fold imported scene instances and open tabs into the tree.
   const updateTree = useCallback(() => {
     const sceneTypes = globalObject.sceneTypes as SceneTypeNode[];
     const treeArr = globalObject.sceneTree as SceneTypeNode[];
@@ -274,8 +249,7 @@ export default function SceneGroup() {
 
     const subUpdate = eventBus.subscribe("updateSceneGroup", () => updateTree());
 
-    // P10 — the two collaboration subscriptions the old scenegroup ctor registered.
-    // Non-async callbacks per plan §3.1 (the bus never awaits a handler).
+    // Collaboration subscriptions. Handlers are never async: the bus does not await them.
 
     // Reconnected after a drop: reload the Three.js scene from the freshly
     // fetched SceneInstance that SharedDocService put in the tab context.
@@ -293,14 +267,9 @@ export default function SceneGroup() {
       const tabCtx = globalObject.tabContext[payload.tabIndex];
       const name = tabCtx?.sceneInstance?.name ?? "this scene";
       window.alert(`Your access to "${name}" was revoked. The tab will be closed.`);
-      // P11 NOTE: the old handler called clearForTab on both renderers here; ours does
-      // NOT need to, because tabActions.closeTab now does it (see below) — doing it in
-      // both places would just be a redundant second pass over an empty entry map.
-      //
-      // DEVIATION from the old handler, which spliced globalObject.tabContext by hand
-      // and left the tab bar to catch up: closing goes through tabActions.closeTab, the
-      // single mutation path for tab removal (it also detaches the shared session and
-      // keeps tabsStore in lockstep — the old code did neither, leaking the session).
+      // Closing goes through tabActions.closeTab, the single mutation path for tab
+      // removal: it also drops the presence renderers, detaches the shared session and
+      // keeps tabsStore in lockstep with the engine.
       void closeTab(payload.tabIndex).catch((err) =>
         logger.log(`Closing revoked tab failed: ${err}`, "error"),
       );
@@ -388,8 +357,8 @@ export default function SceneGroup() {
       // have been imported, so the first Ctrl+Z lands on a fully drawn scene.
       historyService.initScene(sceneInstance);
 
-      //check hybrid algorithms -> specifically for reference attributes --> we do not
-      //give an attributeInstance as argument (P12: live)
+      // Run the hybrid algorithms for the freshly loaded scene — for a Statechange
+      // scene this is what makes its Reference instances adopt their targets' meshes.
       await hybridAlgorithmsService.checkHybridAlgorithms(null, sceneInstance.class_instances);
     }
   }
@@ -438,7 +407,7 @@ export default function SceneGroup() {
    * tree, which is most of the panel when few types are expanded). Create is the only
    * action that makes sense with no node under the cursor, and it opens with nothing
    * preselected — the dialog's own SceneType picker then does the choosing. This is
-   * what replaces the old always-available "Create new SceneInstance" button.
+   * how a scene is created when no row is a sensible target.
    *
    * Row handlers stopPropagation, so a right-click on a row never reaches this.
    */
@@ -480,12 +449,8 @@ export default function SceneGroup() {
   return (
     // The whole panel is right-clickable, not just the rows: `minHeight` guarantees
     // there is some empty area below the tree to aim at even when nothing is expanded,
-    // which is where the plain "Create new SceneInstance" (the old always-available
-    // button) lives now.
+    // which is where the unprefilled "Create new SceneInstance" action lives.
     <Box onContextMenu={handleBackgroundContextMenu} sx={{ minHeight: 140 }}>
-      {/* The Create/Duplicate/Delete/Share buttons that used to sit here are gone —
-          every one of them is a right-click item on the row it acts on (see the
-          context menu below), so the actions now carry their target with them. */}
       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
         Scenes
       </Typography>

@@ -13,27 +13,21 @@ import { eventBus } from "./event-bus";
 import { logger } from "./logger";
 
 /**
- * Port of the old modeling `resources/persistency_handler.ts` (plan §10: ★
- * modeling-unique — the metamodeling twin has no equivalent). DI stripped: every
- * injection becomes a module-singleton import.
+ * Turns a stored SceneInstance into a drawn scene, and back.
  *
- * DROPPED INJECTIONS (unused in the source, same treatment as P5's handlers):
- *   - `instanceCreationHandler` — only appeared in the ctor, never called. It is
- *     imported again now, for the one call in `loadPersistedModel`.
- *   - `expression` (ExpressionUtility) — only fed into the per-port
- *     `new GraphicContext(...)`, whose ctor is no-arg in this repo.
- * The per-port GraphicContext is therefore built with the no-arg `new
- * GraphicContext()` (all its deps are module singletons on the class), exactly as
- * P5's interaction-handler does.
+ * `importInstances()` is the load path: it registers the scene's attribute, role and
+ * port instances on the engine, then draws every class instance (running its vizRep, or
+ * a URDF-supplied mesh where the robotics algorithms left one) and every relation.
+ * Both draw passes are idempotent — an instance already in `dragObjects` is skipped —
+ * which is what lets them double as the "a peer added something" handler for the two
+ * remote-add channels subscribed in the constructor.
  *
- * This is a SERVICE (resources/services), not an engine singleton, so it is NOT
- * registered in engine/index.ts. It is evaluated the first time a consumer (SceneGroup,
- * CreateNewSceneDialog, AutoSave) imports `persistencyHandler`; that import is what
- * registers the two remote-add subscriptions in the constructor (dormant until P10
- * publishes those channels).
+ * `persistSceneInstanceToDB()` is the save path, a single PATCH that upserts the scene.
+ * A 403 means read-only access to a shared scene: the local edit is rolled back to the
+ * last snapshot and the scene re-imported, so the canvas shows the server's state rather
+ * than a change that was refused.
  *
- * gds revival rule (P3): all responses come back already revived via `X.fromJS` from
- * backendService — never re-run the app's `plainToInstance` here.
+ * `saveToTextfile` / `saveAllOpenModelInstancesToTextfile` are the JSON export paths.
  */
 export class PersistencyHandler {
   private globalObjectInstance = globalObject;
@@ -46,29 +40,27 @@ export class PersistencyHandler {
   private eventAggregator = eventBus;
 
   constructor() {
-    // When a remote peer adds a class instance, render it in the local Three.js scene.
-    // (P10 channel — dormant until shared-doc-service publishes it.) Non-async wrapper
-    // per plan §3.1: the bus never awaits handlers.
+    // Draw what a peer just added. The draw passes read the ACTIVE tab, so the tab the
+    // update belongs to is selected for the duration and restored afterwards — the user
+    // may well be looking at a different tab. Handlers are never async: the bus does not
+    // await them, so a rejection would go unhandled.
     this.eventAggregator.subscribe("remoteClassInstanceAdded", ({ tabIndex }) => {
-      const savedTab = this.globalObjectInstance.selectedTab;
-      this.globalObjectInstance.selectedTab = tabIndex;
-      void this.checkIfClassinstanceInScene()
-        .catch((err) => this.logger.log(`remoteClassInstanceAdded failed: ${err}`, "error"))
-        .finally(() => {
-          this.globalObjectInstance.selectedTab = savedTab;
-        });
+      this.drawForTab(tabIndex, () => this.checkIfClassinstanceInScene(), "remoteClassInstanceAdded");
     });
-
-    // When a remote peer adds a relation class instance, render it in the local scene.
     this.eventAggregator.subscribe("remoteRelationInstanceAdded", ({ tabIndex }) => {
-      const savedTab = this.globalObjectInstance.selectedTab;
-      this.globalObjectInstance.selectedTab = tabIndex;
-      void this.checkIfRelationclassinstanceInScene()
-        .catch((err) => this.logger.log(`remoteRelationInstanceAdded failed: ${err}`, "error"))
-        .finally(() => {
-          this.globalObjectInstance.selectedTab = savedTab;
-        });
+      this.drawForTab(tabIndex, () => this.checkIfRelationclassinstanceInScene(), "remoteRelationInstanceAdded");
     });
+  }
+
+  /** Run a draw pass against `tabIndex` and restore the previously selected tab. */
+  private drawForTab(tabIndex: number, draw: () => Promise<void>, channel: string): void {
+    const savedTab = this.globalObjectInstance.selectedTab;
+    this.globalObjectInstance.selectedTab = tabIndex;
+    void draw()
+      .catch((error) => this.logger.log(`${channel} failed: ${describeError(error)}`, "error"))
+      .finally(() => {
+        this.globalObjectInstance.selectedTab = savedTab;
+      });
   }
 
   async checkIfClassinstanceInScene() {
@@ -98,8 +90,8 @@ export class PersistencyHandler {
         );
         let classObject3D: THREE.Mesh | undefined;
 
-        // Prefer URDF-provided mesh if present; fall back to metamodel vizRep otherwise.
-        // `urdfVizRep` is populated by the P12 robotics algorithms; undefined until then.
+        // Prefer a URDF-provided mesh where the robotics algorithms left one, and fall
+        // back to the metamodel's vizRep otherwise.
         const customVizRep = (class_instance as any).urdfVizRep as
           | { format: string; data: string | ArrayBuffer; scale?: number[] }
           | undefined;
@@ -228,8 +220,8 @@ export class PersistencyHandler {
 
       //also set the uuid for old uuid for the children
       //otherwise there is an error in the animationloop of the line
-      // (activeStateLine is a Line2; dragObjects is typed Mesh[] — the old client
-      // pushed the line here too, so cast to keep the faithful behaviour.)
+      // (activeStateLine is a Line2 while dragObjects is typed Mesh[]; the line does
+      // belong in the pick list, hence the cast.)
       const line = this.globalStateObject.activeStateLine!;
       line.uuid = relationclass_instance.uuid;
       for (const child of line.children) {
@@ -369,12 +361,11 @@ export class PersistencyHandler {
   async loadPersistedModel(modelToLoad: SceneInstance) {
     await this.importInstances();
 
-    // A scene saved before scene-type attributes were instantiated (i.e. every scene the
-    // old client ever wrote) carries none, so the attribute window would show an empty
-    // dynamic section for it. Adding the missing ones on load is what makes the scene's
-    // attributes appear for existing models too; it is a no-op once they exist. The
-    // parameter is used for this and nothing else — importInstances() reads the active
-    // tab itself, which is why the parameter used to be ignored.
+    // A scene saved before scene-type attributes were instantiated carries none, so the
+    // attribute window would show an empty section for it. Adding the missing ones on
+    // load is what makes a scene's own attributes appear for existing models too, and is
+    // a no-op once they exist. This is the only use of the parameter — importInstances()
+    // reads the active tab itself.
     await instanceCreationHandler
       .createMissingSceneAttributeInstances(modelToLoad)
       .catch((error) =>
@@ -453,5 +444,5 @@ export class PersistencyHandler {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const persistencyHandler = new PersistencyHandler();

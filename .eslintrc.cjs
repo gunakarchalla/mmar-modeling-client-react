@@ -13,7 +13,10 @@ module.exports = {
       "warn",
       { allowConstantExport: true },
     ],
+    // The gds DTOs and the three.js/urdf-loader typings force a fair amount of `any`.
     "@typescript-eslint/no-explicit-any": "off",
-    "@typescript-eslint/no-unused-vars": "off",
+    // Unused locals and imports are dead code; unused ARGUMENTS are not, since a
+    // signature may be fixed by an interface or by stored code that calls it.
+    "@typescript-eslint/no-unused-vars": ["warn", { args: "none" }],
   },
 };

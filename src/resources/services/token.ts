@@ -1,10 +1,8 @@
 // Framework-agnostic access-token holder.
 //
-// The old client kept the JWT on `globalObjectInstance.accessToken` and mirrored
-// it into `localStorage["jwtToken"]` (see dialogs/user-management/user-management.ts).
-// In the React port the engine does not exist yet (it arrives in P2), so plain TS
-// code that needs the token — `backend-service.ts`, and later the engine's
-// `globalObject.accessToken` getter — reads it from here instead.
+// The single source of truth for the JWT, mirrored into localStorage so a page reload
+// keeps the session. Everything that needs the token reads it from here —
+// `backend-service.ts` and the engine's `globalObject.accessToken` getter included.
 //
 // `authStore` is the single writer: it calls `setToken` on login/restore and
 // `clearToken` on logout. Everything else only reads via `getToken`.

@@ -3,10 +3,10 @@ import { create } from "zustand";
 /**
  * historyStore — the reactive undo/redo stacks, one per OPEN SceneInstance.
  *
- * Mirrors the metamodeling twin's `TabHistory` (`selectedObjectStore.ts`): a list of
+ * Per-scene undo and redo stacks: a list of
  * snapshots oldest -> newest with an index pointing at what the tab currently shows,
  * capped entries, and a coalescing window so a run of small edits to the same thing
- * becomes ONE undo step. The differences to that twin are both consequences of this
+ * becomes ONE undo step. Two properties follow from this
  * client's shape:
  *
  *  - Snapshots are stored as SERIALIZED JSON, not object graphs. A SceneInstance holds
@@ -173,7 +173,7 @@ export const useHistoryStore = create<HistoryState>((set) => ({
 }));
 
 /** The active scene's history, or undefined when no scene is open. */
-export const activeHistory = (s: HistoryState): SceneHistory | undefined =>
+const activeHistory = (s: HistoryState): SceneHistory | undefined =>
   s.activeSceneUuid ? s.histories[s.activeSceneUuid] : undefined;
 
 /**

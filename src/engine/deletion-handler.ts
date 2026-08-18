@@ -8,21 +8,20 @@ import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
-import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
+import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
 
 /**
- * P5 port of the old `resources/deletion_handler.ts` (316 lines, DI-stripping
- * recipe): GlobalDefinition / GlobalStateObject / GraphicContext /
- * GlobalSelectedObject / InstanceUtility / Logger / FetchHelper / EventAggregator
- * injections become module-singleton imports (FetchHelper -> backendService,
- * EventAggregator -> eventBus). Bodies are faithful to the original.
+ * Deletes instances and everything that hangs off them.
  *
- * `getTabContextSceneInstance()` (returns `| undefined`) is non-null-asserted at the
- * call sites (a delete only happens with an open scene). Cascade deletion order is
- * unchanged: connected relations + ports first, then the class instance itself, then
- * its bendpoints and attributes.
- */
-export class DeletionHandler {
+ * `onPressDelete` is the Delete-key entry point; it works out whether the selection is
+ * a class or a relation instance and starts the cascade. The two delete methods recurse
+ * into each other — deleting a class takes its connected relations and ports with it,
+ * deleting a relation takes its bendpoints (which are themselves class instances) — so
+ * the single undo step is recorded at the top, in `onPressDelete`.
+ *
+ * Each deletion removes the instance from the gds scene, from the THREE scene, from the
+ * database (when auto-save is on), and announces it to peers and to the rest of the app.
+ */export class DeletionHandler {
   private globalObjectInstance = globalObject;
   private globalStateObject = globalStateObject;
   private gc = graphicContext;
@@ -59,18 +58,15 @@ export class DeletionHandler {
   async deleteClassInstance(classInstance: ClassInstance, index: number) {
     const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
     //delete connected relationclassInstances
-    await this.deleteConnectedRelationclassInstances(classInstance, undefined as any);
+    await this.deleteConnectedRelationclassInstances(classInstance);
 
     //delete connected portInstances
     await this.deleteConnectedPortInstances(classInstance);
 
     sceneInstance.class_instances.splice(index, 1);
 
-    // Propagate deletion to peers before removing from Three.js scene.
-    const session = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
-    if (session && !session.applyingRemote) {
-      applyLocalChangeToYDoc(session.ydoc, { type: "remove_class_instance", classInstanceUuid: classInstance.uuid }, session.localOrigin);
-    }
+    // Propagate deletion to peers before removing from the THREE scene.
+    publishLocalChange({ type: "remove_class_instance", classInstanceUuid: classInstance.uuid });
 
     const object: THREE.Object3D = this.globalObjectInstance.scene.getObjectByProperty("uuid", classInstance.uuid)!;
 
@@ -123,14 +119,7 @@ export class DeletionHandler {
     }
     this.globalObjectInstance.doSceneInstancePatch = true;
 
-    // Notify listeners (e.g., SimulationWindow) that the active SceneInstance has changed.
-    // Consumers should debounce refreshes because cascaded deletions can trigger multiple mutations.
-    this.eventAggregator.publish("sceneInstanceMutated", {
-      sceneInstanceUuid: sceneInstance.uuid,
-      action: "deleted",
-      kind: "class",
-      instanceUuid: classInstance.uuid,
-    });
+    this.announceDeletion(sceneInstance.uuid, "class", classInstance.uuid);
   }
 
   async deleteRelationclassInstance(_relationclassInstance: ClassInstance, index: number) {
@@ -167,10 +156,7 @@ export class DeletionHandler {
     sceneInstance.relationclasses_instances.splice(index, 1);
 
     // Propagate deletion to peers.
-    const relSession = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
-    if (relSession && !relSession.applyingRemote) {
-      applyLocalChangeToYDoc(relSession.ydoc, { type: "remove_relation_class_instance", relationClassInstanceUuid: relationclassInstance.uuid }, relSession.localOrigin);
-    }
+    publishLocalChange({ type: "remove_relation_class_instance", relationClassInstanceUuid: relationclassInstance.uuid });
 
     const object: THREE.Object3D = this.globalObjectInstance.scene.getObjectByProperty("uuid", relationclassInstance.uuid)!;
 
@@ -216,14 +202,15 @@ export class DeletionHandler {
     // !!! the api deletion strategy is not bullet proof. Thus, we patch the local sceneInstance again
     this.globalObjectInstance.doSceneInstancePatch = true;
 
-    // Notify listeners (e.g., SimulationWindow) that the active SceneInstance has changed.
-    // Consumers should debounce refreshes because cascaded deletions can trigger multiple mutations.
-    this.eventAggregator.publish("sceneInstanceMutated", {
-      sceneInstanceUuid: sceneInstance.uuid,
-      action: "deleted",
-      kind: "relation",
-      instanceUuid: relationclassInstance.uuid,
-    });
+    this.announceDeletion(sceneInstance.uuid, "relation", relationclassInstance.uuid);
+  }
+
+  /**
+   * Tell the rest of the app (the SimulationWindow, for one) that the open scene lost
+   * an instance. Consumers should debounce: one cascade fires this many times.
+   */
+  private announceDeletion(sceneInstanceUuid: string, kind: "class" | "relation", instanceUuid: string): void {
+    this.eventAggregator.publish("sceneInstanceMutated", { sceneInstanceUuid, action: "deleted", kind, instanceUuid });
   }
 
   async deleteAttributeInstance(attributeInstance: AttributeInstance) {
@@ -254,44 +241,32 @@ export class DeletionHandler {
     }
   }
 
-  async deleteConnectedRelationclassInstances(relationclassInstance: ClassInstance, portInstance: PortInstance) {
+  /**
+   * Delete every relation attached to a class instance or to a port instance. The
+   * caller passes whichever one it has; relations are found through the role instances
+   * that reference it.
+   */
+  async deleteConnectedRelationclassInstances(classInstance?: ClassInstance, portInstance?: PortInstance) {
     const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
     const relationclassInstances: RelationclassInstance[] = sceneInstance.relationclasses_instances;
     const roleInstances: RoleInstance[] = this.globalObjectInstance.role_instances;
 
-    //if classInstance
-    if (relationclassInstance) {
-      //find roles connected to classInstance
-      const roleInstancesConnectedToClassInstance = roleInstances.filter((roleInstance) => roleInstance.uuid_has_reference_class_instance == relationclassInstance.uuid);
+    const connectedRoles = roleInstances.filter((roleInstance) =>
+      classInstance
+        ? roleInstance.uuid_has_reference_class_instance == classInstance.uuid
+        : portInstance
+          ? roleInstance.uuid_has_reference_port_instance == portInstance.uuid
+          : false,
+    );
 
-      //find relationclassInstances connected to roleInstances for each roleInstance
-      for (const roleInstances of roleInstancesConnectedToClassInstance) {
-        const relationclassInstancesConnectedToRoleInstances = relationclassInstances.filter((relationclassInstance) => relationclassInstance.role_instance_from.uuid == roleInstances.uuid || relationclassInstance.role_instance_to.uuid == roleInstances.uuid);
-
-        //delete relationclassInstances
-        for (const relationclassInstance of relationclassInstancesConnectedToRoleInstances) {
-          const relationclassInstanceIndex = relationclassInstances.findIndex((instance) => instance.uuid == relationclassInstance.uuid);
-          //let sceneInstanceIndex = sceneInstance.relationclasses_instances.findIndex(instance => instance.uuid == relationclassInstance.uuid);
-          await this.deleteRelationclassInstance(relationclassInstance, relationclassInstanceIndex);
-        }
-      }
-    }
-
-    //if portInstance
-    if (portInstance) {
-      //find roles connected to portInstance
-      const roleInstancesConnectedToPortInstance = roleInstances.filter((roleInstance) => roleInstance.uuid_has_reference_port_instance == portInstance.uuid);
-
-      //find relationclassInstances connected to roleInstances for each roleInstance
-      for (const roleInstances of roleInstancesConnectedToPortInstance) {
-        const relationclassInstancesConnectedToRoleInstances = relationclassInstances.filter((relationclassInstance) => relationclassInstance.role_instance_from.uuid == roleInstances.uuid || relationclassInstance.role_instance_to.uuid == roleInstances.uuid);
-
-        //delete relationclassInstances
-        for (const relationclassInstance of relationclassInstancesConnectedToRoleInstances) {
-          const relationclassInstanceIndex = relationclassInstances.findIndex((instance) => instance.uuid == relationclassInstance.uuid);
-          //let sceneInstanceIndex = sceneInstance.relationclasses_instances.findIndex(instance => instance.uuid == relationclassInstance.uuid);
-          await this.deleteRelationclassInstance(relationclassInstance, relationclassInstanceIndex);
-        }
+    for (const role of connectedRoles) {
+      const connectedRelations = relationclassInstances.filter(
+        (relationclassInstance) => relationclassInstance.role_instance_from.uuid == role.uuid || relationclassInstance.role_instance_to.uuid == role.uuid,
+      );
+      for (const relationclassInstance of connectedRelations) {
+        // Re-read the index on every iteration: each delete splices the array.
+        const index = relationclassInstances.findIndex((instance) => instance.uuid == relationclassInstance.uuid);
+        await this.deleteRelationclassInstance(relationclassInstance, index);
       }
     }
   }
@@ -301,7 +276,7 @@ export class DeletionHandler {
 
     //delete connected relationclassInstances
     for (const portInstance of portInstances) {
-      await this.deleteConnectedRelationclassInstances(undefined as any, portInstance);
+      await this.deleteConnectedRelationclassInstances(undefined, portInstance);
 
       //push to log file
       this.logger.log("Port Instance " + portInstance.uuid + " deleted", "done");
@@ -309,5 +284,5 @@ export class DeletionHandler {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const deletionHandler = new DeletionHandler();

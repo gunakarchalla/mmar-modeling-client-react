@@ -9,8 +9,7 @@ export const API_URL: string =
 export const SYNC_URL: string =
   import.meta.env.VITE_SYNC_URL ?? "ws://localhost:8060";
 
-// Optional dev-only sign-in autofill. The old client prefilled the login form
-// from process.env.USERNAME / process.env.PASSWORD; here the SignInDialog reads
-// these (unset in production) so a developer can skip typing admin/admin.
+// Optional dev-only sign-in autofill: when set, the sign-in dialog seeds its fields
+// from these so a developer can skip typing the credentials. Unset in production.
 export const DEV_USERNAME: string | undefined = import.meta.env.VITE_USERNAME;
 export const DEV_PASSWORD: string | undefined = import.meta.env.VITE_PASSWORD;

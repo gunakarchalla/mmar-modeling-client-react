@@ -77,7 +77,8 @@ export class HistoryService {
   constructor() {
     // Engine modules must not import this service (it reaches back into the engine, and
     // the composition root in engine/index.ts fixes their construction order), so they
-    // announce steps over the bus instead. Handlers are never async — plan §3.1.
+    // announce steps over the bus instead. Handlers are never async: the bus does not
+    // await them.
     eventBus.subscribe("historyRecord", (payload) => {
       if (payload?.afterTransformSync) {
         void this.recordAfterTransformSync(payload.label, payload).catch((error) =>
@@ -285,7 +286,7 @@ export class HistoryService {
 
     globalObject.render = true;
     // Attribute values / names changed in place: the attribute window only re-reads the
-    // selected instance when the revision moves (P8's bump() contract).
+    // selected instance whenever the revision moves.
     useSelectionStore.getState().bump();
     eventBus.publish("sceneInstanceMutated", { sceneInstanceUuid: scene.uuid });
   }

@@ -1,10 +1,6 @@
-// Plain-function replacements for the Aurelia value converters
-// (resources/services/value_converters.ts). The old `numerise` value converter
-// was used in attribute-window.html and dialog-table-attribute.html to turn a
-// stored string into a number for display and back to a string on edit.
-//
-// Aurelia's `x | numerise:default:fallback` becomes `numerise(x, default, fallback)`
-// in JSX, and the `fromView` direction becomes `stringifyNumber(n)`.
+// Display formatting for attribute values. Attribute values are stored as strings;
+// `numerise` turns one into a number for a numeric input, and `stringifyNumber` turns
+// it back on edit. Used by the attribute window and the table-attribute dialog.
 
 /**
  * Parse a stored attribute string into a number for display.

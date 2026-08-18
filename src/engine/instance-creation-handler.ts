@@ -10,35 +10,19 @@ import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { eventBus } from "@/resources/services/event-bus";
-import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
+import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
 
 /**
- * P5 port of the old `resources/instance_creation_handler.ts` (631 lines,
- * DI-stripping recipe): GlobalDefinition / GlobalClassObject /
- * GlobalRelationclassObject / GlobalStateObject / MetaUtility / InstanceUtility /
- * GraphicContext / Logger / EventAggregator injections become module-singleton
- * imports (EventAggregator -> eventBus). Bodies are otherwise faithful to the
- * modeling original.
+ * Builds the gds instances behind everything the user draws: class instances, relation
+ * class instances with their two role instances, bendpoints, port instances and the
+ * attribute instances that hang off all of them.
  *
- * MODELING DELTAS kept vs the metamodeling twin's instance-creation-handler (which
- * this file is NOT a copy of — the twin has no scene instances so it omits them):
- *  - `createClassInstance` / `createRelationclassInstance` publish
- *    `sceneInstanceMutated` (SimulationWindow, P12, listens). The extra
- *    action/kind/instanceUuid fields ride along on the widened payload (see
- *    event-bus.ts) — plan §5 only mandates `sceneInstanceUuid`.
- *  - `class_instance.name = metaclass.name` for a real class (the twin appends the
- *    uuid; the modeling client keeps the bare meta name).
- *  - `createAttributeInstance` keeps the nested-table recursion branch (a table
- *    column whose own attribute is itself a table) — the twin flattened it away.
- *  - `portInstance.name = port.name` after createPortInstance.
+ * Attribute creation is recursive — a table attribute gets a first row of column
+ * attribute instances, and a column that is itself a table recurses again.
  *
- * Strict-TS: nullable locals widened to `| null`/`| undefined`; definite-assignment
- * (`!`) on locals only set in a branch and on meta lookups that return `| undefined`;
- * `getTabContextSceneInstance()` (returns `| undefined`) non-null-asserted at the
- * call site. `null as any` preserves the original's explicit-null arguments through
- * the gds constructors' non-null parameter types.
- */
-export class InstanceCreationHandler {
+ * Creating an instance announces itself on the `sceneInstanceMutated` channel so views
+ * that mirror the scene (the simulation window, for one) can refresh.
+ */export class InstanceCreationHandler {
   private globalObjectInstance = globalObject;
   private globalClassObject = globalClassObject;
   private globalRelationclassObject = globalRelationclassObject;
@@ -129,7 +113,7 @@ export class InstanceCreationHandler {
 
     // if instance is a cell in the table
     if (table_attribute_reference != null) {
-      // empty in original
+      // no default value for a nested table column
     }
 
     //if attached to class_instance
@@ -162,7 +146,7 @@ export class InstanceCreationHandler {
    * Instantiate the attributes the SCENE TYPE declares but the scene instance has no
    * AttributeInstance for yet, and return the ones created.
    *
-   * NOT IN THE OLD CLIENT (nor on the server): a class instance gets an
+   * Not done by the server either: a class instance gets an
    * AttributeInstance per meta attribute the moment it is created (see
    * `createClassInstance` below), a scene instance got none — so scene-type attributes
    * ("Name", "Comment", … — every example metamodel declares some) had no data behind
@@ -244,13 +228,7 @@ export class InstanceCreationHandler {
       }
       // Hand the very same instances to any collaborator joining later, so nobody mints
       // a second set for the same scene-type attributes.
-      if (session && !session.applyingRemote) {
-        applyLocalChangeToYDoc(
-          session.ydoc,
-          { type: "add_scene_attribute_instances", attributeInstances: created },
-          session.localOrigin,
-        );
-      }
+      publishLocalChange({ type: "add_scene_attribute_instances", attributeInstances: created });
       // The attribute window is showing this scene whenever nothing is selected.
       this.eventAggregator.publish("updateAttributeGui");
     }
@@ -261,7 +239,7 @@ export class InstanceCreationHandler {
   //-------------------------------------------------
   // bendpoint_instance
   //-------------------------------------------------
-  // eslint-disable-next-line @typescript-eslint/ban-types -- faithful port: the original geometry param is typed `Function` (only `.toString()` is called on it)
+  // eslint-disable-next-line @typescript-eslint/ban-types -- the geometry param is a stored code string typed `Function`; only `.toString()` is called on it
   async createBendpointInstance(x: number, y: number, z: number, geometry: Function, bendPointClassUUID: string) {
     //we round the position
     x = Math.round(x * 10) / 10;
@@ -613,5 +591,5 @@ export class InstanceCreationHandler {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const instanceCreationHandler = new InstanceCreationHandler();

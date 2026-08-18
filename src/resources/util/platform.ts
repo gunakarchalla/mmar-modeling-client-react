@@ -1,7 +1,7 @@
 /**
  * Which modifier key means "command" here: ⌘ on macOS, Ctrl on Windows/Linux.
  *
- * Ported verbatim from the metamodeling twin (`resources/util/platform.ts`) so the
+ * Shared with the metamodeling client so the
  * two clients advertise and obey the SAME undo/redo chords. That client needed the
  * detection to agree with Monaco's own (`vs/base/common/platform.js` tests the user
  * agent for a "Macintosh" substring); this client has no code editor, but the shared

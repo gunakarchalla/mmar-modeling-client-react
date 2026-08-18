@@ -2,12 +2,10 @@ import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogTitle, LinearProgress } from "@mui/material";
 import { useUiStore } from "@/resources/store/uiStore";
 
-// Port of `dialogs/dialog-loading-window/dialog-loading-window.{ts,html}`. Plan §7:
-// "-> MUI Dialog + LinearProgress driven by uiStore.loading". The old dialog faked a
-// gradually-slowing progress bar to reassure the user while metamodels/models load.
-// Here `open` is driven by uiStore.loading (set by SceneGroup.initTree); we keep the
-// old gentle fake-progress curve (capped at 99%) so the bar still feels alive, then
-// snap to 100% and unmount when loading flips false.
+// A modal progress dialog driven by `uiStore.loading`, shown while the metamodel and
+// models load. The bar is a gentle fake-progress curve capped at 99%, so it keeps
+// moving through a load of unknown length, then snaps to 100% and unmounts when
+// loading flips false.
 export default function LoadingWindow() {
   const loading = useUiStore((s) => s.loading);
   const [progress, setProgress] = useState(0);
@@ -21,7 +19,7 @@ export default function LoadingWindow() {
     let current = 0;
     let timer: ReturnType<typeof setTimeout>;
 
-    // Mirrors the old updateProgressBar(): faster early, slower near the end.
+    // Fills faster early and slower near the end, so a long load still looks alive.
     const step = () => {
       if (current >= 0.99) {
         current = 0.99;

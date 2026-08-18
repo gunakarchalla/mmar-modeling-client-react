@@ -3,19 +3,17 @@ import { globalObject } from "@/engine/global-definition";
 import { eventBus } from "./event-bus";
 
 /**
- * Port of the old modeling `resources/services/snapshot_service.ts` (plan §10: ★
- * modeling-unique). DI stripped: GlobalDefinition / EventAggregator become
- * module-singleton imports. Two independent snapshot mechanisms, bodies unchanged:
- *   - the whole scene-open engine state (for rolling back a failed scene open), and
- *   - per-SceneInstance deep clones (for reverting local edits, e.g. import).
+ * Two independent snapshot mechanisms:
+ *   - the whole engine state around a scene open, so a failed open can be rolled back
+ *     rather than leaving a half-built tab behind, and
+ *   - a deep clone per SceneInstance, which is what a rejected save or a discarded
+ *     import reverts to.
  *
- * DEVIATION (recorded in state.json): the old code deep-cloned with the app's
- * `plainToInstance(SceneInstance, ...)`. In this repo gds ships its OWN
- * class-transformer copy, and the `@Type` metadata that revives nested
- * class/relation/attribute instances is registered only in THAT copy — so the app's
- * `plainToInstance` produces a top-level SceneInstance whose children are plain
- * `Object`s (breaks `instanceof ClassInstance`). `SceneInstance.fromJS(...)` runs
- * inside gds and deep-revives correctly, so clones go through it instead.
+ * Clones go through gds's own `SceneInstance.fromJS`, never the app's `plainToInstance`:
+ * the app and gds each bundle their own class-transformer, and the `@Type` metadata that
+ * revives nested class, relation and attribute instances is registered only in gds's
+ * copy — so the app's version would produce a SceneInstance whose children are plain
+ * objects, breaking every `instanceof` check downstream.
  */
 type SceneOpenStateSnapshot = {
   selectedTab: number;
@@ -132,5 +130,5 @@ export class SnapshotService {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const snapshotService = new SnapshotService();

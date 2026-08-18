@@ -6,14 +6,13 @@ import { UUID } from "@gds/models/meta/Metamodel_metaobjects.structure";
 import { SceneInstance } from "@gds/models/instance/Instance_scenes.structure";
 import { ClassInstance } from "@gds/models/instance/Instance_classes.structure";
 import { RelationclassInstance } from "@gds/models/instance/Instance_relationclasses.structure";
-import { AttributeInstance } from "@gds/models/instance/Instance_attributes.structure";
 import { apiFetch, ApiError } from "./api";
 import { getToken } from "./token";
 import { useLogStore } from "@/resources/store/logStore";
 
 const log = (value: string, status: string) => useLogStore.getState().log(value, status);
 
-/** Shape returned by GET /instances/sceneInstances/:uuid/access (fetchHelper:7815). */
+/** Shape returned by GET /instances/sceneInstances/:uuid/access. */
 export interface AccessEntry {
   uuid_user: string;
   username: string;
@@ -29,23 +28,21 @@ function authHeaders(): Record<string, string> {
 }
 
 /**
- * REST client for the modeling client. Replaces the 7,889-line generated
- * fetchHelper.ts with just the ~25 endpoints actually called (plan.md §6),
- * ported method-by-method from the old file (URL + method + body verbatim).
+ * The REST client: one method per endpoint the app actually calls, each attaching the
+ * bearer token.
  *
- * The modeling client relies on `instanceof` checks (expression_utility), so
- * every response is REVIVED into a real gds class instance via `X.fromJS(...)`
- * (= plainToInstance) before it is returned. Callers get live gds objects, not
- * plain JSON. Errors are logged to the logStore (snackbar on error) and the call
- * resolves to `undefined` / `[]`, mirroring how the old views defended each call.
+ * Every response is REVIVED into a real gds class instance through `X.fromJS(...)`
+ * before it is returned, so callers get live gds objects rather than plain JSON — the
+ * rest of the client depends on `instanceof` checks holding.
  *
- * Data stores for scene instances / tab contexts arrive in P3; until then these
- * methods only fetch-revive-return (no store side effects).
+ * Failures are logged (which raises the snackbar) and the call resolves to `undefined`
+ * or `[]`. The few endpoints whose caller must branch on the status code throw an
+ * `ApiError` instead; see api.ts.
  */
 export class BackendService {
   // --- Auth -----------------------------------------------------------------
 
-  /** POST /login/signin -> JWT string (fetchHelper.loginPost:59). */
+  /** POST /login/signin -> JWT string. */
   async login(username: string, password: string): Promise<string | undefined> {
     const response = await apiFetch("login/signin", {
       method: "POST",
@@ -61,7 +58,7 @@ export class BackendService {
 
   // --- Metamodel ------------------------------------------------------------
 
-  /** GET /metamodel/sceneTypes -> SceneType[] (fetchHelper.getSceneTypes:99). */
+  /** GET /metamodel/sceneTypes -> SceneType[]. */
   async getSceneTypes(): Promise<SceneType[]> {
     try {
       const response = await apiFetch("metamodel/sceneTypes", {
@@ -80,7 +77,7 @@ export class BackendService {
     }
   }
 
-  /** GET /metamodel/attributes/:uuid -> Attribute (fetchHelper.attributesGET:3900). */
+  /** GET /metamodel/attributes/:uuid -> Attribute. */
   async attributesGET(attributesUUID: string): Promise<Attribute | undefined> {
     try {
       const response = await apiFetch(
@@ -95,15 +92,11 @@ export class BackendService {
   }
 
   /**
-   * GET /metamodel/independent_procedures -> Procedure[] (fetchHelper.getProcedures:4403).
+   * GET /metamodel/independent_procedures -> Procedure[].
    *
-   * P3 FIX: the generated fetchHelper mistyped this `Promise<Procedure>`, but at
-   * runtime `processGetProcedures` does `Procedure.fromJS(parsedBody)` where the body
-   * is an ARRAY (`/independent_procedures` is plural) — so `plainToInstance` returns a
-   * `Procedure[]`. The only consumer, `procedure-utility.getGeneralProcedures`, does
-   * `Array.isArray(response).map(...)`, i.e. it expects an array. P1 ported the wrong
-   * (single) shape; corrected here to match the server + consumer. Non-array bodies
-   * yield `[]`, exactly like the old code's `Array.isArray` guard did.
+   * The endpoint is plural and the body is an ARRAY of procedures, which is also what
+   * the only consumer (`procedure-utility.getGeneralProcedures`) iterates. A non-array
+   * body yields `[]` rather than throwing.
    */
   async getProcedures(): Promise<Procedure[]> {
     try {
@@ -120,7 +113,7 @@ export class BackendService {
     }
   }
 
-  /** GET /metamodel/sceneTypes/:uuid/procedures -> Procedure[] (fetchHelper.getAssignedProcedures:4421). */
+  /** GET /metamodel/sceneTypes/:uuid/procedures -> Procedure[]. */
   async getAssignedProcedures(sceneTypeUuid: string): Promise<Procedure[]> {
     try {
       const response = await apiFetch(
@@ -140,7 +133,7 @@ export class BackendService {
 
   // --- Scene instances ------------------------------------------------------
 
-  /** GET /instances/sceneTypes/:uuid/sceneInstances -> SceneInstance[] (fetchHelper.sceneInstancesAllGET:4508). */
+  /** GET /instances/sceneTypes/:uuid/sceneInstances -> SceneInstance[]. */
   async sceneInstancesAllGET(sceneTypeUUID: string): Promise<SceneInstance[]> {
     try {
       const response = await apiFetch(
@@ -158,7 +151,7 @@ export class BackendService {
     }
   }
 
-  /** GET /instances/sceneInstances/:uuid -> SceneInstance (fetchHelper.sceneInstancesGET:4666). */
+  /** GET /instances/sceneInstances/:uuid -> SceneInstance. */
   async sceneInstancesGET(sceneInstanceUUID: string): Promise<SceneInstance | undefined> {
     try {
       const response = await apiFetch(
@@ -172,7 +165,7 @@ export class BackendService {
     }
   }
 
-  /** POST /instances/sceneTypes/:uuid/sceneInstances -> SceneInstance (fetchHelper.sceneInstancesPOST:4560). */
+  /** POST /instances/sceneTypes/:uuid/sceneInstances -> SceneInstance. */
   async sceneInstancesPOST(
     sceneTypeUUID: string,
     body: SceneInstance,
@@ -190,7 +183,7 @@ export class BackendService {
   }
 
   /**
-   * PATCH /instances/sceneInstances/:uuid -> SceneInstance (fetchHelper.sceneInstancesPATCH:4711).
+   * PATCH /instances/sceneInstances/:uuid -> SceneInstance.
    *
    * The server PATCH is an UPSERT: a PATCH targeting a scene instance that does not
    * exist yet creates it, so the first autosave of a freshly created scene succeeds
@@ -214,7 +207,7 @@ export class BackendService {
     return SceneInstance.fromJS(await response.json()) as SceneInstance;
   }
 
-  /** DELETE /instances/sceneInstances/:uuid -> SceneInstance[] (fetchHelper.sceneInstancesAllDELETE2:4759). */
+  /** DELETE /instances/sceneInstances/:uuid -> SceneInstance[]. */
   async sceneInstancesAllDELETE2(sceneInstanceUUID: string): Promise<SceneInstance[]> {
     try {
       const response = await apiFetch(
@@ -234,7 +227,7 @@ export class BackendService {
 
   // --- Class / relationclass / bendpoint instances --------------------------
 
-  /** DELETE /instances/classesInstances/:uuid -> ClassInstance[] (fetchHelper.classesInstancesAllDELETE2:5117). */
+  /** DELETE /instances/classesInstances/:uuid -> ClassInstance[]. */
   async classesInstancesAllDELETE2(classInstanceUUID: string): Promise<ClassInstance[]> {
     try {
       const response = await apiFetch(
@@ -252,7 +245,7 @@ export class BackendService {
     }
   }
 
-  /** DELETE /instances/relationClassesInstances/:uuid -> RelationclassInstance[] (fetchHelper.relationClassesInstancesAllDELETE2:6191). */
+  /** DELETE /instances/relationClassesInstances/:uuid -> RelationclassInstance[]. */
   async relationClassesInstancesAllDELETE2(
     relClassesUUID: string,
   ): Promise<RelationclassInstance[]> {
@@ -272,7 +265,7 @@ export class BackendService {
     }
   }
 
-  /** DELETE /instances/bendpointsInstances/:uuid -> ClassInstance[] (fetchHelper.bendpointInstanceDELETE:7598). */
+  /** DELETE /instances/bendpointsInstances/:uuid -> ClassInstance[]. */
   async bendpointInstanceDELETE(uuid: string): Promise<ClassInstance[]> {
     try {
       const response = await apiFetch(
@@ -292,28 +285,11 @@ export class BackendService {
 
   // --- Attribute instances --------------------------------------------------
 
-  /** PATCH /instances/attributesInstances/:uuid -> AttributeInstance (fetchHelper.attributeInstancesPATCH:7217). */
-  async attributeInstancesPATCH(
-    attributeUUID: string,
-    body: AttributeInstance,
-  ): Promise<AttributeInstance | undefined> {
-    try {
-      const response = await apiFetch(
-        `instances/attributesInstances/${encodeURIComponent(attributeUUID)}`,
-        { method: "PATCH", headers: authHeaders(), body: JSON.stringify(body) },
-      );
-      if (!response.ok) throw new Error(`Failed to update attribute instance (${response.status})`);
-      return AttributeInstance.fromJS(await response.json()) as AttributeInstance;
-    } catch (error) {
-      log(`Error updating attribute instance: ${error}`, "error");
-    }
-  }
-
   // --- Files ----------------------------------------------------------------
   // Files are handled as raw JSON metadata / browser Blobs, not gds classes
-  // (the old fetchHelper returns parsed JSON and browser File objects here).
+  // (parsed JSON and browser File objects, not gds classes).
 
-  /** GET /metamodel/files -> file metadata array (fetchHelper.getFiles:7418). */
+  /** GET /metamodel/files -> file metadata array. */
   async getFiles(): Promise<unknown[]> {
     try {
       const response = await apiFetch("metamodel/files", {
@@ -328,7 +304,7 @@ export class BackendService {
     }
   }
 
-  /** GET /metamodel/files/:uuid -> browser File (fetchHelper.getFileByUUID:7438). */
+  /** GET /metamodel/files/:uuid -> browser File. */
   async getFileByUUID(uuid: UUID): Promise<globalThis.File | undefined> {
     try {
       const response = await apiFetch(`metamodel/files/${encodeURIComponent(uuid)}`, {
@@ -343,7 +319,7 @@ export class BackendService {
     }
   }
 
-  /** POST /metamodel/files (multipart) -> created file JSON (fetchHelper.postFile:7460). */
+  /** POST /metamodel/files (multipart) -> created file JSON. */
   async postFile(
     file: globalThis.File,
     compress = false,
@@ -375,15 +351,11 @@ export class BackendService {
   }
 
   /**
-   * PATCH /metamodel/files/:uuid (multipart) -> updated file JSON
-   * (fetchHelper.patchFileByUUID:7492).
+   * PATCH /metamodel/files/:uuid (multipart) -> updated file JSON.
    *
-   * P8 FIX: the generated fetchHelper types this `Promise<string>`, and P1 copied that
-   * type. It is wrong the same way `getProcedures` was (P3): the body is
-   * `JSON.parse(responseText)` of a file OBJECT, and the only consumer — the upload
-   * dialog — reads `response.uuid` off it. Verified against the live server in
-   * p8-file-upload.integration.test.ts (PATCH returns `{ uuid, ... }`). Typed
-   * `Promise<unknown>` to match `postFile`, which the dialog treats identically.
+   * The body is a file OBJECT (`{ uuid, ... }`), which the upload dialog reads `uuid`
+   * off — verified against the live server in the file-upload integration test. Typed
+   * `unknown` to match `postFile`, which the dialog treats identically.
    */
   async patchFileByUUID(
     uuid: UUID,
@@ -416,7 +388,7 @@ export class BackendService {
     }
   }
 
-  /** DELETE /metamodel/files/:uuid (fetchHelper.deleteFileByUUID:7526). */
+  /** DELETE /metamodel/files/:uuid. */
   async deleteFileByUUID(uuid: UUID): Promise<void> {
     try {
       const response = await apiFetch(`metamodel/files/${encodeURIComponent(uuid)}`, {
@@ -431,7 +403,7 @@ export class BackendService {
 
   // --- Scene access (collaboration) -----------------------------------------
 
-  /** GET /instances/sceneInstances/:uuid/access -> AccessEntry[] (fetchHelper.sceneAccessListGET:7649). */
+  /** GET /instances/sceneInstances/:uuid/access -> AccessEntry[]. */
   async sceneAccessListGET(sceneInstanceUuid: string): Promise<AccessEntry[]> {
     try {
       const response = await apiFetch(
@@ -447,7 +419,7 @@ export class BackendService {
     }
   }
 
-  /** GET /instances/sceneInstances/:uuid/access/me -> caller access level (fetchHelper.sceneAccessMeGET:7677). */
+  /** GET /instances/sceneInstances/:uuid/access/me -> caller access level. */
   async sceneAccessMeGET(
     sceneInstanceUuid: string,
   ): Promise<{ level: "read" | "edit" | "delete" | null }> {
@@ -468,7 +440,7 @@ export class BackendService {
   }
 
   /**
-   * POST /instances/sceneInstances/:uuid/access -> AccessEntry (fetchHelper.sceneAccessPOST:7705).
+   * POST /instances/sceneInstances/:uuid/access -> AccessEntry.
    * THROWS ApiError instead of swallowing — the share dialog branches on 404/409. See ApiError.
    */
   async sceneAccessPOST(
@@ -487,7 +459,7 @@ export class BackendService {
   }
 
   /**
-   * DELETE /instances/sceneInstances/:uuid/access/:userUuid (fetchHelper.sceneAccessDELETE:7761).
+   * DELETE /instances/sceneInstances/:uuid/access/:userUuid.
    * THROWS ApiError instead of swallowing — the share dialog branches on 409. See ApiError.
    */
   async sceneAccessDELETE(sceneInstanceUuid: string, userUuid: string): Promise<void> {
@@ -500,7 +472,7 @@ export class BackendService {
   }
 
   /**
-   * GET /users/byUsername/:username -> user (fetchHelper.userByUsernameGET:7787).
+   * GET /users/byUsername/:username -> user.
    * THROWS ApiError instead of swallowing — the share dialog turns a 404 into
    * "User not found". Verified live: an unknown username really does return 404.
    */
@@ -520,5 +492,5 @@ export class BackendService {
   }
 }
 
-// Singleton instance (replaces the Aurelia @newInstanceOf/DI registration).
+// Module singleton — one shared instance.
 export const backendService = new BackendService();

@@ -31,17 +31,16 @@ import { describeError } from "@/resources/util/describe-error";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
 
-// Port of `dialogs/dialog-create-new-scene/dialog-create-new-scene.{ts,html}`.
+// Creates a SceneInstance of a chosen SceneType.
 // Opened via uiStore 'createNewScene' with an optional `{ sceneType }` payload
 // (set when the user double-clicks a SceneType in the tree). Lets the user pick a
 // SceneType + name/description and creates a new (empty) SceneInstance, opening it
 // as a tab through instance-utility.createTabContextSceneInstance (the single
 // mutation path). SceneTypes come from globalObject.sceneTypes (filled by
-// SceneGroup.initTree) — the old dialog bound a `tree` prop for the same list.
+// SceneGroup.initTree).
 //
-// DEVIATION: the old dialog manually pushed the new scene into `tree.children` for
-// imported sceneTypes. SceneGroup now owns the tree and re-scans open tabs on the
-// 'updateSceneGroup' event we publish here, so the dialog no longer mutates the tree.
+// The new scene is not pushed into the tree by hand: SceneGroup owns the tree and
+// re-scans the open tabs when this dialog publishes 'updateSceneGroup'.
 interface Payload {
   sceneType?: SceneType;
 }

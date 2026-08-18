@@ -17,31 +17,28 @@ import { simulationUtility } from "@/resources/services/simulation-utility";
 import { logger } from "@/resources/services/logger";
 import { eventBus } from "@/resources/services/event-bus";
 import { useSelectionStore, type SelectionType } from "@/resources/store/selectionStore";
-import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
+import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
 
 /**
- * P5 port of the old `resources/interaction_handler.ts` (733 lines) — REPLACES the
- * P2 stub (which only had `onDocumentMouseDown` + the raycaster refresh). This is the
- * 5-mode interaction state machine (0 SelectionMode / 1 ViewMode / 2 DrawingMode /
- * 3 DrawingModeRelationClass / 4 SimulationMode; see
- * https://github.com/MM-AR/mmar/wiki/InteractionHandler). DI-stripping recipe:
- * every Aurelia injection becomes a module-singleton import (EventAggregator ->
- * eventBus). Unused injections from the original (ExpressionUtility, PersistencyHandler)
- * are dropped — the per-port GraphicContext is constructed with the no-arg ctor.
+ * The canvas interaction state machine. `onDocumentMouseDown` is the renderer's
+ * `pointerdown` listener and dispatches to one handler per mode:
  *
- * SELECTION STORE (plan §9 P5): onSelectionMode drives `selectionStore` (engine ->
- * store) in addition to the `updateAttributeGui` / `removeAttributeGui` bus channels,
- * so the P8 AttributeWindow reads the selection identity from the store. The engine
- * (globalObject.current_class_instance / current_port_instance) stays the source of
- * truth; this is a one-way engine -> store sync.
+ *   0 SelectionMode            pick an object, attach the transform gizmo, show its
+ *                              attributes (left = translate, right = scale,
+ *                              middle = rotate in 3D)
+ *   1 ViewMode                 camera only; clicking an object switches to selection
+ *   2 DrawingMode              drop an instance of the selected palette class
+ *   3 DrawingModeRelationClass draw a relation: the first click sets the from-end,
+ *                              clicks on empty space add bendpoints, the click on a
+ *                              second object closes it; right-click abandons it
+ *   4 SimulationMode           run the clicked button object's simulation expression
  *
- * Strict-TS: `intersect`/`objects`/`intersects` fields use definite-assignment;
- * `getTabContextSceneInstance()` (returns `| undefined`) and the meta lookups
- * (`| undefined`) are non-null-asserted at the call site the same way the original
- * assumed them defined; the `Line2 | undefined` `activeStateLine` is asserted where
- * the original treated it as present.
- */
-export class InteractionHandler {
+ * See https://github.com/MM-AR/mmar/wiki/InteractionHandler for the sequence diagram.
+ *
+ * The engine's `current_class_instance` / `current_port_instance` stay the source of
+ * truth for what is selected; `selectionStore` is a one-way mirror for React, kept in
+ * step alongside the `updateAttributeGui` / `removeAttributeGui` bus channels.
+ */export class InteractionHandler {
   private objects!: THREE.Mesh[];
   private intersects!: THREE.Intersection[];
   private intersect!: THREE.Intersection;
@@ -135,18 +132,13 @@ export class InteractionHandler {
 
       this.globalObjectInstance.transformControls.attach(this.intersect.object);
 
-      //restrict scale to x-axis --> we must handle the relative scale on the y-axis in onTransformControlsPropertyChange()
-      if (this.globalObjectInstance.transformControls.mode == "scale") {
-        // this.globalObjectInstance.transformControls.showY = this.globalObjectInstance.transformControls.mode != 'scale';
-      }
-
       // here we get the attribute instances of the object to add it to the gui
       const instance_uuid = this.intersect.object.uuid;
       const class_instance = await this.instanceUtility.getClassInstance(instance_uuid);
       this.globalObjectInstance.current_class_instance = class_instance as ClassInstance;
 
-      const port_instance: PortInstance = await this.instanceUtility.getPortInstance(instance_uuid);
-      this.globalObjectInstance.current_port_instance = port_instance;
+      const port_instance = await this.instanceUtility.getPortInstance(instance_uuid);
+      this.globalObjectInstance.current_port_instance = port_instance as PortInstance;
 
       //check if it is a relationclassinstance
       if (this.globalObjectInstance.current_class_instance == undefined) {
@@ -309,22 +301,11 @@ export class InteractionHandler {
           this.globalObjectInstance.render = true;
         }
 
-        // set variable to patch the sceneInstance to the DB if autoSave is enabled
-        // this is done after a new instance has been created
-        if (this.globalObjectInstance.autoSave) {
-          this.globalObjectInstance.doSceneInstancePatch = true;
-          // In shared mode also set the local-origin flag so the shared auto-save picks it up
-          if (this.globalObjectInstance.currentTabAccess) {
-            this.globalObjectInstance.doSceneInstancePatchLocal = true;
-          }
-        }
+        this.markSceneDirty();
 
-        // Propagate the new class instance to all peers via Y.Doc.
-        // This runs AFTER all port/attribute creation awaits so the instance is fully populated.
-        const session = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
-        if (session && !session.applyingRemote) {
-          applyLocalChangeToYDoc(session.ydoc, { type: "add_class_instance", classInstance: class_instance }, session.localOrigin);
-        }
+        // Propagate the new class instance to all peers. This runs AFTER every port /
+        // attribute creation await, so peers receive a fully populated instance.
+        publishLocalChange({ type: "add_class_instance", classInstance: class_instance });
 
         // Undo step for the drop. Same place as the Y.Doc publish and for the same
         // reason: every port + attribute of the new instance exists by now, so the
@@ -332,13 +313,7 @@ export class InteractionHandler {
         this.eventAggregator.publish("historyRecord", { label: `create ${class_instance.name}` });
       }
     }
-    // Faithful port of a dead branch in the original (its body is a commented-out
-    // getPortIntersectPosition call); it is covered by the branch above so it never
-    // runs. Kept for parity; lint's no-dupe-else-if is silenced deliberately.
-    // eslint-disable-next-line no-dupe-else-if
-    else if (this.intersects.length > 0 && this.intersects.length >= 2 && this.clickedButton == 0) {
-      //getPortIntersectPosition(intersects);
-    } else {
+    else {
       if (this.clickedButton == 2) {
         //default state
         this.globalStateObject.setState(1);
@@ -396,22 +371,10 @@ export class InteractionHandler {
       //check if relation is allowed for role_from
       //------------------------------------
 
-      let intersect_port_instance: PortInstance | undefined;
+      const { classInstance: intersect_class_instance, portInstance: intersect_port_instance } = await this.resolveIntersectedEndpoint();
+      const relationclass = await this.findMetaRelationclass(index);
 
-      //we check if there is a class
-      const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
-      const intersect_class_instance: ClassInstance | undefined = sceneInstance.class_instances.find((classInstance) => classInstance.uuid == this.intersect.object.uuid);
-      //if there is no class, we check if there is a port
-      if (!intersect_class_instance) {
-        const allPorts = await this.instanceUtility.getAllPortInstancesOfTabContext();
-        intersect_port_instance = allPorts.find((portInstance) => portInstance.uuid == this.intersect.object.uuid);
-      }
-
-      //we search for the meta relationclass
-      const sceneType = (await this.metaUtility.getTabContextSceneType())!;
-      const relationclass = sceneType.relationclasses.find((relationclass) => relationclass.uuid == this.globalRelationclassObject.relationClassUUID[index]);
-
-      //one of both should be undefined
+      //exactly one of the two endpoint kinds is set
       this.allowed = this.consistencyChecker.checkStartPoint(relationclass!, intersect_class_instance, intersect_port_instance);
       if (this.allowed == false) {
         this.logger.log("action is not allowed --> no relationclass created", "close");
@@ -519,10 +482,7 @@ export class InteractionHandler {
       // before the relation that references it arrives — mirroring the load order
       // (class instances before relations) in PersistencyHandler.importInstances and
       // avoiding a missing-object crash in Animator.setPos.
-      const bendpointSession = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
-      if (bendpointSession && !bendpointSession.applyingRemote) {
-        applyLocalChangeToYDoc(bendpointSession.ydoc, { type: "add_class_instance", classInstance: bendpoint_instance }, bendpointSession.localOrigin);
-      }
+      publishLocalChange({ type: "add_class_instance", classInstance: bendpoint_instance });
     }
     //----------------------
     //if click on element
@@ -531,22 +491,11 @@ export class InteractionHandler {
       //------------------------------------
       //check if relation is allowed for role_to
 
-      let intersect_port_instance: PortInstance | undefined;
       const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
+      const { classInstance: intersect_class_instance, portInstance: intersect_port_instance } = await this.resolveIntersectedEndpoint();
+      const relationclass = await this.findMetaRelationclass(index);
 
-      //we check if there is a class
-      const intersect_class_instance: ClassInstance | undefined = sceneInstance.class_instances.find((classInstance) => classInstance.uuid == this.intersect.object.uuid);
-      //if there is no class, we check if there is a port
-      if (!intersect_class_instance) {
-        const allPorts = await this.instanceUtility.getAllPortInstancesOfTabContext();
-        intersect_port_instance = allPorts.find((portInstance) => portInstance.uuid == this.intersect.object.uuid);
-      }
-
-      //we search for the meta relationclass
-      const sceneType = (await this.metaUtility.getTabContextSceneType())!;
-      const relationclass = sceneType.relationclasses.find((relationclass) => relationclass.uuid == this.globalRelationclassObject.relationClassUUID[index]);
-
-      //one of both should be undefined
+      //exactly one of the two endpoint kinds is set
       this.allowed = this.consistencyChecker.checkEndPoint(relationclass!, intersect_class_instance, intersect_port_instance);
       if (this.allowed == false) {
         this.logger.log("action is not allowed --> no relationclass created", "close");
@@ -589,21 +538,10 @@ export class InteractionHandler {
       //role_to.uuid_reference_relationclass_instance = relationclass_instance.uuid;
       relationclass_instance.role_instance_to = role_to;
 
-      // set variable to patch the sceneInstance to the DB if autoSave is enabled
-      // this is done after a new instance has been created
-      if (this.globalObjectInstance.autoSave) {
-        this.globalObjectInstance.doSceneInstancePatch = true;
-        // In shared mode also set the local-origin flag
-        if (this.globalObjectInstance.currentTabAccess) {
-          this.globalObjectInstance.doSceneInstancePatchLocal = true;
-        }
-      }
+      this.markSceneDirty();
 
       // Propagate the fully-formed relation class instance (both roles set) to peers.
-      const relSession = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
-      if (relSession && !relSession.applyingRemote) {
-        applyLocalChangeToYDoc(relSession.ydoc, { type: "add_relation_class_instance", relationClassInstance: relationclass_instance }, relSession.localOrigin);
-      }
+      publishLocalChange({ type: "add_relation_class_instance", relationClassInstance: relationclass_instance });
 
       // ONE undo step for the whole line, bendpoints included. The bendpoints created
       // while drawing are intermediate states of this single action, so they are not
@@ -645,9 +583,41 @@ export class InteractionHandler {
     }
   }
 
-  // //-------------------------------------------------
-  // //helper functions
-  // //-------------------------------------------------
+  // -------------------------------------------------
+  // helpers
+  // -------------------------------------------------
+
+  /**
+   * The class OR port instance the last raycast hit — exactly one of them is set,
+   * because a relation end may be anchored on either.
+   */
+  private async resolveIntersectedEndpoint(): Promise<{ classInstance?: ClassInstance; portInstance?: PortInstance }> {
+    const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
+    const classInstance = sceneInstance.class_instances.find((candidate) => candidate.uuid == this.intersect.object.uuid);
+    if (classInstance) return { classInstance };
+
+    const allPorts = await this.instanceUtility.getAllPortInstancesOfTabContext();
+    return { portInstance: allPorts.find((portInstance) => portInstance.uuid == this.intersect.object.uuid) };
+  }
+
+  /** The meta relationclass behind the palette entry at `index` of the open scene type. */
+  private async findMetaRelationclass(index: number): Promise<Relationclass | undefined> {
+    const sceneType = (await this.metaUtility.getTabContextSceneType())!;
+    return sceneType.relationclasses.find((relationclass) => relationclass.uuid == this.globalRelationclassObject.relationClassUUID[index]);
+  }
+
+  /**
+   * Queue the open scene for the next auto-save tick after a structural change. A
+   * shared tab additionally needs the local-origin flag, which is what the shared
+   * auto-save branch keys off.
+   */
+  private markSceneDirty(): void {
+    if (!this.globalObjectInstance.autoSave) return;
+    this.globalObjectInstance.doSceneInstancePatch = true;
+    if (this.globalObjectInstance.currentTabAccess) {
+      this.globalObjectInstance.doSceneInstancePatchLocal = true;
+    }
+  }
 
   parseObj(obj: string) {
     const ret: string = Function('"use strict";return (' + obj + ")")();
@@ -655,5 +625,5 @@ export class InteractionHandler {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const interactionHandler = new InteractionHandler();

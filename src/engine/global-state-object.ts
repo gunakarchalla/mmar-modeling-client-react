@@ -6,17 +6,43 @@ import { eventBus } from "@/resources/services/event-bus";
 import { useStateStore } from "@/resources/store/stateStore";
 
 /**
- * Port of the old `resources/global_state_object.ts` — the 5-mode interaction state
- * machine (0 SelectionMode, 1 ViewMode, 2 DrawingMode, 3 DrawingModeRelationClass,
- * 4 SimulationMode). DI-stripping recipe: GlobalDefinition / GlobalSelectedObject /
- * Logger / EventAggregator injections become module-singleton imports
- * (EventAggregator -> eventBus, same `.publish` shape). Bodies unchanged EXCEPT:
- *  - `setState`/`onStateChange` additionally push `activeState` into `stateStore`
- *    so the React StateWindow (P6) has a reactive mirror (plan §3.2). The engine
- *    remains the source of truth; this is a one-way engine -> store sync.
- *  - the old `removeAttributeGui` publish payload `{ update: true }` is dropped:
- *    the typed event-bus (plan §5) types the channel as no-payload.
+ * The interaction state machine: which of the five modes the canvas is in, and what
+ * each mode does to the controls and the cursor.
+ *
+ * Entering a mode always clears the current selection and detaches the transform
+ * gizmo; `MODE_SETTINGS` then says how that mode configures the transform / orbit
+ * controls and which cursor it shows. Selection mode is the only one that hands the
+ * transform gizmo to the user, and the only one that locks orbit rotation.
+ *
+ * `stateNames` is indexed by the mode number used throughout the app (0 selection,
+ * 1 view, 2 drawing, 3 drawing-relationclass, 4 simulation) and is also the label
+ * shown in the state window.
+ *
+ * The engine stays the source of truth; `setState` additionally mirrors the active
+ * state into `stateStore` so React can render it.
  */
+
+/** How one interaction mode configures the controls and the canvas cursor. */
+interface ModeSettings {
+  transformControls: boolean;
+  orbitRotate: boolean;
+  cursor: string;
+}
+
+/** Indexed by mode number, parallel to `GlobalStateObject.stateNames`. */
+const MODE_SETTINGS: ModeSettings[] = [
+  // 0 SelectionMode (drag): the gizmo is the tool, so orbit rotation would fight it.
+  { transformControls: true, orbitRotate: false, cursor: "grab" },
+  // 1 ViewMode
+  { transformControls: false, orbitRotate: true, cursor: "pointer" },
+  // 2 DrawingMode (insert)
+  { transformControls: false, orbitRotate: true, cursor: "copy" },
+  // 3 DrawingModeRelationClass (line)
+  { transformControls: false, orbitRotate: true, cursor: "copy" },
+  // 4 SimulationMode
+  { transformControls: false, orbitRotate: true, cursor: "help" },
+];
+
 export class GlobalStateObject {
   stateNames: string[];
   activeState: string;
@@ -40,103 +66,35 @@ export class GlobalStateObject {
     if (this.globalObjectInstance.transformControls) {
       this.globalObjectInstance.transformControls.detach();
     }
-    //if SelectionMode
-    if (this.activeState === this.stateNames[0]) {
-      this.globalObjectInstance.transformControls.enabled = true;
-      this.logger.log("transformControls enabled", "info");
 
-      //if 3d mode, disable orbitcontrols while in selection mode
-      if (!this.globalObjectInstance.threeDimensional) {
-        this.globalObjectInstance.orbitControls.enabled = true;
-        //enable orbitcontrols zoom
-        this.globalObjectInstance.orbitControls.enableZoom = true;
-        //disable orbitcontrols rotation
-        this.globalObjectInstance.orbitControls.enableRotate = false;
-        this.logger.log("orbitControls rotation disabled", "info");
-      } else {
-        this.globalObjectInstance.orbitControls.enabled = true;
-        this.logger.log("orbitControls disabled", "info");
-        //enable orbitcontrols zoom
-        this.globalObjectInstance.orbitControls.enableZoom = true;
-        //disable orbitcontrols rotation
-        this.globalObjectInstance.orbitControls.enableRotate = false;
-      }
+    const settings = MODE_SETTINGS[this.stateNames.indexOf(this.activeState)];
+    if (!settings) return;
 
-      //set cursor style
-      this.globalObjectInstance.elementContainer.style.cursor = "grab";
-    }
-    //if ViewMode
-    else if (this.activeState === this.stateNames[1]) {
-      this.globalObjectInstance.transformControls.enabled = false;
-      this.globalObjectInstance.orbitControls.enabled = true;
-      //enable orbitcontrols zoom
-      this.globalObjectInstance.orbitControls.enableZoom = true;
-      //enable orbitcontrols rotation
-      this.globalObjectInstance.orbitControls.enableRotate = true;
-      this.logger.log("transformControls disabled", "info");
-      this.logger.log("orbitControls enabled", "info");
+    this.globalObjectInstance.transformControls.enabled = settings.transformControls;
+    this.globalObjectInstance.orbitControls.enabled = true;
+    // Zoom stays available in every mode; only rotation is mode-dependent.
+    this.globalObjectInstance.orbitControls.enableZoom = true;
+    this.globalObjectInstance.orbitControls.enableRotate = settings.orbitRotate;
+    this.globalObjectInstance.elementContainer.style.cursor = settings.cursor;
 
-      //set cursor style
-      this.globalObjectInstance.elementContainer.style.cursor = "pointer";
-    }
-    //if DrawingMode
-    else if (this.activeState === this.stateNames[2]) {
-      this.globalObjectInstance.transformControls.enabled = false;
-      this.globalObjectInstance.orbitControls.enabled = true;
-      //enable orbitcontrols zoom
-      this.globalObjectInstance.orbitControls.enableZoom = true;
-      //enable orbitcontrols rotation
-      this.globalObjectInstance.orbitControls.enableRotate = true;
-      this.logger.log("transformControls disabled", "info");
-      this.logger.log("orbitControls enabled", "info");
-
-      //set cursor style
-      this.globalObjectInstance.elementContainer.style.cursor = "copy";
-    }
-    //if DrawingModeRelationClass
-    else if (this.activeState === this.stateNames[3]) {
-      this.globalObjectInstance.transformControls.enabled = false;
-      this.globalObjectInstance.orbitControls.enabled = true;
-      //enable orbitcontrols zoom
-      this.globalObjectInstance.orbitControls.enableZoom = true;
-      //enable orbitcontrols rotation
-      this.globalObjectInstance.orbitControls.enableRotate = true;
-      this.logger.log("transformControls disabled", "info");
-      //set cursor style
-      this.globalObjectInstance.elementContainer.style.cursor = "copy";
-    }
-    //if SimulationMode
-    else if (this.activeState === this.stateNames[4]) {
-      this.globalObjectInstance.transformControls.enabled = false;
-      this.globalObjectInstance.orbitControls.enabled = true;
-      //enable orbitcontrols zoom
-      this.globalObjectInstance.orbitControls.enableZoom = true;
-      //enable orbitcontrols rotation
-      this.globalObjectInstance.orbitControls.enableRotate = true;
-      this.logger.log("transformControls disabled", "info");
-      this.logger.log("orbitControls enabled", "info");
-
-      //set cursor style
-      this.globalObjectInstance.elementContainer.style.cursor = "help";
-    }
+    this.logger.log(`transformControls ${settings.transformControls ? "enabled" : "disabled"}`, "info");
+    this.logger.log(`orbitControls rotation ${settings.orbitRotate ? "enabled" : "disabled"}`, "info");
   }
+
   getState() {
     return this.activeState;
   }
   setState(value: number) {
     this.activeState = this.stateNames[value];
-    // Reactive mirror for the P6 StateWindow (engine stays the source of truth).
+    // Reactive mirror for the StateWindow (the engine stays the source of truth).
     useStateStore.getState().setActiveState(this.activeState);
     this.onStateChange();
   }
-  setActiveStateLine(value2: Line2) {
-    this.activeStateLine = value2;
-  }
 
-  getActiveStateLine() {
-    return this.activeStateLine;
+  setActiveStateLine(line: Line2) {
+    this.activeStateLine = line;
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const globalStateObject = new GlobalStateObject();

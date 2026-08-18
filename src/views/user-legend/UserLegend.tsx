@@ -4,29 +4,16 @@ import { useCollabStore } from "@/resources/store/collabStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 
 /**
- * P11 port of `views/user-legend/user-legend.{ts,html,css}` (64 + 15 + 48 lines).
+ * Shared presence for the ACTIVE tab: the disconnect banner, and one coloured chip per
+ * connected collaborator (initials, username in the tooltip, the local user's chip
+ * outlined). Renders nothing when the active tab is not shared.
  *
- * Two pieces of shared presence for the ACTIVE tab: the disconnect banner, and one
- * coloured chip per connected collaborator (initials, tooltip = username, the local
- * user's chip outlined).
- *
- * FULLY REACTIVE, NO POLLING (plan §9 P11). The old component read everything through
- * getters on `sharedDocService` + `globalObject.selectedTab` and polled awareness every
- * 500 ms, because Aurelia dirty-checked the getters and awareness callbacks fired
- * outside its change-detection cycle. Here both triggers are named explicitly:
- *   - `collabStore.tabs`      -> session attach/detach, status/banner changes, and the
- *                                awareness-driven user list (shared-doc-service pushes
- *                                it from awareness 'change' events).
- *   - `tabsStore.selectedTab` -> the user switching tabs.
- * Missing the second one is exactly the stale-render bug P10 hit in AutoSave: any "is
- * the ACTIVE tab X" question needs the tab-selection trigger as well as X's own.
- *
- * `isVisible` (old getter: `forTab(selectedTab) !== null`) becomes `selectedTab in
- * collabStore.tabs` — a tab with no collab entry is not shared, which is the store's
- * documented shape (P10).
- *
- * The old .css is not ported as a file: its four rules become `sx` props (plan §10 —
- * port stray rules into sx/styled), matching what P10 did for ShareSceneDialog.
+ * Fully reactive, with both triggers named explicitly:
+ *   - `collabStore.tabs`      session attach and detach, status and banner changes, and
+ *                             the awareness-driven user list;
+ *   - `tabsStore.selectedTab` the user switching tabs.
+ * Any "is the ACTIVE tab X" question needs the second trigger as much as the first —
+ * without it the legend keeps rendering the previous tab's participants.
  */
 export default function UserLegend() {
   const selectedTab = useTabsStore((s) => s.selectedTab);
@@ -36,7 +23,7 @@ export default function UserLegend() {
   const banner = tab?.banner ?? null;
   const users = tab?.users ?? [];
 
-  // Not shared and nothing to report -> render nothing, as the old template's two
+  // Not shared and nothing to report -> render nothing, so the toolbar's
   // `if.bind` gates did.
   if (!tab && !banner) return null;
 

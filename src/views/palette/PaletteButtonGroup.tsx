@@ -5,15 +5,12 @@ import { eventBus } from "@/resources/services/event-bus";
 import { useTabsStore } from "@/resources/store/tabsStore";
 
 /**
- * Shared presentational port of `class-buttongroup` + `relationclass-buttongroup`
- * (plan §10 -> `views/palette/*`). The old views kept an `openTab` bindable, an
- * `mdc-expandable` "Classes"/"Relationclasses" caption, and an `mdc-image-list` of
- * `mdc-card`s whose `src` was the icon resolved by `globalClassObject.getIcon`.
+ * One palette panel: the icon buttons for the active tab's classes or relation classes.
+ * Both palettes are this component with different props.
  *
- * `metaObjects` are the classes or relationclasses of the active tab's sceneType.
- * `stateToEnter` is the drawing-mode state the old `onButtonClicked` set (2 for
- * classes, 3 for relationclasses). Icons are resolved asynchronously and refreshed
- * on `tabChanged` (the old subscription) and whenever the selected tab changes.
+ * Clicking a button arms that meta object for drawing and puts the engine into the
+ * matching drawing mode. Icons are dug out of each meta object's vizRep code string, so
+ * they are resolved asynchronously and refreshed whenever the active tab changes.
  */
 interface PaletteItem {
   uuid: string;
@@ -55,8 +52,8 @@ export default function PaletteButtonGroup({ title, getMetaObjects, onSelect, st
     setItems(resolved);
   }, [getMetaObjects]);
 
-  // Load on mount + tab change, and re-subscribe to the old `tabChanged` channel
-  // (buttongroups refreshed their icons there). Non-async wrapper per plan §3.1.
+  // Reload on mount, on a tab switch, and on the `tabChanged` channel (which also
+  // fires when a tab is opened). The handler is not async: the bus never awaits one.
   useEffect(() => {
     void loadIcons();
     const sub = eventBus.subscribe("tabChanged", () => void loadIcons());
@@ -65,8 +62,8 @@ export default function PaletteButtonGroup({ title, getMetaObjects, onSelect, st
 
   function handleClick(uuid: string) {
     onSelect(uuid);
-    // Guard setState: onStateChange touches transformControls/orbitControls which
-    // only exist after engine.mount() (plan §9 P5/P6 rule).
+    // setState touches the transform and orbit controls, which only exist once the
+    // canvas has mounted.
     if (engine.isInitialized) {
       globalStateObject.setState(stateToEnter);
     }

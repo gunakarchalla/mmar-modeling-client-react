@@ -10,30 +10,22 @@ import { describeError } from "@/resources/util/describe-error";
 import { hasCommandModifier } from "@/resources/util/platform";
 
 /**
- * P5 port of the old `resources/keyboard_handler.ts` — mousetrap is NOT installed
- * (plan §3.3, LOCKED: mousetrap -> plain `window.addEventListener('keydown')`).
- * The old handler registered its bindings in the class constructor (global for the
- * app lifetime); here they live in a React hook whose effect adds ONE `keydown`
- * listener and removes it on cleanup, so StrictMode's double-mount does not leak a
- * duplicate listener (plan §3.4.3). Mount this once from the app shell (P6).
+ * The app's keyboard shortcuts. Mount this ONCE, from the app shell: the effect adds a
+ * single `keydown` listener and removes it on cleanup, so StrictMode's double-mount
+ * cannot leave a duplicate behind.
  *
  * Bindings:
- *  - Delete            -> deletionHandler.onPressDelete()
- *  - ArrowLeft/Right   -> nudge selected object ±0.1 on X (rounded, precision 10)
- *  - ArrowUp/Down      -> nudge selected object ±0.1 on Y (rounded, precision 100)
- *  - Ctrl+S            -> preventDefault + publish 'ctrlPlusSPressed' (save dialog, P7)
- *  - Ctrl/⌘+Z          -> undo the active scene's last step
+ *  - Delete            delete the selected instance
+ *  - ArrowLeft/Right   nudge the selected object ±0.1 on X
+ *  - ArrowUp/Down      nudge the selected object ±0.1 on Y
+ *  - Ctrl+S            open the save dialog (and suppress the browser's own)
+ *  - Ctrl/⌘+Z          undo the active scene's last step
  *  - Ctrl/⌘+Shift+Z,
- *    Ctrl/⌘+Y          -> redo
+ *    Ctrl/⌘+Y          redo
  *
- * The undo/redo chords are the metamodeling twin's, down to the shared
- * `hasCommandModifier()` helper, so a user moving between the two clients presses the
- * same keys. They differ from that twin in ONE respect: here they are ignored while a
- * text field has focus, so Ctrl+Z inside an attribute input undoes the typing (the
- * browser's own edit history) rather than the model. That matches how this file already
- * treats Delete and the arrow keys — the metamodeling client has no equivalent inputs
- * over its canvas and so had no reason to make the distinction. Ctrl+S stays global so
- * the browser's own save dialog never appears.
+ * Everything except Ctrl+S stands down while a text field has focus, so Ctrl+Z inside
+ * an attribute input undoes the typing rather than the model. Ctrl+S stays global
+ * precisely so the browser's save dialog never appears.
  */
 export function useKeyboardShortcuts(): void {
   useEffect(() => {

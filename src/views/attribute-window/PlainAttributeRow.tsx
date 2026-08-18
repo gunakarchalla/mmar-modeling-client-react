@@ -32,12 +32,12 @@ import { applyFieldChange, type AttributeOwner, type EnhancedAttributeInstance }
  * of `attribute-window.html` lines 50-137, plus the `deleteFile` / `downloadFile`
  * methods from `attribute-window.ts`.
  *
- * The old template's branches are INDEPENDENT `if.bind`s, not an if/else chain, so a
+ * The branches below are INDEPENDENT, not an if/else chain, so a
  * single attribute can render more than one of them (a File attribute renders both the
  * text field showing its uuid AND the upload/delete/download buttons — the text-field
  * branch only excludes the Object-3D and Image attributes, not File). That is kept.
  *
- * Value editing follows the old `value.bind` + `change.trigger="fieldChange(...)"`
+ * Value editing follows a commit-on-blur
  * pair: keystrokes update the gds AttributeInstance in place (and local state so the
  * input stays controlled), and the commit (blur / slider release / select) runs
  * `applyFieldChange`, which publishes the vizrep-update event and flags the scene dirty.
@@ -46,7 +46,7 @@ interface PlainAttributeRowProps {
   enhanced: EnhancedAttributeInstance;
   /** True when this attribute instance's meta attribute is of the File attribute type. */
   isFileAttribute: boolean;
-  /** The instance that owns this attribute — P10 needs it to address the Yjs change. */
+  /** The instance that owns this attribute; needed to address the change to peers. */
   owner: AttributeOwner;
   /** Ask the window to rebuild (a file delete rewrites the value out of band). */
   onChanged: () => void;
@@ -58,7 +58,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
   const [value, setValue] = useState<string>(attributeInstance.value ?? "");
 
   // Re-sync when the window rebuilds with a different instance, or the value changed
-  // underneath us (upload dialogs, remote yjs edits in P10).
+  // underneath us (an upload dialog, or a remote edit from a collaborator).
   useEffect(() => {
     setValue(attributeInstance.value ?? "");
   }, [attributeInstance, attributeInstance.value]);
@@ -135,7 +135,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
           }}
           onKeyDown={(e) => {
             // Enter commits without waiting for blur, so the scene vizrep updates
-            // immediately (the old browser <input> fired `change` on Enter too).
+            // immediately, matching how a plain <input> commits on Enter.
             if (e.key === "Enter") {
               e.preventDefault();
               commit((e.target as HTMLInputElement).value);

@@ -1,23 +1,17 @@
 import type { AttributeInstance } from "@gds/models/instance/Instance_attributes.structure";
 
 /**
- * Tiny typed event emitter replacing the Aurelia EventAggregator. It deliberately
- * exposes `.subscribe(event, cb)` / `.publish(event, payload)` with the same
- * names/shape as EventAggregator so the engine ports (P2-P5) and views barely
- * change. `.subscribe` returns a disposable `{ dispose() }` (mirroring
- * EventAggregator) so React effects can unsubscribe in their cleanup.
+ * The app's typed event bus: `.publish(event, payload)` and `.subscribe(event, cb)`,
+ * where subscribing returns a disposable so a React effect can unsubscribe in cleanup.
  *
- * IMPORTANT: never subscribe with an `async` callback — `publish()` calls each
- * listener synchronously and discards the returned promise, so a rejection would
- * vanish as an unhandled rejection. Wrap: `() => void doThing().catch(err => …)`.
+ * IMPORTANT: never subscribe with an `async` callback. `publish()` calls each listener
+ * synchronously and discards what it returns, so a rejection would vanish as an
+ * unhandled rejection. Wrap instead: `() => void doThing().catch(err => …)`.
  *
- * Channels are the modeling client's (plan.md §5). The `openDialog*` family from
- * the old client is intentionally dropped — those are replaced by `uiStore`
- * actions. New channels must be added here and logged in state.json
- * (`event_channels_added`).
+ * Dialogs are NOT opened over this bus — `uiStore` owns dialog state.
  */
 
-/** Payload for the file/gltf/image upload channels (see old dialog-upload-* views). */
+/** Payload for the file / glTF / image upload channels. */
 export interface UploadEventPayload {
   attributeInstanceUuid?: string;
   fileUuid: string;
@@ -40,20 +34,18 @@ export interface SceneAccessGrantedPayload {
 }
 
 /**
- * Payload for `openReferenceDialog` (P8). One reference dialog is shared by every
- * reference button, so the clicked attribute instance IS the context — that is exactly
- * what the old `attribute-window.openDialog()` published.
+ * Payload for `openReferenceDialog`. One reference dialog is shared by every reference
+ * button, so the clicked attribute instance IS the context.
  */
 export interface OpenReferenceDialogPayload {
   attributeInstance: AttributeInstance;
 }
 
 /**
- * Payload for `sceneInstanceMutated`. Plan §5 mandates only `sceneInstanceUuid`; the
- * modeling client's creation/deletion handlers additionally ride along the optional
- * `action`/`kind`/`instanceUuid` describing what changed, which the P12
- * SimulationWindow uses to decide whether to refresh. The extra fields are optional
- * so a bare `{ sceneInstanceUuid }` publish stays valid.
+ * Payload for `sceneInstanceMutated`. Only `sceneInstanceUuid` is required; the
+ * creation and deletion handlers ride the optional `action` / `kind` / `instanceUuid`
+ * along to describe what changed, which the simulation window uses to decide whether it
+ * needs to rebuild its sliders.
  */
 export interface SceneInstanceMutatedPayload {
   sceneInstanceUuid: string;
@@ -99,7 +91,6 @@ export interface EventPayloads {
   updateAttributeGui: void;
   removeAttributeGui: void;
   tableAttributeChanged: void;
-  /** P8 firmed up the shape P1 left as `any`: attribute-window -> reference dialog. */
   openReferenceDialog: OpenReferenceDialogPayload;
 
   // VizRep pipeline
@@ -118,7 +109,7 @@ export interface EventPayloads {
   imageUploaded: UploadEventPayload;
   fileUploaded: UploadEventPayload;
 
-  // Collaboration (shared-doc -> persistency / scenegroup); wired in P10/P11
+  // Collaboration (shared-doc-service -> persistency handler / scene tree)
   remoteClassInstanceAdded: TabIndexPayload;
   remoteRelationInstanceAdded: TabIndexPayload;
   sharedSceneReconnected: TabIndexPayload;

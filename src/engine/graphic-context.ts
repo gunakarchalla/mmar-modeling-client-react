@@ -19,31 +19,17 @@ import { logger } from "@/resources/services/logger";
 import { expressionUtility } from "@/resources/services/expression-utility";
 
 /**
- * P4 port of the old `resources/graphic_context.ts` (1,182 lines). This is the
- * `gc` object every meta object's `vizRep(gc)` code string is evaluated against
- * (see `runVizRepFunction`), so the method surface is API — vizRep strings stored
- * in the database call these names positionally. Do not rename or reorder params.
+ * The `gc` object every meta object's `vizRep(gc)` code string is evaluated against
+ * (see `runVizRepFunction`).
  *
- * DI stripped per the established recipe: GlobalDefinition / GlobalStateObject /
- * MetaUtility / InstanceUtility / Logger / ExpressionUtility injections become
- * module-singleton imports; `@singleton()` + the aurelia import are dropped.
+ * The method surface is therefore an API: vizRep strings stored in the database call
+ * these names with positional arguments, so methods must not be renamed, reordered or
+ * have parameters inserted — including the ones this codebase never calls itself.
  *
- * Started from the metamodeling twin's `engine/graphic-context.ts` (1,123 lines,
- * shared lineage) and re-diffed against the modeling original. Modeling-specific
- * deltas restored here (the twin lacks all four):
- *  - `graphic_stl()` — STLLoader mesh loading (used by P7 persistency_handler).
- *  - `graphic_gltf()` — accepts `string | ArrayBuffer`, takes a `scale` param and
- *    applies it, and collects `SkinnedMesh` in addition to `Mesh` (robotics/URDF).
- *  - `rel_graphic_line()` — assigns `globalStateObject.activeStateLine` (live here;
- *    commented out in the twin). The animator's line-update loop depends on it.
- *  - `setScale()` else-branch writes back through `instance.custom_variables`.
- * The twin's unused `mergeBufferGeometries` import and the original's unused `Port`
- * / `SceneInstance` imports are dropped (lint).
- *
- * Bodies are otherwise unchanged apart from logic-preserving annotations required
- * by this repo's strict TS (the old client's tsconfig was non-strict): `as any`
- * casts for indexing the gds `custom_variables` ({}) maps, non-null assertions on
- * `Object3D.parent` / `BufferGeometry.boundingBox` / `getObjectByProperty`.
+ * Objects built by a vizRep run accumulate in the `object3D` / `labels` / `button3D` /
+ * `rel_*` buckets keyed by three.js uuid; `drawVizRep*` then merges each bucket into
+ * the mesh that goes into the scene, and `resetInstance()` empties them for the next
+ * run.
  */
 
 interface custom_object {
@@ -67,7 +53,6 @@ export class GraphicContext {
   labels_rel_from_objects: custom_object = {};
   labels_rel_to_objects: custom_object = {};
   labels_rel_middle_objects: custom_object = {};
-  map = "";
   attached_ports: custom_object = {};
   return_instances: ObjectInstance[];
 
@@ -85,6 +70,34 @@ export class GraphicContext {
     this.labels_rel_middle_objects = {};
     this.return_instances = [];
     this.custom_variables = {};
+  }
+
+  /**
+   * Apply an optional texture to a material. `map` is a data-URL produced by a vizRep
+   * code string, which is why the guard also rejects the literal "undefined" such a
+   * string can build. The base colour goes to white so the texture is not tinted.
+   */
+  private applyTextureMap(material: THREE.MeshBasicMaterial, map: string | undefined, options?: { alphaTest?: number }): void {
+    if (!map || map == "undefined") return;
+
+    const image = new Image();
+    const texture = new THREE.Texture(image);
+    image.onload = () => {
+      texture.needsUpdate = true;
+    };
+    image.src = map;
+
+    if (options?.alphaTest !== undefined) material.alphaTest = options.alphaTest;
+    material.map = texture;
+    material.transparent = true;
+    material.color.set("white");
+  }
+
+  /** Offset a freshly built primitive by the relative position its vizRep asked for. */
+  private placeAt(object: THREE.Object3D, x_rel?: number, y_rel?: number, z_rel?: number): void {
+    if (x_rel) object.position.x = x_rel;
+    if (y_rel) object.position.y = y_rel;
+    if (z_rel) object.position.z = z_rel;
   }
 
   async setVariable(name: string, value: any, instance_adaptable: boolean) {
@@ -140,29 +153,10 @@ export class GraphicContext {
 
     if (color) material.color.set(color);
 
-    if (map && map != undefined && map != "" && map != null && map != "undefined") {
-      this.map = map;
-
-      // Create an image
-      const image = new Image();
-      // Create texture
-      const texture = new THREE.Texture(image);
-      // On image load, update texture
-      image.onload = async () => {
-        texture.needsUpdate = true;
-      };
-      // Set image source
-      image.src = map;
-
-      material.map = texture;
-      material.transparent = true;
-      material.color.set("white");
-    }
+    this.applyTextureMap(material, map);
 
     const box: THREE.Mesh = new THREE.Mesh(geometry, material);
-    box.position.x = x_rel ? x_rel : box.position.x;
-    box.position.y = y_rel ? y_rel : box.position.y;
-    box.position.z = z_rel ? z_rel : box.position.z;
+    this.placeAt(box, x_rel, y_rel, z_rel);
 
     this.object3D[box.uuid] = box;
 
@@ -177,31 +171,11 @@ export class GraphicContext {
 
     if (color) material.color.set(color);
 
-    if (map && map != undefined && map != "" && map != null && map != "undefined") {
-      this.map = map;
-
-      // Create an image
-      const image = new Image();
-      // Create texture
-      const texture = new THREE.Texture(image);
-      // On image load, update texture
-      image.onload = () => {
-        texture.needsUpdate = true;
-      };
-      // Set image source
-      image.src = map;
-
-      material.alphaTest = 0.1;
-      material.map = texture;
-      material.transparent = true;
-      material.color.set("white");
-    }
+    this.applyTextureMap(material, map, { alphaTest: 0.1 });
 
     const plane: THREE.Mesh = new THREE.Mesh(geometry, material);
     //set position
-    plane.position.x = x_rel ? x_rel : plane.position.x;
-    plane.position.y = y_rel ? y_rel : plane.position.y;
-    plane.position.z = z_rel ? z_rel : plane.position.z;
+    this.placeAt(plane, x_rel, y_rel, z_rel);
 
     this.object3D[plane.uuid] = plane;
 
@@ -218,30 +192,11 @@ export class GraphicContext {
 
     if (color) material.color.set(color);
 
-    if (map && map != undefined && map != "" && map != null && map != "undefined") {
-      this.map = map;
-
-      // Create an image
-      const image = new Image(); // or document.createElement('img' );
-      // Create texture
-      const texture = new THREE.Texture(image);
-      // On image load, update texture
-      image.onload = () => {
-        texture.needsUpdate = true;
-      };
-      // Set image source
-      image.src = map;
-
-      material.map = texture;
-      material.transparent = true;
-      material.color.set("white");
-    }
+    this.applyTextureMap(material, map);
 
     const sphere: THREE.Mesh = new THREE.Mesh(geometry, material);
     //set position
-    sphere.position.x = x_rel ? x_rel : sphere.position.x;
-    sphere.position.y = y_rel ? y_rel : sphere.position.y;
-    sphere.position.z = z_rel ? z_rel : sphere.position.z;
+    this.placeAt(sphere, x_rel, y_rel, z_rel);
 
     this.object3D[sphere.uuid] = sphere;
 
@@ -271,31 +226,12 @@ export class GraphicContext {
 
     if (color) material.color.set(color);
 
-    if (map && map != undefined && map != "" && map != null && map != "undefined") {
-      this.map = map;
-
-      // Create an image
-      const image = new Image();
-      // Create texture
-      const texture = new THREE.Texture(image);
-      // On image load, update texture
-      image.onload = () => {
-        texture.needsUpdate = true;
-      };
-      // Set image source
-      image.src = map;
-
-      material.map = texture;
-      material.transparent = true;
-      material.color.set("white");
-    }
+    this.applyTextureMap(material, map);
 
     const cylinder: THREE.Mesh = new THREE.Mesh(geometry, material);
 
     //set position
-    cylinder.position.x = x_rel ? x_rel : cylinder.position.x;
-    cylinder.position.y = y_rel ? y_rel : cylinder.position.y;
-    cylinder.position.z = z_rel ? z_rel : cylinder.position.z;
+    this.placeAt(cylinder, x_rel, y_rel, z_rel);
 
     this.object3D[cylinder.uuid] = cylinder;
 
@@ -447,8 +383,7 @@ export class GraphicContext {
       this.button3D[object.uuid] = object;
     }
 
-    console.log("button created with expression: " + expression);
-    console.log(this.button3D);
+    this.logger.log("button created with expression: " + expression, "info");
     return object;
   }
 
@@ -510,37 +445,9 @@ export class GraphicContext {
     this.rel_from_objects[object.uuid] = object;
   }
 
-  //merges all objects in gc.rel_from_objects to one object
+  /** Merges everything collected by `rel_from_object()` into the relation's from-end. */
   async rel_merge_from_objects() {
-    //merge the objects in  rel_from_objects
-    const objects_from_merge: THREE.Mesh[] = [];
-
-    //push all objects to array
-    for (const [, value] of Object.entries(this.rel_from_objects)) {
-      objects_from_merge.push(value);
-    }
-
-    const temp: THREE.Mesh = await this.mergeOjects(objects_from_merge);
-    temp.uuid = await this.instanceUtility.get_current_class_instance_uuid();
-    this.rel_from_objects = {};
-
-    //get bounding box
-    const box = new THREE.Box3();
-
-    // ensure the bounding box is computed for its geometry
-    // this should be done only once (assuming static geometries)
-    temp.geometry.computeBoundingBox();
-
-    // compute the current bounding box with the world matrix
-    box.copy(temp.geometry.boundingBox!).applyMatrix4(temp.matrixWorld);
-
-    //add width, height, depth to userData
-    const boxParameter = new THREE.Vector3();
-    box.getSize(boxParameter);
-    temp.userData.boxParameter = boxParameter;
-
-    //set to object for later
-    this.rel_from_objects[temp.uuid] = temp;
+    this.rel_from_objects = await this.mergeRelationEnd(this.rel_from_objects);
   }
 
   //this is the function that defines a object for the to end of a relation (can be called multiple times)
@@ -550,37 +457,28 @@ export class GraphicContext {
     this.rel_to_objects[object.uuid] = object;
   }
 
-  //merges all objects in gc.rel_to_objects to one object
+  /** Merges everything collected by `rel_to_object()` into the relation's to-end. */
   async rel_merge_to_objects() {
-    //merge the objects in  rel_to_objects
-    const objects_to_merge: THREE.Mesh[] = [];
+    this.rel_to_objects = await this.mergeRelationEnd(this.rel_to_objects);
+  }
 
-    //push all objects to array
-    for (const [, value] of Object.entries(this.rel_to_objects)) {
-      objects_to_merge.push(value);
-    }
+  /**
+   * Collapse one end of a relation (an arrow head, a diamond, ...) into a single mesh
+   * carrying the relation instance's uuid, and cache its bounding-box size in
+   * `userData.boxParameter` — the animator reads that size to shift the end back off
+   * the object the line points at.
+   */
+  private async mergeRelationEnd(objects: custom_object): Promise<custom_object> {
+    const merged: THREE.Mesh = await this.mergeOjects(Object.values(objects));
+    merged.uuid = await this.instanceUtility.get_current_class_instance_uuid();
 
-    const temp: THREE.Mesh = await this.mergeOjects(objects_to_merge);
-    temp.uuid = await this.instanceUtility.get_current_class_instance_uuid();
-    this.rel_to_objects = {};
-
-    //get bounding box
-    const box = new THREE.Box3();
-
-    // ensure the bounding box is computed for its geometry
-    // this should be done only once (assuming static geometries)
-    temp.geometry.computeBoundingBox();
-
-    // compute the current bounding box with the world matrix
-    box.copy(temp.geometry.boundingBox!).applyMatrix4(temp.matrixWorld);
-
-    //add width, height, depth to userData
+    merged.geometry.computeBoundingBox();
+    const box = new THREE.Box3().copy(merged.geometry.boundingBox!).applyMatrix4(merged.matrixWorld);
     const boxParameter = new THREE.Vector3();
     box.getSize(boxParameter);
-    temp.userData.boxParameter = boxParameter;
+    merged.userData.boxParameter = boxParameter;
 
-    //set to object for later
-    this.rel_to_objects[temp.uuid] = temp;
+    return { [merged.uuid]: merged };
   }
 
   async rel_graphic_text_from(object: THREE.Mesh) {
@@ -1070,7 +968,12 @@ export class GraphicContext {
     });
   }
 
-  //insert given object on given position
+  /**
+   * Put a finished object into the scene at the given pose and make it draggable.
+   *
+   * `type` ("class" / "port" / "bendpoint") is part of the historical signature and is
+   * kept for vizRep strings that pass it; nothing branches on it any more.
+   */
   async insertObjectToScene(class_instance_uuid: UUID, object: THREE.Mesh, x: number, y: number, z: number, rx: number, ry: number, rz: number, rw: number, type?: string) {
     //set THREE.Object3D.uuid to the uuid of the class_instance for a direct mapping
     object.uuid = class_instance_uuid;
@@ -1084,11 +987,6 @@ export class GraphicContext {
     object.setRotationFromQuaternion(new THREE.Quaternion(rx, ry, rz, rw));
 
     this.globalObjectInstance.scene.add(object);
-
-    //if bendpoint
-    if (type == "bendpoint") {
-      // console.info('This is a THREE.Object for a bendpoint. ');
-    }
 
     //push to dragObjects Array
     this.globalObjectInstance.dragObjects.unshift(object);
@@ -1157,5 +1055,5 @@ export class GraphicContext {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const graphicContext = new GraphicContext();

@@ -60,6 +60,10 @@ vi.mock("@/resources/services/history-service", () => ({ historyService: mocks.h
 vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
   hybridAlgorithmsService: mocks.hybridAlgorithmsService,
 }));
+// Modules that reach the engine's global-definition LEAF (rather than the `@/engine`
+// barrel below) need it mocked in its own right: importing it for real constructs a
+// WebGLRenderer at module scope, which needs a DOM.
+vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject }));
 vi.mock("@/engine", () => ({
   globalObject: mocks.globalObject,
   globalSelectedObject: mocks.globalSelectedObject,
@@ -67,6 +71,8 @@ vi.mock("@/engine", () => ({
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: mocks.sharedDocService }));
+// The change publisher resolves the shared session through this back-reference.
+mocks.globalObject.sharedDocServiceRef = mocks.sharedDocService;
 vi.mock("@/resources/collaboration/y-mapping", () => ({ applyLocalChangeToYDoc: mocks.applyLocalChangeToYDoc }));
 
 import { buildAttributeGroups, applyFieldChange, emptyAttributeGroups, type AttributeOwner } from "./attributeModel";

@@ -3,15 +3,15 @@ import * as THREE from "three";
 import { ClassInstance, SceneInstance } from "@gds";
 
 /**
- * P4 tests for the coordinates-updater — the animator calls it every frame an
+ * Tests for the coordinates-updater — the animator calls it every frame an
  * object's transform changes, and it is the only thing that writes three.js
  * transforms back onto the gds instance graph that auto-save then PATCHes. If it
  * silently no-ops, edits look fine on screen and are lost on reload, so the
  * write-back is worth asserting directly.
  *
- * global-definition is faked (WebGLRenderer at module scope — P3 note); gds
- * fixtures are REAL (built via fromJS). Node env: THREE is only used for meshes,
- * never a renderer.
+ * global-definition is faked (importing it for real builds a WebGLRenderer at module
+ * scope); gds fixtures are REAL (built via fromJS). Node env: THREE is only used for
+ * meshes, never a renderer.
  */
 
 const fakeGlobal = vi.hoisted(() => ({
@@ -19,6 +19,9 @@ const fakeGlobal = vi.hoisted(() => ({
     dragObjects: [] as THREE.Mesh[],
     selectedTab: 0,
     doSceneInstancePatchLocal: false,
+    // The shared session is reached through this back-reference (see
+    // collaboration/local-change-publisher); it is wired to the mock below.
+    sharedDocServiceRef: null as null | { forTab: (tabIndex: number) => unknown },
   },
 }));
 vi.mock("@/engine/global-definition", () => fakeGlobal);
@@ -28,8 +31,7 @@ const utils = vi.hoisted(() => ({
     getTabContextSceneInstance: vi.fn(),
     getAllPortInstancesOfTabContext: vi.fn(async () => [] as unknown[]),
   },
-  // P10: the sync*ToYDoc privates are live now. Mocked so the tests can assert the
-  // exact change payloads without a Y.Doc or a socket.
+  // Mocked so the tests can assert the exact change payloads without a Y.Doc or a socket.
   sharedDocService: {
     forTab: vi.fn((_tabIndex: number) => null as null | { ydoc: unknown; localOrigin: object; applyingRemote: boolean }),
   },
@@ -38,6 +40,7 @@ const utils = vi.hoisted(() => ({
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: utils.instanceUtility }));
 vi.mock("@/resources/collaboration/shared-doc-service", () => ({ sharedDocService: utils.sharedDocService }));
 vi.mock("@/resources/collaboration/y-mapping", () => ({ applyLocalChangeToYDoc: utils.applyLocalChangeToYDoc }));
+fakeGlobal.globalObject.sharedDocServiceRef = utils.sharedDocService;
 
 const { coordinatesUpdater } = await import("@/engine/coordinates-updater");
 
@@ -199,7 +202,7 @@ describe("updateScaleOnClassAndPortInstance", () => {
   });
 });
 
-// --- P10: the sync*ToYDoc privates, driven through the public updaters ------------
+// --- Collaboration propagation, driven through the public updaters ---------------
 
 describe("Yjs propagation (shared scenes)", () => {
   const session = { ydoc: { fake: "ydoc" }, localOrigin: {}, applyingRemote: false };

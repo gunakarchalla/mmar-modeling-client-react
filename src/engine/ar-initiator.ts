@@ -9,21 +9,18 @@ import { animator } from "@/engine/animator";
 import { logger } from "@/resources/services/logger";
 
 /**
- * Port of the old `resources/ar_initiator.ts` (DI-stripping recipe): GlobalDefinition
- * / Animator / Logger become module-singleton imports. The full WebXR / AR session
- * support (onSessionStarted / onSessionEnded / initHands / onSelect* /
- * createWorldOriginMarker) is ported ~verbatim.
+ * WebXR (AR / VR) support: session lifecycle, hand and controller models, grabbing
+ * objects by pinching, and the world-origin axis marker.
  *
- * Two additions over the old client — which wired XR from `initiator.init`
- * (`renderer.xr.enabled = true`, the sessionstart/sessionend listeners, and the
- * document.body XRButton) — consolidate that here so the mount facade can enable XR
- * idempotently and the XRButton stays deferred to P13:
- *   - `enableXR()` sets `renderer.xr.enabled` and registers the session listeners
- *     (called once from `engine.mount()` / when the XR button is created).
- *   - `render()` forces `globalObject.render = true` while presenting so the desktop
- *     dirty-flag optimisation (onSessionStarted sets render=false) does not freeze the
- *     AR view. The non-AR path is unchanged.
+ * `enableXR()` is idempotent and is called from `engine.mount()` and when the XR entry
+ * button is created, so a session started from either place runs through
+ * `onSessionStarted` / `onSessionEnded`. Entering a session swaps the active camera to
+ * `ARCamera`; leaving it swaps back.
  */
+
+/** Font for the world-origin axis labels. Fetched on demand, only inside an XR session. */
+const AXIS_LABEL_FONT_URL = "https://cdn.jsdelivr.net/gh/mrdoob/three.js/examples/fonts/helvetiker_regular.typeface.json";
+
 export class ArInitiator {
   controller1: any;
   controller2: any;
@@ -46,11 +43,7 @@ export class ArInitiator {
   private animator = animator;
   private logger = logger;
 
-  /**
-   * Turn on WebXR on the renderer and wire the session lifecycle. Idempotent. Called
-   * from engine.mount() and when the XR button is created (P13) so an XRButton-started
-   * session drives onSessionStarted / onSessionEnded.
-   */
+  /** Turn WebXR on and wire the session lifecycle. Idempotent. */
   enableXR() {
     const renderer = this.globalObjectInstance.renderer;
     renderer.xr.enabled = true;
@@ -61,8 +54,10 @@ export class ArInitiator {
     }
   }
 
-  // for AR additional support, e.g., image-tracking
-  // compare https://github.com/ShirinStar/webAR_experiments/tree/main/16-webxr-image_tracking
+  /**
+   * The renderer's animation-loop callback. The `timestamp` / `frame` arguments are
+   * unused here but are the hook for XR frame data (e.g. image tracking).
+   */
   render(_timestamp?: number, _frame?: any) {
     // XR requires a fresh render every frame; the desktop dirty-flag optimisation
     // (animator only draws when render===true, and onSessionStarted sets it false)
@@ -73,7 +68,6 @@ export class ArInitiator {
 
     void this.animator.animate();
   }
-  //AR events
   async onSessionStarted() {
     this.globalObjectInstance.camera = this.globalObjectInstance.ARCamera;
     this.globalObjectInstance.render = false;
@@ -92,9 +86,8 @@ export class ArInitiator {
     this.removeWorldOriginMarker();
   }
 
+  /** Build the controller and hand models and wire pinch-to-grab on both hands. */
   initHands() {
-    // controllers
-
     this.controller1 = this.globalObjectInstance.renderer.xr.getController(0);
     this.globalObjectInstance.scene.add(this.controller1);
 
@@ -135,119 +128,68 @@ export class ArInitiator {
     this.hand2.addEventListener("pinchend", (event: any) => this.onSelectEnd(event));
   }
 
+  /** Pinch start: grab the first object the pinching hand's pointer is aimed at. */
   onSelectStart(event: any) {
-    console.log("pichstart");
-    let controller = event.target;
+    const controller = this.controllerFor(event);
+    if (!controller) return;
 
-    if (controller === this.hand1) {
-      controller = this.controller1;
-    } else if (controller === this.hand2) {
-      controller = this.controller2;
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-      controller === undefined;
-    }
+    const pointer = controller === this.controller1 ? this.handPointer1 : this.handPointer2;
+    const otherController = controller === this.controller1 ? this.controller2 : this.controller1;
 
-    console.log(controller);
+    const intersection = (pointer.intersectObjects(this.globalObjectInstance.dragObjects, false) as THREE.Intersection[])[0];
+    // Already held by the other hand — leave it there.
+    if (!intersection || intersection.object.parent === otherController) return;
 
-    let intersection: THREE.Intersection | undefined = undefined;
-
-    if (controller === this.controller1 && !intersection) {
-      intersection = (this.handPointer1.intersectObjects(this.globalObjectInstance.dragObjects, false) as THREE.Intersection[])[0];
-      if (intersection) {
-        console.log("object c1");
-        if (intersection.object.parent === this.controller2) {
-          return;
-        }
-      }
-    }
-    if (controller === this.controller2 && !intersection) {
-      intersection = (this.handPointer2.intersectObjects(this.globalObjectInstance.dragObjects, false) as THREE.Intersection[])[0];
-      if (intersection) {
-        console.log("object c2");
-        if (intersection.object.parent === this.controller1) {
-          return;
-        }
-      }
-    }
-    if (intersection) {
-      const object = intersection.object;
-      controller.userData.objectParent = object.parent;
-      controller.attach(object);
-      controller.userData.selected = object;
-    }
+    const object = intersection.object;
+    // Remember where it came from so onSelectEnd can put it back.
+    controller.userData.objectParent = object.parent;
+    controller.attach(object);
+    controller.userData.selected = object;
   }
 
-  //detach from hand and attach back to former parent
+  /** Pinch end: detach the held object from the hand and re-attach it to its parent. */
   onSelectEnd(event: any) {
-    let controller = event.target;
+    const controller = this.controllerFor(event);
+    if (!controller) return;
 
-    if (controller === this.hand1) {
-      controller = this.controller1;
-    } else if (controller === this.hand2) {
-      controller = this.controller2;
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-      controller === undefined;
-    }
+    // `selected` is the normal case; falling back to the first child covers an object
+    // that ended up on the controller without a matching select-start.
+    const object = controller.userData.selected ?? controller.children[0];
+    if (!object) return;
 
-    if (controller.userData.selected !== undefined) {
-      const object = controller.userData.selected;
-      const parent = controller.userData.objectParent;
-      parent.attach(object);
-      controller.userData.objectParent = undefined;
-      controller.userData.selected = undefined;
-    }
-    // else check if object is attached to controller and detach
-    else if (controller.children.length > 0) {
-      const object = controller.children[0];
-      const parent = controller.userData.objectParent;
-      parent.attach(object);
-      controller.userData.objectParent = undefined;
-      controller.userData.selected = undefined;
-      console.log("object detached");
-    }
+    controller.userData.objectParent?.attach(object);
+    controller.userData.objectParent = undefined;
+    controller.userData.selected = undefined;
   }
 
+  /** The controller belonging to the hand that raised a pinch event. */
+  private controllerFor(event: any): any | undefined {
+    if (event.target === this.hand1) return this.controller1;
+    if (event.target === this.hand2) return this.controller2;
+    return undefined;
+  }
+
+  /** Draw the world origin as an axis cross with a labelled tip on each axis. */
   createWorldOriginMarker() {
-    // create a plane sowing the directions of the world axes
     const worldOriginMarker = new THREE.AxesHelper(0.3);
     worldOriginMarker.position.set(0, 0, 0);
-    this.globalObjectInstance.scene.add(worldOriginMarker);
     worldOriginMarker.name = "worldOriginMarker";
+    this.globalObjectInstance.scene.add(worldOriginMarker);
 
-    // set a text label for each axis of the world origin
+    const axes: { label: string; color: number; position: [number, number, number] }[] = [
+      { label: "+X", color: 0xff0000, position: [0.3, 0, 0] },
+      { label: "+Y", color: 0x00ff00, position: [0, 0.3, 0] },
+      { label: "+Z", color: 0x0000ff, position: [0, 0, 0.3] },
+    ];
+
     const loader = new FontLoader();
-    loader.load("https://cdn.jsdelivr.net/gh/mrdoob/three.js/examples/fonts/helvetiker_regular.typeface.json", (font: any) => {
-      const textGeometryX = new TextGeometry("+X", {
-        font: font,
-        size: 0.05,
-        height: 0.01,
-      });
-      const textMaterialX = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-      const textX = new THREE.Mesh(textGeometryX, textMaterialX);
-      textX.position.set(0.3, 0, 0);
-      worldOriginMarker.add(textX);
-
-      const textGeometryY = new TextGeometry("+Y", {
-        font: font,
-        size: 0.05,
-        height: 0.01,
-      });
-      const textMaterialY = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-      const textY = new THREE.Mesh(textGeometryY, textMaterialY);
-      textY.position.set(0, 0.3, 0);
-      worldOriginMarker.add(textY);
-
-      const textGeometryZ = new TextGeometry("+Z", {
-        font: font,
-        size: 0.05,
-        height: 0.01,
-      });
-      const textMaterialZ = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-      const textZ = new THREE.Mesh(textGeometryZ, textMaterialZ);
-      textZ.position.set(0, 0, 0.3);
-      worldOriginMarker.add(textZ);
+    loader.load(AXIS_LABEL_FONT_URL, (font: any) => {
+      for (const axis of axes) {
+        const geometry = new TextGeometry(axis.label, { font, size: 0.05, height: 0.01 });
+        const text = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: axis.color }));
+        text.position.set(...axis.position);
+        worldOriginMarker.add(text);
+      }
     });
   }
 
@@ -259,5 +201,5 @@ export class ArInitiator {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const arInitiator = new ArInitiator();

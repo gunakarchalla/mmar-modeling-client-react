@@ -21,21 +21,19 @@ import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
 import { duplicateSceneInstance } from "@/views/dialogs/copySceneModel";
 
-// Port of `dialogs/dialog-copy-scene/{ts,html}` — duplicates an existing
+// Duplicates an existing
 // SceneInstance under a new name, with every uuid in the graph rewritten
 // (see copySceneModel.duplicateSceneInstance for that half + its two deviations).
 // Opened from the SceneGroup tree's "Duplicate" context-menu item via uiStore
 // 'copyScene', with the right-clicked scene as its `{ sceneInstance }` payload.
 //
-// The payload is REQUIRED — the dialog no longer picks a scene. The old version (and
-// the old Aurelia one, through a `@bindable tree` prop) opened from a toolbar button
-// with no idea which scene was meant, so it flattened `sceneTree[].children` into a
-// <Select>; filling that dropdown meant calling loadAllSceneInstances(), which fetches
-// every scene in the database FULLY HYDRATED (classes, relations, ports, attributes,
-// roles) just to render a list of names. Now that the only entry point is a right-click
-// on the scene itself, that whole path is gone: the tree node handed over is already
-// hydrated, which is exactly what duplicateSceneInstance needs, so duplicating costs
-// nothing to set up.
+// The payload is REQUIRED — the dialog does not pick a scene. That matters for more
+// than convenience: a dialog with its own scene picker has to call
+// loadAllSceneInstances() to fill the dropdown, which fetches every scene in the
+// database FULLY HYDRATED (classes, relations, ports, attributes, roles) just to render
+// a list of names. Arriving from a right-click on the scene itself skips all of that —
+// the tree node handed over is already hydrated, which is exactly what
+// duplicateSceneInstance needs.
 interface Payload {
   sceneInstance?: SceneInstance;
 }
@@ -75,7 +73,7 @@ export default function CopySceneDialog() {
       globalRelationclassObject.initRelationClasses();
 
       //check hybrid algorithms -> specifically for reference attributes --> we do not
-      //give an attributeInstance as argument (P12: live)
+      // No attribute instance: this is a whole-scene pass, not a single-value change.
       await hybridAlgorithmsService.checkHybridAlgorithms(null, newSceneInstance.class_instances);
 
       // Undo floor for the new tab: the duplicate as it was just built.

@@ -1,9 +1,8 @@
 import { globalObject, globalClassObject } from "@/engine";
 import PaletteButtonGroup from "./PaletteButtonGroup";
 
-// Port of `views/class-buttongroup/class-buttongroup.{ts,html}`. The old
-// onButtonClicked set the selected class on globalClassObject and entered
-// DrawingMode (state 2). Reads the classes of the active tab's sceneType.
+// The class palette: the classes of the active tab's scene type. Selecting a button
+// arms that class on `globalClassObject` and enters drawing mode.
 export default function ClassButtonGroup() {
   return (
     <PaletteButtonGroup

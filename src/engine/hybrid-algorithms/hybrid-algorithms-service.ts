@@ -16,23 +16,19 @@ import {
 } from "@/constants";
 
 /**
- * P12 port of `resources/services/hybrid_algorithms_service.ts` (plan §10 maps it here,
- * alongside the four hybridAlgorithms/* files it dispatches to). DI stripped: every
- * Aurelia injection becomes a module-singleton import.
+ * Dispatcher for the "hybrid algorithms" — per-metamodel behaviours that run OUTSIDE
+ * the vizRep pipeline and mutate meshes and attributes directly.
  *
- * "Hybrid algorithms" are per-metamodel behaviours that run OUTSIDE the vizRep pipeline
- * — they mutate meshes/attributes directly. This service is the single entry point:
- * every caller (attribute window, table/reference dialogs, scenegroup, copy-scene, the
- * ThreeCanvas 1 Hz heartbeat) calls `checkHybridAlgorithms(...)` and this file decides
- * what — if anything — applies, based on the OPEN TAB's scene type. For any other scene
- * type it is a no-op, which is why the call sites need no scene-type checks of their own.
+ * Every caller (the attribute window, the table and reference dialogs, the scene tree,
+ * copy-scene, the canvas heartbeat) goes through `checkHybridAlgorithms(...)`, and this
+ * file decides what applies from the OPEN TAB's scene type — which is why no call site
+ * carries a scene-type check of its own. For any other scene type it is a no-op.
  *
- * ROUTING (all gated on `tabContext.length > 0`):
- *   Robotic system -> a Joint "Origin" table edit re-poses the URDF robot. This branch
- *                     `return`s, so the ObjectSpace/Statechange passes below never run
- *                     for a robotic scene (see the try/finally note at the call site).
- *   ObjectSpace    -> Object 3D / Image to detect attribute edits swap an instance's mesh.
- *   Statechange    -> Reference class instances adopt their referenced object's mesh.
+ * Routing (all gated on there being an open tab):
+ *   Robotic system  a Joint "Origin" table edit re-poses the URDF robot. This branch
+ *                   returns, so the passes below never run for a robotic scene.
+ *   ObjectSpace     "Object 3D" / "Image to detect" attribute edits swap an instance's mesh.
+ *   Statechange     Reference class instances adopt their referenced object's mesh.
  */
 export class HybridAlgorithmsService {
   private globalObjectInstance = globalObject;
@@ -53,33 +49,24 @@ export class HybridAlgorithmsService {
     if (this.globalObjectInstance.tabContext.length > 0) {
       const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
 
-      // 113c3133-bf77-493a-a36f-553e77832280 is the uuid for the Robotic System SceneType
       if (sceneInstance && sceneInstance.uuid_scene_type == ROBOTIC_SYSTEM_SCENETYPE_UUID) {
-        // FAITHFUL CONTROL FLOW: the original's `finally { return; }` swallows any error
-        // AND unconditionally returns, so a robotic-system scene never reaches the
-        // ObjectSpace/Statechange passes below. `return` in a finally is a lint error
-        // (no-unsafe-finally) and reads like a mistake, so it is spelled out here: the
-        // try/catch logs, and the return is unconditional either way. Behaviour is
-        // identical; only the syntax changed.
+        // A robotic scene returns unconditionally, whether or not the pass below threw:
+        // the ObjectSpace and Statechange passes further down do not apply to it.
         try {
           const currentClassName = (currentClass?.name || "").toLowerCase();
           const currentAttributeName = (currentAttribute?.name || "").toLowerCase();
-          // DEVIATION: the original indexes `classInstances[0]` UNGUARDED. Callers that
-          // pass only an attributeInstance therefore throw a TypeError here, which the
-          // catch below turns into a logger 'error' — i.e. a red app-wide Snackbar (P1).
-          // That path is not hypothetical: roboticsystem-algorithms.setReferenceAttribute
-          // calls `checkHybridAlgorithms(attrInst)` for every Child/Parent link, so a
-          // URDF import would pop one error toast per joint. The surrounding
-          // `classInstances[0] && hasUrdfRef` guard shows the intent is plainly "skip
-          // when absent", so `?.[0]` skips quietly. Same class of judgement as P8's
-          // reference-attribute typo fix (plan §0: do the closest correct thing).
+          // `?.[0]` rather than `[0]`: callers that pass only an attribute instance are
+          // routine — setReferenceAttribute does it for every Child/Parent link of a URDF
+          // import — and an unguarded index would throw a TypeError per joint, each one
+          // surfacing as an error snackbar. The guard below already means "skip when
+          // absent".
           const firstClassInstance = classInstances?.[0];
           const hasUrdfRef = !!(firstClassInstance && (firstClassInstance as UrdfTaggedClassInstance).urdfRef);
 
           if (firstClassInstance && hasUrdfRef && currentClassName === "joint" && currentAttributeName === "origin") {
             // `attributeInstance` here is the EDITED CELL; the caller (TableAttributeDialog)
             // passes the parent Origin table attribute via the class instance's own
-            // attribute list. Kept exactly as the original called it.
+            // attribute list.
             await this.urdfPoseService.tryUpdateRobotFromJointOriginEdit(firstClassInstance, attributeInstance!);
           }
         } catch (err) {
@@ -156,7 +143,7 @@ export class HybridAlgorithmsService {
   }
 
   /**
-   * The old file had getObject3DAttributeInstances / getImageToDetectAttributeInstances
+   * Two near-identical lookups (Object 3D / Image to detect)
    * as two byte-identical methods differing only in the uuid they filter on; folded into
    * one helper. Both public methods are kept — they are part of the class's surface and
    * the ports/classes branches above call them by name.
@@ -210,5 +197,5 @@ export class HybridAlgorithmsService {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const hybridAlgorithmsService = new HybridAlgorithmsService();

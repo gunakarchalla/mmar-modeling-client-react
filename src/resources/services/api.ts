@@ -3,13 +3,11 @@ import { API_URL } from "@/config";
 /**
  * Error carrying the HTTP status, for the few callers that must branch on it.
  *
- * Most backend-service methods follow P1's convention: log the failure and resolve to
- * `undefined` / `[]`, mirroring how the old views defended each call. The old
- * generated fetchHelper instead threw an `ApiException` with a `.status` for EVERY
- * endpoint, and one ported view — the P10 share dialog — genuinely reads it, to tell
- * "User not found" (404) and "Cannot remove the last delete owner" (409) apart from a
- * generic failure. The three endpoints it calls throw this instead of swallowing; see
- * state.json → discoveries (P10).
+ * Most backend-service methods log a failure and resolve to `undefined` / `[]` instead
+ * of throwing, because their callers have nothing better to do with an error. The
+ * exception is the share dialog, which must tell "User not found" (404) and "Cannot
+ * remove the last delete owner" (409) apart from a generic failure — so the three
+ * endpoints it calls throw this error rather than swallowing.
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -22,13 +20,11 @@ export class ApiError extends Error {
 }
 
 /**
- * Small fetch wrapper replacing the Aurelia HttpClient configuration
- * (fetchHelper.setUpHttpClient). Prefixes API_URL and merges the same default
- * headers the original client used. Sets Content-Type: application/json for
- * requests with a JSON body so the server's express.json() parses req.body;
- * callers add Authorization. For FormData (multipart file uploads) we must NOT
- * set Content-Type — the browser sets it together with the multipart boundary,
- * which multer needs to parse the upload.
+ * The single fetch wrapper every request goes through: it prefixes `API_URL` and sets
+ * the default headers. A JSON body gets `Content-Type: application/json` so the server
+ * parses it; FormData must NOT — the browser sets that header itself, together with the
+ * multipart boundary the server needs to read the upload. Authorization is added by the
+ * caller.
  */
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const isFormData = init.body instanceof FormData;

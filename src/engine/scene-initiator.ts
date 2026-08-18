@@ -4,13 +4,12 @@ import { globalObject } from "@/engine/global-definition";
 import { transformControlsEvents } from "@/engine/transform-control-events";
 
 /**
- * Port of the old `resources/scene_initiator.ts` (DI-stripping recipe):
- * GlobalDefinition + TransformControlsEvents become module-singleton imports (the
- * unused MouseObject / InteractionHandler / Initiator injections are dropped, as in
- * the metamodeling twin). Body unchanged except the invalid `{ passive: true }`
- * option on the EventDispatcher listeners (three's EventDispatcher takes no options
- * arg) is dropped, and `mouseUp` is cast to `any` (three's typing only knows
- * change/mouseDown/objectChange). `transformControlsEvents` is a P4 stub until then.
+ * Builds a fresh THREE.Scene for a tab: transform controls, lights, the modelling
+ * plane, the pointer sphere and the two grid helpers.
+ *
+ * `initTransformControls` re-registers the canvas `pointerdown` listener around
+ * creating the controls, and the order matters: the transform controls must claim the
+ * event first, so the interaction handler's listener is removed and added back after.
  */
 export class SceneInitiator {
   private globalObjectInstance = globalObject;
@@ -96,5 +95,5 @@ export class SceneInitiator {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const sceneInitiator = new SceneInitiator();

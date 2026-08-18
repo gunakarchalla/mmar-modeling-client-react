@@ -4,33 +4,23 @@ import { globalObject } from "@/engine/global-definition";
 import { globalSelectedObject } from "@/engine/global-selected-object";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { eventBus } from "@/resources/services/event-bus";
-import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
+import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
 
 /**
- * P4 port of the old `services/transform_control_events.ts` (159 lines). REPLACES
- * the P2 no-op stub. DI stripped per the established recipe: GlobalDefinition /
- * GlobalSelectedObject / InstanceUtility injections become module-singleton
- * imports. `scene-initiator.initTransformControls` already registers both methods
- * against the TransformControls `change` / `mouseUp` events.
+ * Reacts to the transform gizmo: `onTransformControlsPropertyChange` on every frame of
+ * a drag, `onTransformControlsMouseUp` once the drag ends. `sceneInitiator` registers
+ * both against the TransformControls "change" / "mouseUp" events.
  *
- * (The P2 stub's docstring guessed "snapping, rounding via math-utility" — the real
- * file does neither; rounding lives in coordinates-updater. Bodies below are the
- * modeling original.)
+ * Moving or rotating a LABEL (a child mesh, not the instance mesh itself) writes the
+ * new pose into the label's custom variables — on the three.js object and on the gds
+ * instance — and marks them `user_locked`, so a later vizRep re-run does not snap a
+ * hand-placed label back to its computed position.
  *
- * translate / scale / rotate write the moved object's userData custom_variables
- * (and the matching instance custom_variables) and mark them `user_locked: true`
- * so a later vizRep re-run does not reset a label the user positioned by hand.
- * The positional `Object.keys(...)[0..6]` indexing is load-bearing and faithful to
- * the original — graphic_context `graphic_text` writes the pos_name_x/y/z keys
- * first and rx/ry/rz/rw last, which is what makes indices 0-2 the position vars
- * and 3-6 the rotation vars.
- *
- * P10 filled in `syncCustomVariablesToYDoc` (a yjs dependency the plan did not list
- * for this file — it names only coordinates-updater). Like the old file, it reaches
- * collaboration through `globalObject.sharedDocServiceRef` rather than importing the
- * service, which is how the original broke its circular DI.
- */
-export class TransformControlsEvents {
+ * Those variables are addressed BY POSITION (`Object.keys(...)[0..6]`), which is
+ * load-bearing: `graphic-context.graphic_text` writes the three pos_name_x/y/z keys
+ * first and rx/ry/rz/rw last, so indices 0-2 are the position variables and 3-6 the
+ * rotation ones.
+ */export class TransformControlsEvents {
   private globalObjectInstance = globalObject;
   private globalSelectedObject = globalSelectedObject;
   private instanceUtility = instanceUtility;
@@ -47,111 +37,43 @@ export class TransformControlsEvents {
     this.globalObjectInstance.render = true;
   }
 
-  //this event is triggered, when the button is released in the transformControl mode
+  /** Fired when the user releases the gizmo, i.e. once per completed drag. */
   async onTransformControlsMouseUp() {
     const controls = this.globalObjectInstance.transformControls;
     const object: THREE.Mesh = controls.object as THREE.Mesh;
     const mode = controls.mode;
 
     if (controls && object && mode == "translate") {
-      let instance: ObjectInstance | undefined;
-      const sceneInstace = (await this.instanceUtility.getTabContextSceneInstance())!;
-      const object_Instances: ObjectInstance[] = [...sceneInstace.class_instances, ...(await this.instanceUtility.getAllPortInstancesOfTabContext())];
-      instance = object_Instances.find((instance_obj) => instance_obj.uuid == object.uuid);
-      if (!instance) {
-        instance = object_Instances.find((instance_obj) => instance_obj.uuid == object.parent!.uuid);
-      }
-
-      //updates the x_rel, y_rel, z_rel of the instance when label is shifted
-      if (object.uuid != instance!.uuid && object.userData.custom_variables) {
-        const ocv = object.userData.custom_variables as any;
-        const icv = instance!.custom_variables as any;
-        ocv[Object.keys(ocv)[0]]["value"] = object.position.x;
-        ocv[Object.keys(ocv)[0]]["user_locked"] = true;
-        ocv[Object.keys(ocv)[1]]["value"] = object.position.y;
-        ocv[Object.keys(ocv)[1]]["user_locked"] = true;
-        ocv[Object.keys(ocv)[2]]["value"] = object.position.z;
-        ocv[Object.keys(ocv)[2]]["user_locked"] = true;
-
-        //update instance custom_variables on instance as well
-        icv[Object.keys(ocv)[0]]["value"] = object.position.x;
-        icv[Object.keys(ocv)[0]]["user_locked"] = true;
-        icv[Object.keys(ocv)[1]]["value"] = object.position.y;
-        icv[Object.keys(ocv)[1]]["user_locked"] = true;
-        icv[Object.keys(ocv)[2]]["value"] = object.position.z;
-        icv[Object.keys(ocv)[2]]["user_locked"] = true;
-        // instance.custom_variables = { ...instance.custom_variables, ...object.userData.custom_variables }
-
-        // Propagate the moved label's position variables to collaborators.
-        const positionKeys = Object.keys(ocv).slice(0, 3);
-        this.syncCustomVariablesToYDoc(instance!, positionKeys);
-      }
+      const instance = await this.findOwningInstance(object);
+      // Position variables (indices 0-2) of a moved label.
+      this.lockCustomVariables(object, instance, 0, [object.position.x, object.position.y, object.position.z]);
     }
 
-    //if scale mode we set the scale to the instance custom_variables and we check if the children must be rescaled to hold absolue scale
-    //if the children have a scale themselfes, they are ignored
+    // In scale mode the children must be counter-scaled to keep their absolute size.
+    // Children carrying a scale of their own are left alone.
     if (mode == "scale") {
-      const sceneInstace = (await this.instanceUtility.getTabContextSceneInstance())!;
-      const object_Instances: ObjectInstance[] = [...sceneInstace.class_instances, ...(await this.instanceUtility.getAllPortInstancesOfTabContext())];
-      object_Instances.find((instance_obj) => instance_obj.uuid == object.uuid);
-
       if (!object.userData.custom_variables) {
         object.userData.custom_variables = {};
       }
-
       object.userData.custom_variables.scale = object.scale;
       object.traverse((child: THREE.Object3D) => {
-        if (child != object) {
+        if (child == object) return;
+        const ownScale: THREE.Vector3 | undefined = child.userData?.custom_variables?.["scale"];
+        if (ownScale) {
+          child.scale.set(ownScale.x, ownScale.y, ownScale.z);
+        } else {
           const newScale: THREE.Vector3 = new THREE.Vector3(1, 1, 1).divide(object.scale);
-          if (!child.userData || !("custom_variables" in child.userData) || !("scale" in child.userData.custom_variables)) {
-            child.scale.set(newScale.x, newScale.y, newScale.z);
-          } else {
-            const scale: THREE.Vector3 = child.userData.custom_variables["scale"];
-            child.scale.set(scale.x, scale.y, scale.z);
-          }
+          child.scale.set(newScale.x, newScale.y, newScale.z);
         }
       });
-      //update box
+      // Refresh the selection box around the resized object.
       this.globalSelectedObject.getObject();
     }
 
     if (controls && object && mode == "rotate") {
-      let instance: ObjectInstance | undefined;
-      const sceneInstace = (await this.instanceUtility.getTabContextSceneInstance())!;
-      const object_Instances: ObjectInstance[] = [...sceneInstace.class_instances, ...(await this.instanceUtility.getAllPortInstancesOfTabContext())];
-      instance = object_Instances.find((instance_obj) => instance_obj.uuid == object.uuid);
-      if (!instance) {
-        instance = object_Instances.find((instance_obj) => instance_obj.uuid == object.parent!.uuid);
-      }
-
-      //updates the rx, ry, rz and rw of the instance when label is rotated
-      if (object.uuid != instance!.uuid && object.userData.custom_variables) {
-        const ocv = object.userData.custom_variables as any;
-        const icv = instance!.custom_variables as any;
-        ocv[Object.keys(ocv)[3]]["value"] = object.quaternion.x;
-        ocv[Object.keys(ocv)[3]]["user_locked"] = true;
-        ocv[Object.keys(ocv)[4]]["value"] = object.quaternion.y;
-        ocv[Object.keys(ocv)[4]]["user_locked"] = true;
-        ocv[Object.keys(ocv)[5]]["value"] = object.quaternion.z;
-        ocv[Object.keys(ocv)[5]]["user_locked"] = true;
-        ocv[Object.keys(ocv)[6]]["value"] = object.quaternion.w;
-        ocv[Object.keys(ocv)[6]]["user_locked"] = true;
-
-        //update instance custom_variables on instance as well
-        icv[Object.keys(ocv)[3]]["value"] = object.quaternion.x;
-        icv[Object.keys(ocv)[3]]["user_locked"] = true;
-        icv[Object.keys(ocv)[4]]["value"] = object.quaternion.y;
-        icv[Object.keys(ocv)[4]]["user_locked"] = true;
-        icv[Object.keys(ocv)[5]]["value"] = object.quaternion.z;
-        icv[Object.keys(ocv)[5]]["user_locked"] = true;
-        icv[Object.keys(ocv)[6]]["value"] = object.quaternion.w;
-        icv[Object.keys(ocv)[6]]["user_locked"] = true;
-        // instance.custom_variables = { ...instance.custom_variables, ...object.userData.custom_variables }
-
-        // Propagate the rotated label's rotation variables to collaborators.
-        const rotationKeys = Object.keys(ocv).slice(3, 7);
-        this.syncCustomVariablesToYDoc(instance!, rotationKeys);
-      }
+      const instance = await this.findOwningInstance(object);
+      // Rotation variables (indices 3-6) of a rotated label.
+      this.lockCustomVariables(object, instance, 3, [object.quaternion.x, object.quaternion.y, object.quaternion.z, object.quaternion.w]);
     }
 
     this.globalObjectInstance.render = true;
@@ -169,21 +91,54 @@ export class TransformControlsEvents {
   }
 
   /**
+   * The class or port instance a dragged object belongs to: the object itself when an
+   * instance mesh was dragged, otherwise its parent (the case for labels and ports).
+   */
+  private async findOwningInstance(object: THREE.Mesh): Promise<ObjectInstance | undefined> {
+    const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
+    const objectInstances: ObjectInstance[] = [...sceneInstance.class_instances, ...(await this.instanceUtility.getAllPortInstancesOfTabContext())];
+    return objectInstances.find((candidate) => candidate.uuid == object.uuid) ?? objectInstances.find((candidate) => candidate.uuid == object.parent!.uuid);
+  }
+
+  /**
+   * Write `values` into the custom variables starting at `firstIndex` (see the class
+   * comment on the positional addressing) on both the three.js object and the owning
+   * instance, and lock them against vizRep re-runs. Only applies to a child object —
+   * dragging the instance mesh itself moves the instance, not one of its variables —
+   * and the change is then pushed to collaborators.
+   */
+  private lockCustomVariables(object: THREE.Mesh, instance: ObjectInstance | undefined, firstIndex: number, values: number[]): void {
+    if (!instance || object.uuid == instance.uuid || !object.userData.custom_variables) return;
+
+    const objectVariables = object.userData.custom_variables as any;
+    const instanceVariables = instance.custom_variables as any;
+    const keys = Object.keys(objectVariables).slice(firstIndex, firstIndex + values.length);
+
+    keys.forEach((key, i) => {
+      objectVariables[key]["value"] = values[i];
+      objectVariables[key]["user_locked"] = true;
+      instanceVariables[key]["value"] = values[i];
+      instanceVariables[key]["user_locked"] = true;
+    });
+
+    this.syncCustomVariablesToYDoc(instance, keys);
+  }
+
+  /**
    * Propagate the given custom-variable keys of an object instance to collaborators
    * editing the same shared scene. No-op when the scene is not shared or when we are
    * currently applying a remote update (avoids echoing it back).
    */
   private syncCustomVariablesToYDoc(instance: ObjectInstance, keys: string[]): void {
-    const session = this.globalObjectInstance.sharedDocServiceRef?.forTab(this.globalObjectInstance.selectedTab);
-    if (!session || session.applyingRemote) return;
     const customVariables = instance.custom_variables as Record<string, unknown>;
-    for (const key of keys) {
-      if (!key || customVariables[key] === undefined) continue;
-      applyLocalChangeToYDoc(session.ydoc, { type: "custom_variable", classInstanceUuid: instance.uuid, key, value: customVariables[key] }, session.localOrigin);
+    const changes = keys
+      .filter((key) => key && customVariables[key] !== undefined)
+      .map((key) => ({ type: "custom_variable", classInstanceUuid: instance.uuid, key, value: customVariables[key] }) as const);
+    if (publishLocalChange(...changes)) {
+      this.globalObjectInstance.doSceneInstancePatchLocal = true;
     }
-    this.globalObjectInstance.doSceneInstancePatchLocal = true;
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const transformControlsEvents = new TransformControlsEvents();

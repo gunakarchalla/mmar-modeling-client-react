@@ -5,29 +5,21 @@ import { instanceUtility } from "@/resources/services/instance-utility";
 import { mathUtility } from "@/resources/services/math-utility";
 import { logger } from "@/resources/services/logger";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
-import { applyLocalChangeToYDoc } from "@/resources/collaboration/y-mapping";
+import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
+import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
 
 /**
- * P4 port of the old `services/coordinates_updater.ts` (184 lines). Modeling-only
- * (the metamodeling twin has no equivalent). DI stripped per the established
- * recipe: InstanceUtility / MathUtility / Logger / GlobalDefinition injections
- * become module-singleton imports.
+ * Writes three.js transforms back onto the gds object graph.
  *
- * Called from the animator's render loop whenever an object's position / rotation /
- * scale array stops matching the previous frame's: it writes the three.js transform
- * back onto the gds instance object graph (which auto-save then PATCHes).
+ * The animator calls these three passes from the render loop whenever an object's
+ * position / rotation / scale stops matching the previous frame's. Each pass compares
+ * the mesh against the instance it is mapped to, copies the changed values over (which
+ * is what auto-save then PATCHes) and pushes the delta to collaborators.
  *
- * P10 filled in the three `sync*ToYDoc` privates (the plan §9 P4 says "the two
- * syncToYDoc privates" — there are actually THREE: coordinates, rotation, scale).
- * Each pushes the local delta into the tab's shared Y.Doc and marks the scene dirty
- * so AutoSave's shared branch PATCHes it.
- *
- * The `sharedDocService` import mirrors the old file's `SharedDocService` DI
- * injection — and is LOAD-BEARING beyond this file: constructing that singleton is
- * what sets `globalObject.sharedDocServiceRef`, the back-reference the other engine
- * handlers (interaction / deletion / transform-control-events / ray-helper) reach
- * collaboration through. This module is in engine/index.ts's graph, so the import
- * here guarantees the ref is wired at engine load. See state.json → P10 notes.
+ * Importing `sharedDocService` here is load-bearing beyond this file: constructing that
+ * singleton is what sets `globalObject.sharedDocServiceRef`, the back-reference the
+ * engine handlers reach collaboration through. This module is part of the engine's
+ * import graph, so the import guarantees the reference is wired at engine load.
  */
 export class CoordinatesUpdater {
   private instanceUtility = instanceUtility;
@@ -37,217 +29,99 @@ export class CoordinatesUpdater {
   private sharedDocService = sharedDocService;
 
   /**
-   * Asynchronously updates the 2D coordinates of class and port instances based on their current positions in the 3D scene.
-   * This function iterates over all draggable objects and their children, updating their associated instance's 2D coordinates if they have moved.
+   * Every draggable object (and its children) paired with the class or port instance
+   * it renders. Objects with no instance behind them — the grid, the pointer sphere,
+   * labels — are skipped.
+   *
+   * Children are visited because ports and labels are attached to their parent mesh
+   * and carry their own instance; the scale pass deliberately does not use this, see
+   * `updateScaleOnClassAndPortInstance`.
+   */
+  private async *mappedObjects(includeChildren: boolean): AsyncGenerator<{ object3D: THREE.Object3D; instance: ObjectInstance }> {
+    const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
+    const allPortInstances = await this.instanceUtility.getAllPortInstancesOfTabContext();
+
+    const instanceFor = (object3D: THREE.Object3D): ObjectInstance | undefined =>
+      sceneInstance.class_instances.find((instance) => instance.uuid == object3D.uuid) ??
+      allPortInstances.find((instance) => instance.uuid == object3D.uuid);
+
+    for (const object of this.globalObjectInstance.dragObjects) {
+      const objects = includeChildren ? [object as THREE.Object3D, ...object.children] : [object as THREE.Object3D];
+      for (const object3D of objects) {
+        const instance = instanceFor(object3D);
+        if (instance) yield { object3D, instance };
+      }
+    }
+  }
+
+  /** Send one transform delta to collaborators and mark the scene dirty for auto-save. */
+  private syncToYDoc(change: LocalChangeType): void {
+    if (publishLocalChange(change)) {
+      this.globalObjectInstance.doSceneInstancePatchLocal = true;
+    }
+  }
+
+  /**
+   * Copy the 2D coordinates of every moved object onto its class / port instance.
    */
   async updateCoordinates2DonClassAndPortInstance() {
-    const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
-    const allPortInstances = await this.instanceUtility.getAllPortInstancesOfTabContext();
+    for await (const { object3D, instance } of this.mappedObjects(true)) {
+      this.mathUtility.roundPosOfObject(object3D as THREE.Mesh, 100);
+      const { x, y, z } = object3D.position;
+      if (instance.coordinates_2d.x == x && instance.coordinates_2d.y == y && instance.coordinates_2d.z == z) continue;
 
-    //update positions in instances
-
-    for (const object of this.globalObjectInstance.dragObjects) {
-      const object3D: THREE.Object3D = object;
-      let object_instance: ObjectInstance | undefined | null = null;
-      object_instance = sceneInstance.class_instances.find((instance) => instance.uuid == object3D.uuid);
-      if (!object_instance) {
-        object_instance = allPortInstances.find((instance) => instance.uuid == object3D.uuid);
-      }
-      if (object_instance) {
-        this.mathUtility.roundPosOfObject(object3D as THREE.Mesh, 100);
-        if (object_instance.coordinates_2d.x != object3D.position.x || object_instance.coordinates_2d.y != object3D.position.y || object_instance.coordinates_2d.z != object3D.position.z) {
-          object_instance.coordinates_2d.x = object3D.position.x;
-          object_instance.coordinates_2d.y = object3D.position.y;
-          object_instance.coordinates_2d.z = object3D.position.z;
-          this.logger.log(
-            "update coordinates in instance " + object_instance.name + " to " + object_instance.coordinates_2d.x + " " + object_instance.coordinates_2d.y + " " + object_instance.coordinates_2d.z,
-            "done",
-          );
-          this.syncCoordinatesToYDoc(object_instance.uuid, object_instance.coordinates_2d.x, object_instance.coordinates_2d.y, object_instance.coordinates_2d.z);
-        }
-        object_instance = null;
-      }
-
-      for (const child_object of object.children) {
-        const child_object3D: THREE.Object3D = child_object;
-        let child_object_instance: ObjectInstance | undefined | null = null;
-        child_object_instance = sceneInstance.class_instances.find((instance) => instance.uuid == child_object3D.uuid);
-        if (!child_object_instance) {
-          child_object_instance = allPortInstances.find((instance) => instance.uuid == child_object3D.uuid);
-        }
-        if (child_object_instance) {
-          this.mathUtility.roundPosOfObject(child_object3D as THREE.Mesh, 100);
-          if (
-            child_object_instance.coordinates_2d.x != child_object3D.position.x ||
-            child_object_instance.coordinates_2d.y != child_object3D.position.y ||
-            child_object_instance.coordinates_2d.z != child_object3D.position.z
-          ) {
-            child_object_instance.coordinates_2d.x = child_object3D.position.x;
-            child_object_instance.coordinates_2d.y = child_object3D.position.y;
-            child_object_instance.coordinates_2d.z = child_object3D.position.z;
-            this.logger.log(
-              "update coordinates in instance " +
-                child_object_instance.name +
-                " to " +
-                child_object_instance.coordinates_2d.x +
-                " " +
-                child_object_instance.coordinates_2d.y +
-                " " +
-                child_object_instance.coordinates_2d.z,
-              "done",
-            );
-            this.syncCoordinatesToYDoc(child_object_instance.uuid, child_object_instance.coordinates_2d.x, child_object_instance.coordinates_2d.y, child_object_instance.coordinates_2d.z);
-          }
-          child_object_instance = null;
-        }
-      }
+      instance.coordinates_2d.x = x;
+      instance.coordinates_2d.y = y;
+      instance.coordinates_2d.z = z;
+      this.logger.log(`update coordinates in instance ${instance.name} to ${x} ${y} ${z}`, "done");
+      this.syncToYDoc({ type: "coordinates", classInstanceUuid: instance.uuid, x, y, z });
     }
   }
 
-  private syncCoordinatesToYDoc(uuid: string, x: number, y: number, z: number): void {
-    const session = this.sharedDocService.forTab(this.globalObjectInstance.selectedTab);
-    if (!session || session.applyingRemote) return;
-    applyLocalChangeToYDoc(session.ydoc, { type: "coordinates", classInstanceUuid: uuid, x, y, z }, session.localOrigin);
-    this.globalObjectInstance.doSceneInstancePatchLocal = true;
-  }
-
-  private syncRotationToYDoc(uuid: string, x: number, y: number, z: number, w: number): void {
-    const session = this.sharedDocService.forTab(this.globalObjectInstance.selectedTab);
-    if (!session || session.applyingRemote) return;
-    applyLocalChangeToYDoc(session.ydoc, { type: "rotation", classInstanceUuid: uuid, x, y, z, w }, session.localOrigin);
-    this.globalObjectInstance.doSceneInstancePatchLocal = true;
-  }
-
-  private syncScaleToYDoc(uuid: string, x: number, y: number, z: number): void {
-    const session = this.sharedDocService.forTab(this.globalObjectInstance.selectedTab);
-    if (!session || session.applyingRemote) return;
-    applyLocalChangeToYDoc(session.ydoc, { type: "scale", classInstanceUuid: uuid, x, y, z }, session.localOrigin);
-    this.globalObjectInstance.doSceneInstancePatchLocal = true;
-  }
-
   /**
-   * Asynchronously updates the rotation of class and port instances based on their current rotation in the 3D scene.
-   * This function iterates over all draggable objects and their children, updating their associated instances rotations if they have changed.
+   * Copy the quaternion of every rotated object onto its class / port instance.
    */
   async updateRotationOnClassAndPortInstance() {
-    const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
-    const allPortInstances = await this.instanceUtility.getAllPortInstancesOfTabContext();
+    for await (const { object3D, instance } of this.mappedObjects(true)) {
+      const { x, y, z, w } = object3D.quaternion;
+      if (instance.rotation.x == x && instance.rotation.y == y && instance.rotation.z == z && instance.rotation.w == w) continue;
 
-    //check if the rotation of an object has changed
-    //if yes, update rotation in instances
-    for (const object of this.globalObjectInstance.dragObjects) {
-      const object3D: THREE.Object3D = object;
-      let object_instance: ObjectInstance | undefined | null = null;
-      object_instance = sceneInstance.class_instances.find((instance) => instance.uuid == object3D.uuid);
-      if (!object_instance) {
-        object_instance = allPortInstances.find((instance) => instance.uuid == object3D.uuid);
-      }
-      if (object_instance) {
-        if (
-          object_instance.rotation.x != object3D.quaternion.x ||
-          object_instance.rotation.y != object3D.quaternion.y ||
-          object_instance.rotation.z != object3D.quaternion.z ||
-          object_instance.rotation.w != object3D.quaternion.w
-        ) {
-          object_instance.rotation.x = object3D.quaternion.x;
-          object_instance.rotation.y = object3D.quaternion.y;
-          object_instance.rotation.z = object3D.quaternion.z;
-          object_instance.rotation.w = object3D.quaternion.w;
-          this.logger.log(
-            "update rotation in instance " +
-              object_instance.name +
-              " to " +
-              object_instance.rotation.x +
-              " " +
-              object_instance.rotation.y +
-              " " +
-              object_instance.rotation.z +
-              " " +
-              object_instance.rotation.w,
-            "done",
-          );
-          this.syncRotationToYDoc(object_instance.uuid, object_instance.rotation.x, object_instance.rotation.y, object_instance.rotation.z, object_instance.rotation.w);
-        }
-        object_instance = null;
-      }
-
-      for (const child_object of object.children) {
-        const child_object3D: THREE.Object3D = child_object;
-        let child_object_instance: ObjectInstance | undefined | null = null;
-        child_object_instance = sceneInstance.class_instances.find((instance) => instance.uuid == child_object3D.uuid);
-        if (!child_object_instance) {
-          child_object_instance = allPortInstances.find((instance) => instance.uuid == child_object3D.uuid);
-        }
-        if (child_object_instance) {
-          if (
-            child_object_instance.rotation.x != child_object3D.quaternion.x ||
-            child_object_instance.rotation.y != child_object3D.quaternion.y ||
-            child_object_instance.rotation.z != child_object3D.quaternion.z ||
-            child_object_instance.rotation.w != child_object3D.quaternion.w
-          ) {
-            child_object_instance.rotation.x = child_object3D.quaternion.x;
-            child_object_instance.rotation.y = child_object3D.quaternion.y;
-            child_object_instance.rotation.z = child_object3D.quaternion.z;
-            child_object_instance.rotation.w = child_object3D.quaternion.w;
-            this.logger.log(
-              "update rotation in instance " +
-                child_object_instance.name +
-                " to " +
-                child_object_instance.rotation.x +
-                " " +
-                child_object_instance.rotation.y +
-                " " +
-                child_object_instance.rotation.z +
-                " " +
-                child_object_instance.rotation.w,
-              "done",
-            );
-            this.syncRotationToYDoc(child_object_instance.uuid, child_object_instance.rotation.x, child_object_instance.rotation.y, child_object_instance.rotation.z, child_object_instance.rotation.w);
-          }
-          child_object_instance = null;
-        }
-      }
+      instance.rotation.x = x;
+      instance.rotation.y = y;
+      instance.rotation.z = z;
+      instance.rotation.w = w;
+      this.logger.log(`update rotation in instance ${instance.name} to ${x} ${y} ${z} ${w}`, "done");
+      this.syncToYDoc({ type: "rotation", classInstanceUuid: instance.uuid, x, y, z, w });
     }
   }
 
   /**
-   * Asynchronously updates the scale of class and port instances based on their current
-   * scale in the 3D scene, propagating any change to collaborators via the shared Y.Doc.
-   * Scale is held in custom_variables["scale"]. Children are not iterated because they are
+   * Copy the scale of every resized object onto its class / port instance.
+   *
+   * Scale is held in `custom_variables["scale"]`. Children are not visited: they are
    * inverse-scaled relative to their parent and carry no independent persisted scale.
    */
   async updateScaleOnClassAndPortInstance() {
-    const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
-    const allPortInstances = await this.instanceUtility.getAllPortInstancesOfTabContext();
-
-    for (const object of this.globalObjectInstance.dragObjects) {
-      const object3D: THREE.Object3D = object;
-      let object_instance: ObjectInstance | undefined | null = null;
-      object_instance = sceneInstance.class_instances.find((instance) => instance.uuid == object3D.uuid);
-      if (!object_instance) {
-        object_instance = allPortInstances.find((instance) => instance.uuid == object3D.uuid);
-      }
-      if (!object_instance) continue;
-
+    for await (const { object3D, instance } of this.mappedObjects(false)) {
       const scale = object3D.scale;
-      const custom_variables = object_instance.custom_variables as any;
-      const stored = custom_variables ? custom_variables["scale"] : undefined;
-      // `stored` may alias object3D.scale (set by reference in graphic_context.setScale).
-      // When aliased its x/y/z always match the object, so it can't be used as a prior value.
+      const customVariables = instance.custom_variables as any;
+      const stored = customVariables ? customVariables["scale"] : undefined;
+      // `stored` may alias object3D.scale (set by reference in graphic-context.setScale).
+      // While aliased its x/y/z always match the object, so it is not a usable prior value.
       const hasPlainPrior = stored && stored !== scale;
-      // With a reliable prior, sync on any delta; without one, only sync a non-default
-      // (non-identity) scale so we don't broadcast identity scales for every object on load.
+      // With a reliable prior, sync on any delta; without one, only sync a non-identity
+      // scale so loading a scene does not broadcast an identity scale for every object.
       const changed = hasPlainPrior ? stored.x != scale.x || stored.y != scale.y || stored.z != scale.z : scale.x != 1 || scale.y != 1 || scale.z != 1;
-      if (changed) {
-        if (!object_instance.custom_variables) object_instance.custom_variables = {};
-        // Store a plain copy (not a live Three.Vector3 reference) so future comparisons work.
-        (object_instance.custom_variables as any)["scale"] = { x: scale.x, y: scale.y, z: scale.z };
-        this.logger.log("update scale in instance " + object_instance.name + " to " + scale.x + " " + scale.y + " " + scale.z, "done");
-        this.syncScaleToYDoc(object_instance.uuid, scale.x, scale.y, scale.z);
-      }
+      if (!changed) continue;
+
+      if (!instance.custom_variables) instance.custom_variables = {};
+      // Store a plain copy, not the live THREE.Vector3, so the next comparison works.
+      (instance.custom_variables as any)["scale"] = { x: scale.x, y: scale.y, z: scale.z };
+      this.logger.log(`update scale in instance ${instance.name} to ${scale.x} ${scale.y} ${scale.z}`, "done");
+      this.syncToYDoc({ type: "scale", classInstanceUuid: instance.uuid, x: scale.x, y: scale.y, z: scale.z });
     }
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const coordinatesUpdater = new CoordinatesUpdater();

@@ -8,22 +8,17 @@ import { useCollabStore } from "@/resources/store/collabStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
 
-// Port of `views/auto-save/auto-save.{ts,html}`. Owns the 5-second auto-save loop
-// and the auto-save toggle. P10 replaced the `sharedSessionForTab()` stub with the
-// real `sharedDocService.forTab()` lookup, so the shared branch (force auto-save on,
-// read-access alert) is now reachable.
+// Owns the 5-second auto-save loop and its toggle. A shared scene forces auto-saving
+// on — collaborators must not diverge from the server — so the switch is disabled
+// there.
 //
-// The engine's globalObject.autoSave is authoritative; uiStore.autoSave is the
-// reactive mirror the Switch reads (kept in lockstep by toggle + the effect).
+// The engine's `globalObject.autoSave` is authoritative; `uiStore.autoSave` is the
+// reactive mirror the switch reads, kept in lockstep by the toggle and the effect.
 //
-// `isShared` is derived from the ACTIVE tab's session, which is engine state
-// (globalObject.selectedTab + sharedDocService) and therefore not reactive on its own.
-// The old template bound `disabled.bind="isShared"` to a getter that Aurelia's dirty
-// checker re-evaluated every cycle, so it tracked BOTH a session attaching and a tab
-// switch. React needs both signals named explicitly, hence the two subscriptions
-// below: collabStore.tabs (a session attached/detached) and tabsStore.selectedTab (the
-// user moved to a different tab). Dropping either leaves the switch showing the
-// previous tab's shared state.
+// Whether the ACTIVE tab is shared depends on two independent signals, and both have to
+// be subscribed explicitly: a session attaching or detaching (`collabStore.tabs`) and
+// the user moving to a different tab (`tabsStore.selectedTab`). Dropping either leaves
+// the switch showing the previous tab's state.
 
 export default function AutoSave() {
   const autoSave = useUiStore((s) => s.autoSave);
@@ -31,7 +26,7 @@ export default function AutoSave() {
   const collabTabs = useCollabStore((s) => s.tabs);
   const selectedTab = useTabsStore((s) => s.selectedTab);
 
-  // The old auto-save.attached() ran an uncleared 5s setInterval. In React we run it
+  // The 5 s auto-save loop. In React we run it
   // in an effect with cleanup so StrictMode's double-mount does not stack intervals.
   useEffect(() => {
     const interval = setInterval(() => {
@@ -67,9 +62,9 @@ export default function AutoSave() {
   }, [setAutoSave]);
 
   // collabStore holds an entry for exactly the shared tabs, keyed by tab index, so the
-  // rendered state derives from reactive data only — no engine read, and it updates on
-  // both triggers. The 5 s loop and toggle() below still go through sharedDocService
-  // (the getState()-equivalent), per the two-forms rule in plan §3.1.
+  // rendered state derives from reactive data alone and updates on both triggers. The
+  // 5 s loop and toggle() below read the session directly instead — they run outside a
+  // component body, where the hook form is not available.
   const isShared = selectedTab in collabTabs;
 
   function toggle() {

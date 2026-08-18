@@ -7,18 +7,16 @@ import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import { engine, globalObject, globalStateObject } from "@/engine";
 import { logger } from "@/resources/services/logger";
 
-// Port of `views/camera-toggle/camera-toggle.{ts,html}`. Resets the view, toggles
-// the world between 2D (orthographic) and 3D (perspective), and switches the
-// TransformControls mode (translate / rotate / scale). All handlers touch engine
-// state that only exists after mount, so each guards on engine.isInitialized (P5
-// note: never drive the engine from a component before the canvas is mounted).
+// Resets the view, toggles the world between 2D (orthographic) and 3D (perspective),
+// and switches the transform gizmo's mode. Every handler touches engine state that
+// only exists after the canvas has mounted, hence the `engine.isInitialized` guards.
 export default function CameraToggle() {
   // Local mirror of globalObject.threeDimensional so the Switch + the Rotate button
   // visibility re-render on toggle (the engine field is authoritative; default 2D).
   const [is3d, setIs3d] = useState(globalObject.threeDimensional);
 
-  // resetView(): back to ViewMode, reset the active camera position/zoom and its
-  // orbit controls. Mirrors camera-toggle.resetView.
+  // Back to view mode, with the active camera's position, zoom and orbit controls
+  // returned to their saved state.
   function resetView() {
     if (!engine.isInitialized) return;
     globalStateObject.setState(1);

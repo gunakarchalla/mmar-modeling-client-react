@@ -3,8 +3,9 @@ import { globalObject } from "@/engine/global-definition";
 import { rayHelper } from "@/engine/ray-helper";
 
 /**
- * Port of the old `resources/mouse_object.ts` (DI-stripping recipe): GlobalDefinition
- * + RayHelper become module-singleton imports. Body unchanged.
+ * Tracks the pointer in the 3D world: on every `pointermove` it raycasts against the
+ * invisible modelling plane and parks `mousePointer3d` at the hit point. Relation
+ * drawing uses that sphere as the line's floating end point.
  */
 export class MouseObject {
   private globalObjectInstance = globalObject;
@@ -40,5 +41,5 @@ export class MouseObject {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const mouseObject = new MouseObject();

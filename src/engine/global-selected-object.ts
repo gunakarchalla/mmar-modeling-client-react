@@ -2,16 +2,12 @@ import * as THREE from "three";
 import { globalObject } from "@/engine/global-definition";
 
 /**
- * Port of the old `resources/global_selected_object.ts` (DI-stripping recipe): the
- * Aurelia GlobalDefinition injection becomes the `globalObject` module singleton.
+ * The locally selected object, and the red box helper drawn around it.
  *
- * Unlike the metamodeling twin (which commented the highlight out), the modeling
- * client uses a real red `THREE.BoxHelper` around the selected mesh — that logic is
- * ported verbatim.
- *
- * `publishSelection` broadcasts the selection over the shared session's awareness so
- * collaborators can render a presence box (RemoteSelectionRenderer draws it, P11).
- * On a tab with no shared session the guard makes it a no-op.
+ * Selecting also publishes the selection over the active tab's awareness, so
+ * collaborators can draw a presence box around the same object
+ * (`RemoteSelectionRenderer` renders it). On a tab with no shared session the guard in
+ * `publishSelection` makes that a no-op.
  */
 export class GlobalSelectedObject {
   public object: THREE.Mesh = new THREE.Mesh();
@@ -21,7 +17,7 @@ export class GlobalSelectedObject {
   getObject() {
     // Only refresh the box helper when there is actually something selected. After
     // `removeObject()` (e.g. clicking empty space) both `this.object` and the
-    // boxHelper are undefined, so the old unconditional `updateSelectionBoxHelper`
+    // boxHelper are undefined, so an unconditional `updateSelectionBoxHelper`
     // threw "Cannot read properties of undefined (reading 'setFromObject')" whenever a
     // rebuild read the selection (the React selection store triggers exactly that).
     if (this.object && this.globalObjectInstance.boxHelper) {
@@ -53,7 +49,7 @@ export class GlobalSelectedObject {
   /**
    * Publish the locally-selected instance UUID over the active tab's shared-session
    * awareness so other clients can render a presence box (RemoteSelectionRenderer
-   * consumes this field since P11). No-op when the active tab isn't shared.
+   * consumes this field). A no-op when the active tab is not shared.
    */
   private publishSelection(uuid: string | null) {
     const sharedDocService = this.globalObjectInstance.sharedDocServiceRef;
@@ -78,5 +74,5 @@ export class GlobalSelectedObject {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const globalSelectedObject = new GlobalSelectedObject();

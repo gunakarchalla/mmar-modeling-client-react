@@ -1,40 +1,12 @@
 /**
- * Port of the old modeling `resources/services/file_utility.ts` (plan §10: ★
- * modeling-unique — do NOT copy the metamodeling twin, whose FileUtility is a
- * different UUID->content cache). This one is a pure, dependency-free helper for
- * converting between browser `File` objects and data-URL strings / server buffers.
- * It is consumed by `meta-utility` (bufferToFile) and `expression-utility`
- * (FiletoDataUrl / arrayBuffer paths).
- *
- * DEVIATION (recorded in state.json): the original `FiletoDataUrl` used Node's
- * `Buffer.from(...).toString('base64')`. `Buffer` is not available in the Vite
- * browser bundle (no node polyfills — plan §10) and there is no @types/node, so it
- * is re-implemented with a `FileReader.readAsDataURL`, which yields the exact same
- * `data:<mime>;base64,<...>` string the original produced.
+ * Conversions between browser `File` objects, data-URL strings and the raw buffers the
+ * server returns. Pure and dependency-free; used by `meta-utility` (bufferToFile) and
+ * `expression-utility` (FiletoDataUrl).
  */
 export class FileUtility {
-  async DataUrltoFile(url: string, filename: string, mimeType?: string): Promise<File> {
-    if (url.startsWith("data:")) {
-      const arr = url.split(",");
-      const mimeMatch = arr[0].match(/:(.*?);/);
-      const mime = mimeMatch ? mimeMatch[1] : "";
-      const bstr = atob(arr[arr.length - 1]);
-      let n = bstr.length;
-      const u8arr = new Uint8Array(n);
-      while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
-      }
-      const file = new File([u8arr], filename, { type: mime || mimeType });
-      return Promise.resolve(file);
-    }
-    return fetch(url)
-      .then((res) => res.arrayBuffer())
-      .then((buf) => new File([buf], filename, { type: mimeType }));
-  }
-
   async FiletoDataUrl(file: File): Promise<string> {
-    // Browser-native equivalent of the original `data:${file.type};base64,${base64}`
-    // build, avoiding Node's Buffer (see the DEVIATION note in the file header).
+    // FileReader yields the `data:<mime>;base64,<...>` form directly, with no Node
+    // Buffer involved (there are no node polyfills in the browser bundle).
     return await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(typeof reader.result === "string" ? reader.result : "");
@@ -73,5 +45,5 @@ export class FileUtility {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const fileUtility = new FileUtility();

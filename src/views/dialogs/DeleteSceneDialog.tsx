@@ -17,7 +17,7 @@ import { useUiStore } from "@/resources/store/uiStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { closeTab } from "@/views/layout/tabActions";
 
-// Port of `dialogs/dialog-delete-scene/{ts,html}` — deletes a SceneInstance from the
+// Deletes a SceneInstance from the
 // database, then drops that one node from the tree and publishes 'updateSceneGroup' to
 // re-render. Opened from the SceneGroup tree's "Delete" context-menu item via uiStore
 // 'deleteScene', with the right-clicked scene as its `{ sceneInstance }` payload.
@@ -25,7 +25,7 @@ import { closeTab } from "@/views/layout/tabActions";
 // It used to publish an 'initSceneGroup' event instead, which made SceneGroup rebuild
 // the whole tree: refetch every metamodel file, every SceneType and every expanded
 // type's fully hydrated scenes. (That channel is gone — this was its only publisher.) None of that can have changed — the delete touched the instance
-// layer only — and the rebuild dropped the tree's local-only nodes (imported metamodels
+// layer only — and a rebuild would drop the tree's local-only nodes (imported metamodels
 // and models, scenes created with autoSave off). scene-tree-service's
 // `removeSceneInstanceFromTree` does the one thing the delete actually implies; see its
 // note for why the tree had no removal path before.
@@ -35,9 +35,6 @@ import { closeTab } from "@/views/layout/tabActions";
 // the "are you sure?" that an irreversible action deserves. Dropping the picker also
 // drops the loadAllSceneInstances() call that fetched every scene in the database fully
 // hydrated just to fill a dropdown (see CopySceneDialog's note).
-//
-// The old class injected eight collaborators but used exactly one (fetchHelper) — the
-// rest are dropped here, the same pruning P5/P7 did.
 //
 // If the deleted scene happens to be open in a tab, that tab is closed as part of the
 // deletion (via tabActions.closeTab), so a stale tab can't survive to re-create the

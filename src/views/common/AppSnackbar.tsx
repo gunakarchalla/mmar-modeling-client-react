@@ -1,9 +1,8 @@
 import { Snackbar, Alert } from "@mui/material";
 import { useLogStore } from "@/resources/store/logStore";
 
-// Replaces the MDC snackbar the old Logger raised (notiflix is not installed —
-// LOCKED decision). Bound to logStore.snackbar, which logStore opens on any
-// log() with status === "error".
+// The app's single transient message bar. Bound to `logStore.snackbar`, which opens
+// on any `logger.log()` call with a status of "error".
 export default function AppSnackbar() {
   const snackbar = useLogStore((s) => s.snackbar);
   const closeSnackbar = useLogStore((s) => s.closeSnackbar);

@@ -1,11 +1,9 @@
 import { useLogStore } from "@/resources/store/logStore";
 
 /**
- * Thin shim replacing the Aurelia `Logger` service (resources/services/logger.ts).
- * The engine ports (P2+) keep their `this.logger.log(value, status)` calls working
- * by importing this object. It simply forwards to the logStore, which prepends to
- * logArray (newest first, like the original `unshift`) and raises a snackbar on
- * errors.
+ * Logging entry point for framework-agnostic code (the engine and the services), so
+ * they never import a store directly. It forwards to `logStore`, which prepends the
+ * entry to the log window's list and raises the snackbar for an "error" status.
  */
 export const logger = {
   log: (value: string, status: string): void => useLogStore.getState().log(value, status),

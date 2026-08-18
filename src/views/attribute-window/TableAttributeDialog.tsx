@@ -20,8 +20,7 @@ import {
   Typography,
 } from "@mui/material";
 import type { Attribute, AttributeInstance, Class, ClassInstance, PortInstance } from "@gds";
-// ColumnStructure is NOT re-exported from the gds barrel — deep-import it, exactly as
-// the old dialog-table-attribute.ts did.
+// ColumnStructure is not re-exported from the gds barrel, so it is deep-imported.
 import type { ColumnStructure } from "@gds/models/meta/Metamodel_columns.structure";
 import { globalObject, instanceCreationHandler } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
@@ -37,15 +36,14 @@ import { useSelectionStore } from "@/resources/store/selectionStore";
 import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
 
 /**
- * P8 port of `dialogs/dialog-table-attribute/{ts,html}` (275 lines). Renders an
- * attribute whose type declares `has_table_attribute` columns as an editable grid,
- * with "Create Row" appending a cell per column.
+ * Renders an attribute whose type declares `has_table_attribute` columns as an editable
+ * grid, with "Create Row" appending one cell per column.
  *
  * RECURSION: a column with `ui_component: 'button'` holds a nested table attribute and
- * opens ANOTHER table dialog (the old `nestedDialogs[i][j]` refs). The uiStore can only
- * express one open `tableAttribute` dialog, so only the OUTERMOST dialog is uiStore-
- * driven; nested levels are local state on the recursive view component below. The
- * demo metamodel really uses this — Robotic system → Joint has button columns.
+ * opens another table dialog. uiStore can only express ONE open `tableAttribute` dialog,
+ * so only the outermost is store-driven; nested levels are local state on the recursive
+ * view component below. The demo metamodel really does nest — Robotic system → Joint has
+ * button columns.
  */
 interface TablePayload {
   attributeInstance: AttributeInstance;
@@ -82,7 +80,7 @@ interface TableAttributeDialogViewProps {
   onClose: () => void;
 }
 
-export function TableAttributeDialogView({
+function TableAttributeDialogView({
   open,
   attributeInstance,
   attribute,
@@ -94,14 +92,13 @@ export function TableAttributeDialogView({
   const [rows, setRows] = useState<AttributeInstance[][]>([]);
   const [facetsAll, setFacetsAll] = useState<string[][]>([]);
   const [currentAttribute, setCurrentAttribute] = useState<Attribute | null>(null);
-  // P12: the robotic-system hybrid algorithm is dispatched on the meta CLASS + meta
-  // ATTRIBUTE names ('joint' / 'origin'), so fieldChange needs the class too — the old
-  // dialog kept both as fields (`currentClass`, `currentAttribute`).
+  // The robotic-system hybrid algorithm dispatches on the meta CLASS and meta ATTRIBUTE
+  // names ("joint" / "origin"), so a cell edit needs the class as well as the attribute.
   const [currentClass, setCurrentClass] = useState<Class | null>(null);
   const [nestedCell, setNestedCell] = useState<{ row: number; col: number } | null>(null);
   const bump = useSelectionStore((s) => s.bump);
 
-  // setMetaInformation() + setUpTable(), collapsed into one loader (the old attached()
+  // Meta information and table rows are loaded together (one pass, one render; the
   // called reset() + load(), and load() called both in sequence).
   const load = useCallback(async () => {
     const attributeUUID = attributeInstance.uuid_attribute;
@@ -176,12 +173,10 @@ export function TableAttributeDialogView({
 
     eventBus.publish("checkForVizRepUpdateByAttributeInstance", cell);
 
-    // if scenetype is robotic system, check if there are changes that require a hybrid
-    // algorithm to run (P12: live)
+    // In a robotic system scene, a cell edit may re-pose the URDF robot.
     const sceneInstance = await instanceUtility.getTabContextSceneInstance();
     if (sceneInstance?.uuid_scene_type == ROBOTIC_SYSTEM_SCENETYPE_UUID) {
-      // The original passes `[this.currentClassInstance]` unconditionally, i.e. `[null]`
-      // when nothing is selected; `null` here reaches the identical outcome (the service
+      // `null` rather than `[null]` when nothing is selected — the same outcome (the service
       // only reads `classInstances[0]` in this branch, then returns) without lying to
       // the type.
       await hybridAlgorithmsService.checkHybridAlgorithms(
@@ -204,9 +199,8 @@ export function TableAttributeDialogView({
     //---------------------------------
     globalObject.doSceneInstancePatch = true;
 
-    // The old client published nothing here (its `tableAttributeChanged` publish is
-    // commented out). The window still has to notice the in-place edit, so bump the
-    // P5 selection store — the plan's `revision` re-render trigger (§3.1/§3.2).
+    // The cell was mutated in place, so nothing React observes has changed. Bump the
+    // selection store's revision to make the attribute window re-render.
     bump();
 
     // Undo step, keyed per cell so re-editing the same one does not stack steps.
@@ -347,7 +341,7 @@ export function TableAttributeDialogView({
   );
 }
 
-/** One cell: text / slider / dropdown / nested-table button (the old td branches). */
+/** One cell: a text field, a slider, a dropdown or a nested-table button. */
 function TableAttributeCell({
   cell,
   uiComponent,

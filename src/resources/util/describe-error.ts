@@ -2,7 +2,7 @@
  * Render an unknown caught value as a log-safe message.
  *
  * A caught value can be any type, not just an Error (three/WebGL init can throw
- * DOMExceptions, strings, etc.). Copied from the metamodeling twin.
+ * DOMExceptions, strings, etc.).
  */
 export function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;

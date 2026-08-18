@@ -3,12 +3,10 @@ import { metaUtility } from "./meta-utility";
 import { expressionUtility } from "./expression-utility";
 
 /**
- * Port of the old modeling `resources/services/simulation_utility.ts` (plan §10: ★).
- * DI stripped: MetaUtility / ExpressionUtility become module-singleton imports.
- * The execution wiring (simulation window sliders) lands in P12; this is only the
- * runner half.
- *
- * Utility class for handling simulations.
+ * Runs a stored simulation code string. The code is compiled by `meta-utility` and
+ * called with the expression API and the instance it belongs to, which is what lets a
+ * simulation read and write model values. Triggered by clicking a button object in
+ * simulation mode and by the simulation window's sliders.
  */
 export class SimulationUtility {
   private metaUtility = metaUtility;
@@ -25,5 +23,5 @@ export class SimulationUtility {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const simulationUtility = new SimulationUtility();

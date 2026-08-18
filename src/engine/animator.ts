@@ -9,31 +9,27 @@ import { mechanismUtility } from "@/resources/services/mechanism-utility";
 import { coordinatesUpdater } from "@/engine/coordinates-updater";
 import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
 import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-renderer";
+import { logger } from "@/resources/services/logger";
+import { describeError } from "@/resources/util/describe-error";
 
 /**
- * Port of the old `resources/animator.ts` (the 416-line modeling animator — the
- * render loop plus relation-line repositioning, incl. bendpoints and middle-text).
- * DI-stripping recipe: GlobalDefinition / GlobalStateObject / RayHelper become
- * module-singleton imports.
+ * The render loop, driven by the renderer's animation loop.
  *
- * Injected collaborators from later phases are inline-stubbed with markers (the
- * plan's deferred pattern — un-stub them when those phases land):
- *   - `instanceUtility.getTabContextSceneInstance()` (P3) — the fetched value was
- *     unused in the original loop, so it is simply dropped here.
- *   - `mechanismUtility.executeAllMechanisms()` — UN-STUBBED in P3 (mechanism-utility
- *     now exists); runs the `mechanism` code strings each render tick.
- *   - `coordinatesUpdater.update{Coordinates2D,Rotation,Scale}OnClassAndPortInstance()`
- *     — UN-STUBBED in P4; writes three.js transforms back onto the gds instances.
- *     Only reachable once a scene is open (`tabContext.length > 0`), i.e. never
- *     before P7.
- *   - `remoteSelectionRenderer.refreshBoxes()` — UN-STUBBED in P11; keeps remote
- *     collaborators' selection boxes glued to objects as they drag them (awareness
- *     only fires when a selection CHANGES, not when the selected object moves).
- *     A cheap no-op when there are no remote selections.
- * The `setPos` / `calculateMiddlePoint` line-geometry maths are ported verbatim
- * (they use only rayHelper + THREE).
- */
-export class Animator {
+ * `animate()` renders a frame whenever something asked for one (`globalObject.render`),
+ * then does the per-frame bookkeeping the scene needs: run the mechanism code strings,
+ * keep remote collaborators' selection boxes and cursors attached to what they follow,
+ * re-route every relation line, and write moved / rotated / resized objects back onto
+ * the gds instances through the coordinates updater.
+ *
+ * Position, rotation and scale of every draggable object are snapshotted into flat
+ * number arrays each frame and compared with the previous frame's, so the expensive
+ * write-back passes only run when something actually moved.
+ *
+ * `setPos` is the line maths: it re-routes a relation through its bendpoints, trims
+ * both ends back to the surface of the objects they point at, orients the end meshes
+ * (arrow heads, diamonds) along the line, and hands the result to
+ * `calculateMiddlePoint` so a middle label sits at the line's halfway point.
+ */export class Animator {
   private globalObjectInstance = globalObject;
   private globalStateObject = globalStateObject;
   private rayHelper = rayHelper;
@@ -41,11 +37,9 @@ export class Animator {
   private coordinatesUpdater = coordinatesUpdater;
   private remoteSelectionRenderer = remoteSelectionRenderer;
   private remoteCursorRenderer = remoteCursorRenderer;
+  private logger = logger;
 
   async animate() {
-    // P3: `instanceUtility.getTabContextSceneInstance()` was fetched here into a
-    // variable the loop never read; restore it if a later phase needs it.
-
     if (this.globalObjectInstance.camera == this.globalObjectInstance.ARCamera) {
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);
       //hook to check mechanisms
@@ -154,40 +148,15 @@ export class Animator {
       if (this.globalObjectInstance.camera == this.globalObjectInstance.normalCamera) this.globalObjectInstance.orbitControls.update();
     }
 
-    //marker animate function if camera == ARCamera
-    if (this.globalObjectInstance.camera == this.globalObjectInstance.ARCamera) {
-      // (intentionally empty — placeholder from the original)
-    }
   }
 
   //check if two arrays are the same
   //tolerance is the per-element delta below which two values are treated as equal
   //(default suits scene-unit positions; rotations/scales pass a tighter value)
   arraysMatch(arr1: number[], arr2: number[], tolerance = 0.01) {
-    const array1 = arr1;
-    const array2 = arr2;
-
-    // if both empty, return true
-    if (array1.length === 0 && array2.length === 0) {
-      return true;
-    }
-
-    // Check if the arrays are the same length
-    if (array1.length !== array2.length) {
-      return false;
-    }
-
-    // Check if all items exist and are in the same order
-    for (let i = 0; i < array1.length; i++) {
-      if (array1[i] !== array2[i]) {
-        // treat as changed only when the delta exceeds the tolerance
-        if (Math.abs(array1[i] - array2[i]) > tolerance) {
-          return false;
-        }
-      }
-    }
-    // Otherwise, return true
-    return true;
+    if (arr1.length !== arr2.length) return false;
+    // Element-wise, treating a delta within the tolerance as unchanged.
+    return arr1.every((value, i) => Math.abs(value - arr2[i]) <= tolerance);
   }
 
   //must be called for all lines in animate() loop
@@ -236,18 +205,17 @@ export class Animator {
         });
 
         endObjectNearestPoint = this.rayHelper.shootRayFromObject(fromObj as unknown as THREE.Mesh, toObj as unknown as THREE.Mesh);
-      } catch {
-        //sometimes error, thus catch -> pobably when orientation of line is strange
-        //not visible in client for the user
-        console.error("to do: fehler beheben");
+      } catch (error) {
+        // Happens when the line's endpoint objects cannot be raycast against each other
+        // (e.g. an unusual orientation). The frame is skipped rather than failed.
+        this.logger.log("could not resolve the line's end point: " + describeError(error), "close");
       }
 
       //if we have a array for the line-pos, the start- and the end point
       if (pos && endObjectNearestPoint && startObjectNearestPoint) {
         //set pos to length of all objects * 3
         pos = [];
-        let index: number;
-        index = 0;
+        let index = 0;
         const dragObjects = this.globalObjectInstance.dragObjects;
 
         //for all elements in the array of "related objects" (all real points in line), the position is updated
@@ -328,8 +296,8 @@ export class Animator {
           mesh.lookAt(vec);
           //transform orientation
           mesh.rotateY(1.5707963);
-        } catch {
-          console.error("error in startpoint orientation");
+        } catch (error) {
+          this.logger.log("error in startpoint orientation: " + describeError(error), "close");
         }
 
         // set pos of Endpoint of relation
@@ -368,8 +336,8 @@ export class Animator {
           mesh.lookAt(vec);
           //transform orientation
           mesh.rotateY(1.5707963);
-        } catch {
-          console.error("error in endpoint orientation");
+        } catch (error) {
+          this.logger.log("error in endpoint orientation: " + describeError(error), "close");
         }
 
         //this is not super performant
@@ -386,7 +354,8 @@ export class Animator {
         //the function repositions the middle text of a line if there is any.
         await this.calculateMiddlePoint(line, pos);
       } else {
-        console.error("(pos && endObjectNearestPoint && startObjectNearestPoint) == false");
+        // One of the two end points could not be resolved, so there is no line to draw.
+        this.logger.log("line not updated: an end point of the relation could not be resolved", "close");
       }
     }
   }
@@ -433,5 +402,5 @@ export class Animator {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const animator = new Animator();

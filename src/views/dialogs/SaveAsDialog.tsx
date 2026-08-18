@@ -16,22 +16,15 @@ import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
 
 /**
- * P9 port of `dialogs/dialog-save-as/{ts,html}` — the "Save Model" dialog
- * (File > Save Model, and Ctrl+S via the `ctrlPlusSPressed` bus channel, which
- * AppLayout already routes to this uiStore flag).
+ * The "Save Model" dialog, reached from File > Save Model and from Ctrl+S.
  *
- * Shows the open tab's SceneInstance: uuid + the two 3D coordinate fields + custom
- * variables are read-only (the old template marked them `disabled`); name and
- * description are editable and — faithful to the old two-way `value.bind` — are
- * written STRAIGHT INTO the gds SceneInstance as the user types. There is no
- * apply/commit step: closing with Cancel does NOT roll the edits back, exactly like
- * the original.
+ * Shows the open tab's SceneInstance: the uuid, coordinates and custom variables are
+ * read-only; name and description are editable and are written STRAIGHT INTO the gds
+ * SceneInstance as the user types. There is no apply step, so closing with Cancel does
+ * not roll those edits back.
  *
- * The old `attached()` subscribed `openDialogSaveAs` and called init(); that channel
- * is dropped (plan §5 — replaced by uiStore), so the sceneInstance is (re-)read from
- * the tab context whenever the dialog opens. The old template additionally called
- * `${init()}` on every render, which is what kept the fields fresh across tab
- * switches — the `open` effect covers that here.
+ * The scene is re-read from the tab context every time the dialog opens, which is what
+ * keeps the fields correct across tab switches.
  */
 export default function SaveAsDialog() {
   const open = useUiStore((s) => s.dialogs.saveAs);
@@ -45,7 +38,7 @@ export default function SaveAsDialog() {
 
   useEffect(() => {
     if (!open) return;
-    // Port of init(): tabContext[selectedTab].sceneInstance. The old template gated
+    // Read the open tab's scene instance. Rendering is gated
     // the whole content on `tabContext.length > 0`; with no open tab there is
     // nothing to save, so the dialog shows the same empty body.
     const tab = globalObject.tabContext[globalObject.selectedTab];

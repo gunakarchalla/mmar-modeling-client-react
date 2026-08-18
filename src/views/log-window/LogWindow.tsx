@@ -14,10 +14,8 @@ import {
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import { useThrottledLogArray } from "@/resources/store/logStore";
 
-// Renders the shared log entries (log-window.html's repeat.for over logger.logArray).
-// logArray is newest-first (logStore unshifts), so the newest entry is at the top.
-// The old template printed the *current* time per row rather than a per-entry
-// timestamp (LogEntry carries no time) — we keep that behaviour.
+// Renders the shared log entries, newest first. Each row prints the CURRENT time
+// rather than a per-entry timestamp — log entries carry no time of their own.
 function LogEntries() {
   const logArray = useThrottledLogArray();
   const time = new Date().toLocaleTimeString();
@@ -47,10 +45,8 @@ function LogEntries() {
   );
 }
 
-// Port of `views/log-window/log-window.{ts,html}`: a scrollable "Log" panel with
-// an expand-to-dialog button. Newest entries live at the top, so we keep the scroll
-// pinned to the top when entries arrive (the old client scrolled to bottom because
-// its list was oldest-first). Copies the metamodeling twin's LogWindow.
+// A scrollable "Log" panel with an expand-to-dialog button. Newest entries are at the
+// top, so the scroll position is pinned to the top as entries arrive.
 export default function LogWindow() {
   const [open, setOpen] = useState(false);
   const logArray = useThrottledLogArray();

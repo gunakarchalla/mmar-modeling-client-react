@@ -3,8 +3,7 @@ import type { SceneInstance } from "@gds";
 /**
  * Pure snapshot/diff helpers behind the undo-redo history (`history-service.ts`).
  *
- * WHY A DIFF AND NOT A WHOLE-SCENE RESTORE. The metamodeling twin's undo replaces the
- * edited object wholesale, which it can do because nobody else edits it. Here a tab may
+ * WHY A DIFF AND NOT A WHOLE-SCENE RESTORE. A tab may
  * be a live collaborative session: peers mutate the SAME SceneInstance while it sits in
  * our history. Restoring a past snapshot wholesale would therefore revert THEIR edits
  * too. So an undo step is applied as a *scoped* diff — only the instances the recorded

@@ -16,34 +16,17 @@ import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
 
 /**
- * P8 port of `dialogs/dialog-upload-gltf/{ts,html}`. Reads a `.gltf` / `.referenceobject`
- * into the attribute instance's value as a string — glTF as text (it is JSON), a
- * `.referenceobject` as a data URL, exactly like the original's two `FileReader` paths.
- * Nothing is posted to the server: the value IS the model (P4's graphic_gltf accepts
- * `string | ArrayBuffer`).
+ * Reads a `.gltf` or `.referenceobject` file into the attribute instance's value: glTF
+ * as text (it is JSON), a `.referenceobject` as a data URL. Nothing is posted to the
+ * server — the attribute value IS the model, and `graphic_gltf` accepts it directly.
  *
- * uppy → MUI file input (plan §3.3, LOCKED), with the old `allowedFileTypes`
- * restriction preserved as the input's `accept`.
- *
- * The old dialog published `gltfUploaded` on a 1 s `setTimeout` "to wait for the files
- * to be read", because uppy's read was fire-and-forget. Here the read is awaited, so
- * the event is published once the value is actually set — no timer, no race.
- *
- * `firstLevel` only ever chose between two uppy drag-drop target element ids
- * (`#dragdropfirstlevel` / `#dragdropsecondlevel`) so the dashboard was not mounted
- * twice. With uppy gone it has no behaviour left; kept as a prop for parity.
+ * The read is awaited, so `gltfUploaded` is published once the value is actually set.
  */
 interface Payload {
   attributeInstance: AttributeInstance;
 }
 
-interface UploadGltfDialogProps {
-  firstLevel?: boolean;
-}
-
-export default function UploadGltfDialog({ firstLevel = true }: UploadGltfDialogProps) {
-  void firstLevel; // vestigial — see the note above.
-
+export default function UploadGltfDialog() {
   const open = useUiStore((s) => s.dialogs.uploadGltf);
   const closeDialog = useUiStore((s) => s.closeDialog);
   const payload = useUiStore((s) => s.dialogPayloads.uploadGltf) as Payload | undefined;

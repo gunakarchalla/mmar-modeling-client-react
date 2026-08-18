@@ -22,21 +22,17 @@ import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
 
 /**
- * P8 port of `dialogs/dialog-upload-file/{ts,html}`. Uploads a file into an attribute
- * instance of the File attribute type: POST for a fresh attribute, PATCH when the
- * attribute already holds a file uuid. Images can optionally be compressed
- * server-side (the `compress` / `targetWidth` / `quality` query params).
+ * Uploads a file into an attribute instance of the File attribute type: POST for a fresh
+ * attribute, PATCH when it already holds a file uuid. Images can optionally be
+ * compressed server-side through the `compress` / `targetWidth` / `quality` params.
  *
- * uppy → MUI file input (plan §3.3, LOCKED): `<Button component="label">` wrapping a
- * hidden `<input type="file">`. The old client's single-file restriction is kept
- * (no `multiple`), as is the "compress only makes sense for images" gate that
- * uppy's `file-added` handler implemented (`validateFile`).
+ * One file at a time, and compression is offered only for images.
  */
 interface Payload {
   attributeInstance: AttributeInstance;
 }
 
-/** dialog-upload-file.ts:104 — validateTargetWidth(). */
+/** The target width must be a number greater than zero. */
 function validateTargetWidth(targetWidth: string): string {
   if (targetWidth === "" || isNaN(Number(targetWidth))) return "Target width is required.";
   if (Number(targetWidth) <= 0) return "Must be a number greater than 0.";
@@ -87,7 +83,7 @@ export default function UploadFileDialog() {
     if (!file || !attributeInstance) return;
     setUploading(true);
     try {
-      // The old dialog round-tripped the file through a FileReader data URL and rebuilt
+      // The file is posted as-is rather than round-tripped through a data URL and rebuilt
       // it byte-by-byte ("Create a proper binary File"). That was a workaround for
       // uppy's file wrapper; a real `File` from an <input type="file"> is already
       // binary, so it is posted directly — same bytes, same name, same type.

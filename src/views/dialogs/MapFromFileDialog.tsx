@@ -21,16 +21,13 @@ import { useUiStore } from "@/resources/store/uiStore";
 import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
 
 /**
- * P9 port of `dialogs/dialog-map-from-file/{ts,html}` — imports a `.zip` holding a
- * URDF plus its referenced meshes into the open Robotic system scene. COMPLETED in P12:
- * the URDF half (roboticsystem-algorithms) is now live, so a zip really does create
- * Link/Joint instances.
+ * Imports a `.zip` holding a URDF plus its referenced meshes into the open Robotic
+ * system scene, creating a Link or Joint instance for each element of the robot.
  *
- * The dialog is only usable when the open tab's SceneInstance is of the Robotic
- * system scene type; otherwise it shows the original's status message instead of the
- * uploader. The zip parsing uses unzipit (the P9 dep, and the ONLY place in the client
- * that unzips); its entries are indexed by roboticsystem-algorithms so the URDF's mesh
- * references resolve against the in-memory archive rather than over HTTP.
+ * Only usable while the open tab holds a Robotic system scene; otherwise it shows a
+ * status message instead of the uploader. This is the only place in the client that
+ * unzips: the archive's entries are indexed so the URDF's mesh references resolve
+ * against the in-memory files rather than over HTTP.
  */
 
 export default function MapFromFileDialog() {
@@ -41,8 +38,8 @@ export default function MapFromFileDialog() {
   const [statusMessage, setStatusMessage] = useState("");
   const [file, setFile] = useState<File | null>(null);
 
-  // Port of refreshEligibility(). Runs on open (the old dialog ran it in both its
-  // `openDialogMapFromFile` subscription and attached()).
+  // Recheck whether the open tab can accept a URDF import; run every time the dialog
+  // opens, since the user may have switched tabs since the last time.
   const refreshEligibility = useCallback(async () => {
     const sceneInstance = await instanceUtility.getTabContextSceneInstance();
     if (!sceneInstance) {
@@ -56,13 +53,13 @@ export default function MapFromFileDialog() {
       return;
     }
     setShowUploader(false);
-    // "feasture" typo is in the old source; kept verbatim.
+    // The "feasture" typo is in the shipped message; changing it changes the UI text.
     setStatusMessage("This feasture is currently available only for the Robotic System scene type.");
   }, []);
 
   useEffect(() => {
     if (!open) {
-      // Port of detaching()/cleanup(): release the transient import cache on close.
+      // Release the transient import cache on close.
       roboticsystemAlgorithms.meshCache.clear();
       return;
     }
@@ -76,7 +73,7 @@ export default function MapFromFileDialog() {
     // ensure it's a .zip by name or type
     const isZip = file.type === "application/zip" || file.name.toLowerCase().endsWith(".zip");
     if (!isZip) {
-      // the old dialog ignored non-zip files silently; the accept filter already
+      // Non-zip files are ignored silently; the accept filter already
       // makes this hard to hit, so a log beats silence without changing the flow.
       logger.log("Mapping skipped: not a .zip file", "info");
       return;

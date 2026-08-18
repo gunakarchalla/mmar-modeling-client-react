@@ -19,32 +19,14 @@ import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
 
 /**
- * P9 port of `dialogs/dialog-import-model/{ts,html}` — loads exported SceneInstance
- * JSON files from disk into globalObject.importSceneInstances, then publishes
- * 'updateSceneGroup' so SceneGroup folds them into the tree (P7's updateTree).
- * Nothing is sent to the server: the old "Load to database" button was `disabled`
- * with no handler, and is kept disabled here for parity.
+ * Loads exported SceneInstance JSON files from disk into
+ * `globalObject.importSceneInstances`, then publishes `updateSceneGroup` so the scene
+ * tree folds them in. Nothing is sent to the server — the "Load to database" button is
+ * an intentionally inert placeholder. Several files can be imported at once.
  *
- * uppy → MUI file input (plan §3.3 LOCKED); the old uppy `allowedFileTypes:
- * ['.json', '.zip']` becomes the input's `accept`. Multiple files are supported, as
- * in the original.
- *
- * TWO deliberate simplifications, both matching what P8's upload dialogs did:
- *
- * 1. Files are read with `await file.text()` instead of the old
- *    `readAsDataURL` → `atob(string.substring(29))` dance. The magic 29 was the
- *    length of the `data:application/json;base64,` prefix — reading the text
- *    directly yields the same JSON without depending on that prefix's length.
- * 2. The old code published 'updateSceneGroup' on a 1 s `setTimeout` "to wait for
- *    the files to be read", because its FileReader callbacks were fire-and-forget.
- *    The reads are awaited here, so the publish happens once the instances are
- *    actually pushed — no timer, no race.
- *
- * `.zip` is in `accept` because the original allowed it, but the original had no zip
- * branch either: it fed the bytes straight to JSON.parse, which throws. A zip
- * therefore surfaces as a logged parse error rather than silently doing nothing.
- * (Only dialog-map-from-file actually unzips — plan §9's "import-metamodel ... zip
- * via unzipit" does not match the source; see state.json discoveries.)
+ * `.zip` is accepted by the file input but has no unzip branch: the bytes go straight to
+ * `JSON.parse`, so a zip surfaces as a logged parse error rather than silently doing
+ * nothing. The map-from-file dialog is the one that unzips.
  */
 export default function ImportModelDialog() {
   const open = useUiStore((s) => s.dialogs.importModel);
@@ -61,7 +43,7 @@ export default function ImportModelDialog() {
       const result: unknown = JSON.parse(await file.text());
 
       // convert the json to a SceneInstance object.
-      // gds fromJS, NOT the app's plainToInstance (P3): the app's copy of
+      // gds fromJS, never the app's plainToInstance: the app's copy of
       // class-transformer lacks gds's @Type metadata and would leave nested
       // class_instances as plain Objects, breaking every instanceof downstream.
       const sceneInstance = SceneInstance.fromJS(result) as SceneInstance;
@@ -112,7 +94,7 @@ export default function ImportModelDialog() {
         >
           Load local
         </Button>
-        {/* Disabled with no handler in the old template — kept for parity. */}
+        {/* Inert placeholder: nothing is sent to the server from here. */}
         <Button disabled>Load to database</Button>
       </DialogActions>
     </Dialog>

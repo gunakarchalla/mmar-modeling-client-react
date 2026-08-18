@@ -11,24 +11,17 @@ import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 
 /**
- * P12 port of `resources/hybridAlgorithms/roboticsystem_algorithms.ts` (584 lines,
- * plan §10 ★ — no metamodeling twin). DI stripped: every Aurelia injection becomes a
- * module-singleton import.
+ * Turns a `.zip` holding a URDF and its meshes into Link and Joint class instances of
+ * the Robotic system metamodel.
  *
- * Turns a `.zip` holding a URDF + its meshes (dropped on MapFromFileDialog) into
- * Link / Joint class instances of the Robotic system metamodel: urdf-loader parses the
- * XML into a THREE.Object3D hierarchy, each link/joint becomes a ClassInstance at its
- * computed world pose, the URDF's inertial/visual/collision/origin/axis/limit data is
- * written into the matching table attributes, parent/child links become reference
- * attributes, and any referenced mesh is attached as `urdfVizRep` for
- * `persistencyHandler.checkIfClassinstanceInScene()` to draw through GraphicContext.
+ * urdf-loader parses the XML into a THREE.Object3D hierarchy; each link and joint
+ * becomes a ClassInstance at its computed world pose, the URDF's inertial, visual,
+ * collision, origin, axis and limit data is written into the matching table attributes,
+ * parent/child links become reference attributes, and any referenced mesh is attached as
+ * `urdfVizRep` for the persistency handler to draw.
  *
- * `parseVisual`/`parseCollision` stay FALSE: meshes are read out of the already-open
- * zip in memory instead (urdf-loader would try to fetch them over HTTP).
- *
- * NOTE the import edge to `hybrid-algorithms-service` (for the Statechange pass after
- * a reference attribute is set): the service does NOT import back, so there is no
- * cycle — this file sits downstream of it, exactly as the old class injected it.
+ * `parseVisual` / `parseCollision` are deliberately FALSE: the meshes are read out of
+ * the already-open zip in memory, whereas urdf-loader would try to fetch them over HTTP.
  */
 
 // Minimal shape of an unzipit entry we depend on.
@@ -615,11 +608,9 @@ export class RoboticsystemAlgorithms {
   }
 
   /**
-   * The old client called `createAttributeInstance(colAttr, null, null, value, null,
-   * null, null, null, tableAttributeReference, null)` — nine of the ten arguments are
-   * the same every time. This repo's ported signature types the two `assigned_uuid_*`
-   * params as required `string`, so the nulls need casts (P10's gds-ctor precedent:
-   * keep the runtime value byte-identical rather than invent a placeholder).
+   * One cell of a table attribute. Only three of `createAttributeInstance`'s ten
+   * parameters vary here; the rest are null, cast because the signature types them as
+   * required — passing a placeholder instead would change what is stored.
    */
   private async createCell(attribute: Attribute, value: string, tableAttributeReference: UUID) {
     return await this.instanceCreationHandler.createAttributeInstance(
@@ -674,5 +665,5 @@ export class RoboticsystemAlgorithms {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const roboticsystemAlgorithms = new RoboticsystemAlgorithms();

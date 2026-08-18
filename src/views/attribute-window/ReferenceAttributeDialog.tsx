@@ -36,23 +36,16 @@ import { useUiStore } from "@/resources/store/uiStore";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
 
 /**
- * P8 port of `dialogs/dialog-reference-attribute/{ts,html}` (336 lines). Lets the user
- * point a reference attribute at another instance (scene / class / relationclass /
- * port), constrained to what the attribute type's Role allows.
+ * Lets the user point a reference attribute at another instance — a scene, class,
+ * relation class or port — constrained to what the attribute type's Role allows.
  *
- * One dialog view is shared by every reference button, exactly as in the old client:
- * the context arrives on the `openReferenceDialog` bus channel (plan §5), while
- * uiStore's `referenceAttribute` flag controls visibility.
+ * ONE dialog is shared by every reference button in the attribute window: the clicked
+ * attribute arrives as context on the `openReferenceDialog` channel, while uiStore's
+ * `referenceAttribute` flag controls visibility.
  *
- * DEVIATIONS (both recorded in state.json → discoveries):
- *  1. The old relationclass branch is BROKEN: `setAllowedRelationclassInstances`
- *     pushes `{ relaionclassInstance }` (typo), while the template reads
- *     `object.relationclassInstance.name` and its add button passes
- *     `selected.relationclassInstance` into `addReferenceRoleInstance`, which then
- *     dereferences `referencedInstance.uuid` → TypeError. Ported with the field
- *     spelled correctly, since porting the typo means shipping a crash.
- *  2. `generateUUID()` (three/src/math/MathUtils) → `uuidv4()` from `uuid`, the
- *     repo's convention (CreateNewSceneDialog). Both mint an RFC4122 v4 uuid.
+ * Choosing a target creates the role instance that records the reference and writes its
+ * name into the attribute's value, then runs the hybrid algorithms — which is what makes
+ * a Statechange Reference adopt the mesh of what it now points at.
  */
 interface AllowedScene {
   sceneInstance: SceneInstance;
@@ -216,7 +209,7 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
     // set attributeInstance value to the role_instance_from.name
     attributeInstance.value = roleInstanceFrom.name;
 
-    //run hybrid algorithm for Statechange -> reference (P12: live)
+    // A Statechange Reference adopts the mesh of whatever it now points at.
     await hybridAlgorithmsService.checkHybridAlgorithms(attributeInstance);
 
     onChanged?.();
@@ -326,7 +319,7 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
   );
 }
 
-/** One "pick an instance + add" row (the old gridbody main/aside pair). */
+/** One "pick an instance, then add it" row. */
 function AllowedGroup({
   label,
   value,
@@ -374,9 +367,9 @@ function getClassInstanceName(classInstance: ClassInstance): string {
 }
 
 /**
- * The meta half of the old `setMetaInformation()`: which Role does this reference
+ * Which Role does this reference
  * attribute's attribute type carry? Resolved from the currently selected class or
- * port instance, exactly like the original, with one fallback added: a reference
+ * port instance, with one fallback: a reference
  * attribute of the open SCENE INSTANCE (shown when nothing is selected) belongs to
  * neither, and `current_class_instance` may still hold the last selected element, which
  * does not carry this attribute either. metaUtility searches the scene type first, so it

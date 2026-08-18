@@ -21,22 +21,21 @@ import CameraToggle from "./CameraToggle";
 import AutoSave from "./AutoSave";
 import UserLegend from "@/views/user-legend/UserLegend";
 
-// Tooltip suffixes advertising each button's chord, matching the metamodeling twin's
+// Tooltip suffixes advertising each button's chord, matching the
 // toolbar. The `aria-label`s stay bare ("undo", "redo") so accessible names do not
 // drift with the platform — MUI would otherwise derive them from these titles.
 const CHORDS = isMacPlatform() ? { undo: "⌘Z", redo: "⌘⇧Z" } : { undo: "Ctrl+Z", redo: "Ctrl+Shift+Z" };
 
-// Vertical divider matching the old `.vl` rule (1px light-grey separator).
+// 1px light-grey separator between toolbar groups.
 function VDivider() {
   return <Box sx={{ borderLeft: "1px solid #bdbdbd", height: 24, mx: 0.5 }} />;
 }
 
-// Port of `views/toolbar-container/toolbar-container.{ts,html}`. Zoom stays a disabled
-// stub (the old handlers only logged). Undo/Redo step the ACTIVE tab's scene history.
-// Delete drives the deletion handler. Logout replaces the old localStorage-remove +
-// reload with authStore.logout (which re-shows the sign-in dialog). AutoSave +
-// CameraToggle are separate components. UserLegend (right side, P11) renders itself as
-// nothing unless the active tab is shared.
+// The main toolbar. Undo and redo step the ACTIVE tab's scene history, Delete drives
+// the deletion handler, and Logout clears the session, which brings the sign-in dialog
+// back. The zoom buttons are deliberately inert placeholders. AutoSave, CameraToggle
+// and UserLegend are separate components; the legend renders nothing unless the active
+// tab is shared.
 export default function Toolbar() {
   const logout = useAuthStore((s) => s.logout);
 

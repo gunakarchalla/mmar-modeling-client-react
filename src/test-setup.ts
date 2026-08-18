@@ -4,7 +4,7 @@ import "reflect-metadata";
 
 // jsdom's Blob (and therefore File) predates Blob.text()/arrayBuffer(), which every
 // real browser has shipped for years and which the file-reading views use directly
-// (P9's import dialogs, P8's UploadGltfDialog). Without this, `await file.text()`
+// (the import dialogs and UploadGltfDialog). Without this, `await file.text()`
 // throws "f.text is not a function" INSIDE a try/catch and surfaces as an empty
 // import rather than an obvious failure — so polyfill it for tests only.
 //

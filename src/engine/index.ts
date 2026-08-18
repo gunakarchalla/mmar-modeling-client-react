@@ -1,33 +1,22 @@
 /**
- * engine/index.ts — COMPOSITION ROOT + mount facade (P2).
+ * Composition root and mount facade for the engine.
  *
- * Each engine module exports its own module singleton (the DI -> module-singleton
- * recipe that replaced Aurelia `@singleton()`). This file imports them in dependency
+ * Each engine module exports its own singleton. This file imports them in dependency
  * order — global-definition first, then the global-* state holders, then the leaf
- * helpers (ray-helper, mouse-object, resize), then the handlers/initiators — so the
- * import side effects (the `new ClassName()` at the bottom of each file) run in a
- * deterministic order. Cross-singleton wiring that would otherwise risk a circular
- * import is funnelled through this file (plan §3.1).
+ * helpers, then the handlers and initiators — so the `new ClassName()` at the bottom of
+ * each file runs in a deterministic order, and so any cross-singleton wiring that would
+ * otherwise risk a circular import is funnelled through one place. Import engine
+ * singletons FROM HERE, not from their leaf files.
  *
- * P5 replaced the last P2 STUB: `interaction-handler` is now the full 5-mode state
- * machine, joined by `consistency-checker`, `instance-creation-handler` and
- * `deletion-handler` (imported below in dependency order — the handlers must
- * construct after graphic-context / the global-* holders they read at construction).
- * `transform-control-events` was replaced by P4. P11 un-stubbed the animator's
- * `remoteSelectionRenderer.refreshBoxes()` call — see its header.
+ * Importing `vizrep-update-checker` is load-bearing rather than cosmetic: its
+ * constructor is what subscribes the `checkForVizRepUpdate*` bus channels, so the module
+ * must be evaluated for vizrep refreshes to work at all.
  *
- * P4 added `graphic-context` (the vizRep `gc` API), `coordinates-updater` and
- * `vizrep-update-checker`. Importing `vizrep-update-checker` here is load-bearing,
- * not cosmetic: its constructor is what subscribes the `checkForVizRepUpdate*` bus
- * channels, so the module must be evaluated for vizrep refreshes to work at all.
- *
- * The `engine` facade exposes `mount(container)` / `unmount(token)` / `whenReady()`
- * for the React `ThreeCanvas`: it replaces the old `my-app.attached()` flow
- * (`initiator.init()` + `initiator.initEventListeners()`) and the old `#container`
- * DOM-polling — the container element is passed in directly. The mount-token +
- * memoized-init-promise pattern is copied from the metamodeling twin (see the long
- * comments below): it makes StrictMode's double-mount and per-tab remounts safe and
- * never recreates the single page-lifetime WebGLRenderer.
+ * The `engine` facade below is what React talks to: `mount(container)` /
+ * `unmount(token)` / `whenReady()` / `createXRButton()`. The memoized init promise and
+ * the monotonic mount token make StrictMode's double-mount and per-tab remounts safe,
+ * and the single page-lifetime WebGLRenderer is re-attached rather than recreated —
+ * browsers cap live WebGL contexts at around 16.
  */
 import { XRButton } from "three/examples/jsm/webxr/XRButton.js";
 import { globalObject } from "@/engine/global-definition";
@@ -38,7 +27,6 @@ import { globalRelationclassObject } from "@/engine/global-relationclass-object"
 import { rayHelper } from "@/engine/ray-helper";
 import { mouseObject } from "@/engine/mouse-object";
 import { resize } from "@/engine/resize";
-import { intervalHandler } from "@/engine/interval-handler";
 import { graphicContext } from "@/engine/graphic-context";
 import { coordinatesUpdater } from "@/engine/coordinates-updater";
 import { vizrepUpdateChecker } from "@/engine/vizrep-update-checker";
@@ -61,7 +49,6 @@ export {
   rayHelper,
   mouseObject,
   resize,
-  intervalHandler,
   graphicContext,
   coordinatesUpdater,
   vizrepUpdateChecker,
@@ -121,8 +108,8 @@ export const engine = {
       initPromise = (async () => {
         await initiator.init();
         await initiator.initEventListeners();
-        // Turn on WebXR + wire session start/end (harmless without XR hardware — the
-        // XRButton itself is deferred to P13). Idempotent.
+        // Turn WebXR on and wire session start/end. Idempotent, and harmless on a
+        // machine with no XR hardware.
         arInitiator.enableXR();
         initialized = true;
         signalReady();
@@ -179,10 +166,9 @@ export const engine = {
   },
 
   /**
-   * Create three's XRButton bound to our renderer (old client appended it to
-   * document.body with `bottom: 60px`). Exposed here for P13 to overlay onto the
-   * MiddleBody; NOT wired into the UI yet. `enableXR()` makes the session listeners
-   * live. `requiredFeatures: ['local']` + optional hand-tracking match the original.
+   * Create three's XR entry button, bound to our renderer. `XrButton` overlays the
+   * returned element on the canvas. Enabling XR here (idempotently) is what makes the
+   * session listeners live for a session the button starts.
    */
   createXRButton(): HTMLElement {
     arInitiator.enableXR();

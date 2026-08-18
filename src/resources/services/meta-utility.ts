@@ -4,19 +4,17 @@ import { backendService } from "./backend-service";
 import { fileUtility } from "./file-utility";
 
 /**
- * Port of the old modeling `resources/services/meta_utility.ts`. DI stripped
- * (GlobalDefinition / FetchHelper / FileUtility become module-singleton imports).
+ * Lookups over the META side of the model: scene types, classes, relation classes,
+ * ports and attributes, plus the client-side file cache.
  *
- * MODELING-SPECIFIC (differs from the metamodeling twin — do NOT unify): the file
- * cache is a private `Files: Map<UUID, [File, string]>` here (the twin uses
- * `globalObject.localFiles`). `getFiles()` bulk-fetches every file once and stores
- * both the `File` and its data-URL/text string. P2's `global-class-object.getIcon`
- * already references `metaUtility.Files` (its `// P7` marker) and `attribute-window`
- * (P8) + `expression-utility` call `getFileByUUID`, so this shape is load-bearing.
- * `getMetaAttribute` also keeps the modeling-only server fallback (attributesGET).
+ * `Files` maps a file uuid to both the `File` and its data-URL / text form, filled once
+ * by `getFiles()` before the scene tree is built. Palette icons, image attributes and
+ * the glTF and URDF loaders all resolve their content through it rather than fetching
+ * per use.
  *
- * `parseMetaFunction` keeps the intentional `new Function(...)` eval — it is how the
- * VizRep / mechanism / procedure code strings are turned into runnable functions.
+ * `parseMetaFunction` compiles a stored code string into a runnable function. The
+ * `new Function(...)` there is the whole point of the feature: vizRep, mechanism and
+ * procedure behaviour is authored in the metamodel and evaluated here.
  */
 export class MetaUtility {
   private globalObjectInstance = globalObject;
@@ -251,5 +249,5 @@ export class MetaUtility {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const metaUtility = new MetaUtility();

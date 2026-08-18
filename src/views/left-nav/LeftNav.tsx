@@ -4,13 +4,8 @@ import SceneGroup from "@/views/scenegroup/SceneGroup";
 import ClassButtonGroup from "@/views/palette/ClassButtonGroup";
 import RelationclassButtonGroup from "@/views/palette/RelationclassButtonGroup";
 
-// Port of `views/left-nav/left-nav.{ts,html}`. The old left-nav rendered
-// <scenegroup> always and, only when a tab is open, the <class-buttongroup> +
-// <relationclass-buttongroup> palettes. P7 fills the frame with the real
-// SceneGroup tree + the two palette button-groups.
-//
-// The old client tracked "openTab" via the `tabChanged` event
-// (`selectedTab >= 0`). We derive the same signal reactively from tabsStore.
+// Left column: the scene tree, plus the class and relation-class palettes — the two
+// palettes only once a tab is open, which is derived reactively from `tabsStore`.
 export default function LeftNav() {
   const openTab = useTabsStore((s) => s.selectedTab >= 0 && s.tabs.length > 0);
 

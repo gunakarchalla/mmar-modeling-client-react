@@ -19,24 +19,13 @@ import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
 
 /**
- * P9 port of `dialogs/dialog-import-metamodel/{ts,html}` — loads exported SceneType
- * JSON from disk into globalObject.importSceneTypes AND globalObject.sceneTypes (so
- * the imported type is immediately available to the tree + the create-scene dialog),
- * then publishes 'updateSceneGroup'. As with import-model, nothing is sent to the
- * server and the "Load to database" button stays disabled (no handler upstream).
+ * Loads exported SceneType JSON from disk into both `globalObject.importSceneTypes` and
+ * `globalObject.sceneTypes`, so an imported type is immediately available to the scene
+ * tree and to the create-scene dialog, then publishes `updateSceneGroup`.
  *
- * PLAN CORRECTION: plan §9 P9 describes this dialog as "zip via unzipit". It is not —
- * the old uppy config restricts to `allowedFileTypes: ['.json']` and there is no zip
- * handling anywhere in its 81 lines. Only dialog-map-from-file unzips. Ported as the
- * source actually behaves (JSON only); logged in state.json discoveries.
- *
- * DEVIATION (bug fix): the original created ONE FileReader outside the file loop and
- * called readAsDataURL on it for every file, then attached the "load" listener AFTER
- * the loop. Each read cancels the previous one on a shared reader, so selecting N
- * files imported only the last — and the listener registration racing the reads made
- * even that timing-dependent. Reading each file with `await file.text()` imports every
- * selected file, which is plainly what the loop intended. (Same `.text()` vs
- * `atob(dataUrl.substring(29))` simplification as ImportModelDialog.)
+ * JSON only — this dialog does not unzip. Nothing is sent to the server, and the "Load
+ * to database" button is an inert placeholder. Each file is read with `await
+ * file.text()`, so selecting several imports all of them.
  */
 export default function ImportMetamodelDialog() {
   const open = useUiStore((s) => s.dialogs.importMetamodel);
@@ -52,8 +41,8 @@ export default function ImportMetamodelDialog() {
     for (const file of files) {
       const result: unknown = JSON.parse(await file.text());
 
-      // convert the json to a SceneType object (gds fromJS, never the app's
-      // plainToInstance — see P3's class-transformer rule).
+      // gds fromJS, never the app's plainToInstance: only gds's own class-transformer
+      // holds the @Type metadata that deep-revives the nested objects.
       const sceneType = SceneType.fromJS(result) as SceneType;
       globalObject.importSceneTypes.push(sceneType);
       globalObject.sceneTypes.push(sceneType);
@@ -104,7 +93,7 @@ export default function ImportMetamodelDialog() {
         >
           Load local
         </Button>
-        {/* Disabled with no handler in the old template — kept for parity. */}
+        {/* Inert placeholder: nothing is sent to the server from here. */}
         <Button disabled>Load to database</Button>
       </DialogActions>
     </Dialog>

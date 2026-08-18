@@ -16,31 +16,15 @@ import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
 
 /**
- * P8 port of `dialogs/dialog-upload-image/{ts,html}`. Reads an image into the attribute
- * instance's value as a full data URL (the old code kept the `data:image/...;base64,`
- * prefix — the line that stripped it is commented out in the original, and the vizrep
- * code strings expect the prefix), then refreshes the vizrep.
- *
- * uppy → MUI file input (plan §3.3, LOCKED); the old `allowedFileTypes` list becomes
- * the input's `accept`. As in UploadGltfDialog, the original's 1 s `setTimeout` before
- * publishing is gone because the read is awaited here.
- *
- * The old dialog called `vizrepUpdateChecker.checkForVizRepUpdate(...)` directly; we
- * publish `checkForVizRepUpdateByAttributeInstance` (plan §5), which P4's
- * vizrep-update-checker subscribes to.
+ * Reads an image into the attribute instance's value as a FULL data URL — the
+ * `data:image/...;base64,` prefix is kept, because the vizRep code strings expect it —
+ * and then asks the vizRep pipeline to redraw the instance.
  */
 interface Payload {
   attributeInstance: AttributeInstance;
 }
 
-interface UploadImageDialogProps {
-  /** Vestigial (old uppy drag-drop target id switch) — see UploadGltfDialog. */
-  firstLevel?: boolean;
-}
-
-export default function UploadImageDialog({ firstLevel = true }: UploadImageDialogProps) {
-  void firstLevel;
-
+export default function UploadImageDialog() {
   const open = useUiStore((s) => s.dialogs.uploadImage);
   const closeDialog = useUiStore((s) => s.closeDialog);
   const payload = useUiStore((s) => s.dialogPayloads.uploadImage) as Payload | undefined;

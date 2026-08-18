@@ -3,10 +3,11 @@ import { globalObject } from "@/engine/global-definition";
 import { logger } from "@/resources/services/logger";
 
 /**
- * Port of the old `resources/global_relationclass_object.ts` (DI-stripping recipe):
- * GlobalDefinition / Logger injections become module-singleton imports. Bodies
- * unchanged except the dead `document.getElementById("class_dropdown")` lookup in
- * `setSelectedRelationClassByUUID` (its usage was already commented out) is dropped.
+ * The palette's relation classes for the open scene type, and which of them is armed
+ * for drawing — the relation counterpart of `globalClassObject`.
+ *
+ * `relationclassInstanceInCreation` holds the relation being drawn between the first
+ * click and the closing one, so a right-click can delete a half-finished relation.
  */
 export class GlobalRelationclassObject {
   relationClassUUID: UUID[];
@@ -45,10 +46,6 @@ export class GlobalRelationclassObject {
     return this.selectedRelationClass;
   }
 
-  setSelectedObject(index: number) {
-    this.selectedRelationClass = JSON.parse(this.relationClassNames[index]);
-    this.onObjectChange();
-  }
   setSelectedRelationClassByUUID(theUUID: string) {
     const index = this.relationClassUUID.findIndex((uuid) => uuid === theUUID);
     this.selectedRelationClass = this.relationClassNames[index];
@@ -62,5 +59,5 @@ export class GlobalRelationclassObject {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const globalRelationclassObject = new GlobalRelationclassObject();

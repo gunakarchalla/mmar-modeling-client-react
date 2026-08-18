@@ -7,26 +7,17 @@ import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 
 /**
- * P12 port of `resources/hybridAlgorithms/urdf_pose_service.ts` (plan §10 ★ — no
- * metamodeling twin). DI stripped: GlobalDefinition / MetaUtility / Logger become
- * module-singleton imports.
+ * The bridge between a parsed urdf-loader robot (a THREE.Object3D hierarchy) and the
+ * MMAR instances that mirror it.
  *
- * This is the bridge between a parsed urdf-loader robot (a THREE.Object3D hierarchy)
- * and the MMAR instances that mirror it. `roboticsystem-algorithms` registers a robot
- * after import; afterwards a Joint Origin edit (table dialog) or a Simulation-mode
- * slider re-poses the robot here, and the recomputed world poses are pushed back into
- * both the gds instances and the live three.js objects.
+ * `roboticsystem-algorithms` registers a robot after import. Afterwards a Joint "Origin"
+ * edit in the table dialog, or a slider in simulation mode, re-poses the robot here, and
+ * the recomputed world poses are pushed back into both the gds instances and the live
+ * three.js objects.
  *
- * TYPING NOTE — the old file cast the urdf-loader classes to `any` throughout, with a
- * comment claiming "this project currently does not ship THREE.js type definitions, so
- * the urdf-loader classes don't appear to TypeScript as full THREE.Object3D
- * instances". That is not true here: urdf-loader 0.12.6 ships URDFClasses.d.ts, where
- * URDFRobot/URDFLink/URDFJoint all extend THREE.Object3D, and this repo has three's
- * types. So the optional-call casts (`(joint as any).position?.set?.(...)`) are typed
- * directly — same runtime behaviour, but a typo in a pose write is now a compile
- * error. The `setJointValue` / `jointValue` FALLBACKS are kept even though 0.12.6's
- * types make the first branch always true: they are the original's tolerance for other
- * urdf-loader versions, and the API is reached through a duck-typed check, not a cast.
+ * The `setJointValue` / `jointValue` fallbacks are kept even though the pinned
+ * urdf-loader version always takes the first branch: they are tolerance for other
+ * versions, and the API is reached through a duck-typed check rather than a cast.
  */
 
 type UrdfRef = {
@@ -398,5 +389,5 @@ export class UrdfPoseService {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const urdfPoseService = new UrdfPoseService();

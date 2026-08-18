@@ -6,18 +6,17 @@ import { engine, globalStateObject } from "@/engine";
 import { useStateStore } from "@/resources/store/stateStore";
 import { useUiStore } from "@/resources/store/uiStore";
 
-// Port of `views/state-window/state-window.{ts,html}`. Shows the active
-// interaction state (read reactively from stateStore, the engine's one-way mirror
-// — plan §3.2), a "View Mode" button that puts the engine into ViewMode, and an
-// "Info" button that opens the user-info dialog (rendered in P9) and blinks red
-// 10× on mount (blinkInfoButton).
+// Shows the active interaction mode (read from `stateStore`, the engine's one-way
+// mirror), a button that returns the engine to view mode, and an Info button that
+// opens the user-info dialog — the Info button blinks red on mount to draw a new
+// user's attention to the interaction help behind it.
 export default function StateWindow() {
   const activeState = useStateStore((s) => s.activeState);
   const openDialog = useUiStore((s) => s.openDialog);
   const [infoRed, setInfoRed] = useState(false);
 
-  // blinkInfoButton(): toggle red 10 times every 0.5s, then stop. Cleaned up on
-  // unmount so StrictMode's double-mount does not leave a stray interval.
+  // Blink red 10 times, every 0.5s, then stop. Cleared on unmount so StrictMode's
+  // double-mount cannot leave a stray interval behind.
   useEffect(() => {
     let i = 0;
     const interval = setInterval(() => {
@@ -33,7 +32,7 @@ export default function StateWindow() {
 
   // ViewMode (state 1). onStateChange touches transformControls/orbitControls, which
   // exist only after the engine has mounted — guard so a pre-mount click is a no-op
-  // (P5 note: never call setState from a component before the canvas is mounted).
+  // setState drives the three.js controls, which only exist after the canvas mounts.
   function viewClicked() {
     if (!engine.isInitialized) return;
     globalStateObject.setState(1);

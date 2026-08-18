@@ -34,14 +34,10 @@ interface MenuDef {
   items: MenuItemDef[];
 }
 
-// Menu definitions ported from top-nav-bar.ts. Disabled entries stay disabled
-// stubs (plan §9 P6: "keep menu definitions incl. disabled stubs"). Enabled
-// entries either open a uiStore dialog (every one of them is rendered from AppLayout
-// as of P12, `algorithm` being the last to arrive) or run an action.
-//
-// The old client dispatched the two Export entries by LABEL inside
-// menu-entry.onItemClick (they carried no dialogName/eventPropagationName); here
-// they are plain onSelect actions calling the same persistency-handler methods.
+// The menu bar's contents. An entry either opens a dialog (all of which are rendered
+// from AppLayout) or runs an action directly. Entries marked disabled are placeholders
+// for features that are not implemented; they are kept so the menu structure stays
+// complete.
 function buildMenus(openDialog: (name: DialogName) => void): MenuDef[] {
   const enterSimulation = () => {
     if (!engine.isInitialized) return;
@@ -168,7 +164,7 @@ function MenuEntry({
   );
 }
 
-// Port of `views/top-nav-bar/top-nav-bar.{ts,html}` (+ menu-entry). The title, the
+// The menu bar itself. The title, the
 // five menus, the Algorithms button and the Simulation menu. Ctrl+S -> Save dialog
 // is wired in AppLayout (it owns the keyboard hook + the ctrlPlusSPressed bus).
 export default function TopNavBar() {

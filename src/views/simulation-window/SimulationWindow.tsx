@@ -11,20 +11,14 @@ import {
 } from "@/views/simulation-window/simulationModel";
 
 /**
- * P12 port of `views/simulation-window/{ts,html}` — the SimulationMode panel in
- * RightNav. One slider per Joint instance of an open Robotic system scene; dragging a
- * slider re-poses the cached urdf-loader robot and pushes the recomputed world poses
- * back into the gds instances + the live three.js objects (urdfPoseService).
+ * The simulation-mode panel: one slider per Joint instance of an open Robotic system
+ * scene. Dragging a slider re-poses the cached URDF robot and pushes the recomputed
+ * world poses back into the gds instances and the live three.js objects.
  *
- * REFRESH TRIGGERS (both ported from attached()):
- *   - `tabChanged`         — SimulationMode is per tab, so the joint list follows it.
- *   - `sceneInstanceMutated` — only when the payload names the ACTIVE SceneInstance
- *     (instances added/removed change the slider list). P5 widened this payload; the
- *     `sceneInstanceUuid` field it matches on is the one the plan §5 table specifies.
- * Both are coalesced through the original's 100 ms `requestRefresh()` timer.
- *
- * The old component mounted for the whole app lifetime and refreshed on every tab
- * change; RightNav only mounts it in SimulationMode, so it also refreshes on mount.
+ * The slider list is rebuilt on mount (RightNav mounts this only in simulation mode),
+ * on `tabChanged`, and on a `sceneInstanceMutated` naming the ACTIVE scene — adding or
+ * deleting instances changes which joints exist. The triggers are coalesced through a
+ * 100 ms timer so a cascade of mutations rebuilds the list once.
  */
 export default function SimulationWindow() {
   const [loading, setLoading] = useState(false);
@@ -32,8 +26,8 @@ export default function SimulationWindow() {
   const [jointControls, setJointControls] = useState<JointControl[]>([]);
 
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Guards against a slow refresh landing after a newer one (the runId pattern P8's
-  // AttributeWindow uses) and against setState after unmount.
+  // Guards against a slow refresh landing after a newer one, and against a setState
+  // after unmount.
   const runIdRef = useRef(0);
   const mountedRef = useRef(true);
 

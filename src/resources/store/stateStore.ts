@@ -1,13 +1,13 @@
 import { create } from "zustand";
 
 /**
- * Reactive, display-only mirror of the engine's interaction state (plan §3.2).
+ * Reactive, display-only mirror of the engine's interaction state.
  *
  * The authoritative state machine lives in the engine: `globalStateObject`
  * (engine/global-state-object.ts) holds `activeState` + `stateNames` and drives
- * the three.js controls in `onStateChange()`. React components (the P6
- * StateWindow) must not read engine fields directly, so `globalStateObject.setState`
- * pushes the new state name here and the view subscribes to `activeState`.
+ * the three.js controls in `onStateChange()`. React components must not read engine
+ * fields directly, so `globalStateObject.setState` pushes the new state name here and
+ * the state window subscribes to `activeState`.
  *
  * Keep this a thin mirror: the engine remains the single source of truth. Nothing
  * here mutates engine state — writing happens the other way (engine -> store).

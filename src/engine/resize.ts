@@ -1,10 +1,8 @@
 import { globalObject } from "@/engine/global-definition";
 
 /**
- * Port of the old `resources/resize.ts` (DI-stripping recipe): GlobalDefinition
- * becomes a module-singleton import. Body unchanged. Called by ThreeCanvas's
- * ResizeObserver (replacing the old window `resize` listener) to keep both cameras
- * and the renderer in sync with the container size.
+ * Keeps both cameras and the renderer in step with the canvas container. Called by
+ * ThreeCanvas's ResizeObserver and by the window resize listener.
  */
 export class Resize {
   private globalObjectInstance = globalObject;
@@ -47,5 +45,5 @@ export class Resize {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const resize = new Resize();

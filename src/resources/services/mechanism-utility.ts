@@ -3,15 +3,17 @@ import { globalObject } from "@/engine/global-definition";
 import { metaUtility } from "./meta-utility";
 import { expressionUtility } from "./expression-utility";
 import { instanceUtility } from "./instance-utility";
+import { MECHANISM_ATTRIBUTE_TYPE_UUID } from "@/constants";
 
 /**
- * Port of the old modeling `resources/services/mechanism_utility.ts` (plan §10: ★).
- * DI stripped: GlobalDefinition / MetaUtility / ExpressionUtility / InstanceUtility
- * become module-singleton imports. Runs the `mechanism` code strings each render
- * tick — the animator's render loop calls `executeAllMechanisms()` when
- * `globalObject.runMechanism` is set (P3 un-stubs that call in animator.ts).
+ * Runs the "mechanism" code strings of the open scene.
  *
- * Utility class for executing mechanisms on instances.
+ * A mechanism is an attribute whose value is a function body; the animator calls
+ * `executeAllMechanisms()` from the render loop whenever `globalObject.runMechanism` is
+ * set. Candidates are pre-filtered on the value containing "function" — a cheap string
+ * test that avoids a meta-attribute lookup per attribute instance — and only those whose
+ * meta attribute really is of the mechanism type are executed, against the instance that
+ * owns them.
  */
 export class MechanismUtility {
   private globalObjectInstance = globalObject;
@@ -32,13 +34,12 @@ export class MechanismUtility {
       const targetAttributeInstances = allAttributeInstances.filter((attributeInstance) =>
         attributeInstance.value.toString().includes("function"),
       );
-      //check if attributeType of meta attribute is mechanism -> a8e33bad-9eed-4a24-a4b2-406c5439d13a
       if (targetAttributeInstances.length > 0) {
         for (const attributeInstance of targetAttributeInstances) {
           const attributeTypeUUID = attributeInstance.uuid_attribute;
           const attribute = await this.metaUtility.getMetaAttribute(attributeTypeUUID);
           const attributeType = attribute?.attribute_type;
-          if (attributeType?.uuid === "a8e33bad-9eed-4a24-a4b2-406c5439d13a") {
+          if (attributeType?.uuid === MECHANISM_ATTRIBUTE_TYPE_UUID) {
             const generalMechanismCode = attributeInstance.value.toString();
             let contextInstance: ObjectInstance | undefined;
             if (attributeInstance.assigned_uuid_class_instance) {
@@ -73,5 +74,5 @@ export class MechanismUtility {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const mechanismUtility = new MechanismUtility();

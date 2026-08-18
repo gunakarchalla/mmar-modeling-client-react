@@ -1,22 +1,20 @@
 import { create } from "zustand";
 
-// Reactive half of the tab bar. Replaces main-body-tab-bar.ts' local state plus
-// `globalObjectInstance.selectedTab`. Each entry mirrors one open SceneInstance
-// tab; the engine's `globalObject.tabContext[]` (created in P2/P3) holds the
-// matching THREE.Scene / dragObjects for the same index.
+// Reactive half of the tab bar: one entry per open SceneInstance. The engine's
+// `globalObject.tabContext[]` holds the matching THREE scene and drag objects at the
+// SAME index.
 //
-// SINGLE MUTATION PATH: once the engine exists, openTab/closeTab/selectTab here
-// must also mutate `globalObject.tabContext` + `globalObject.selectedTab` so the
-// two never drift. The engine wiring is deferred to P3 (instance-utility's
-// createTabContextSceneInstance drives this store); P1 only owns the React state.
-// See plan.md §3.1 "single mutation path" and P6 for the exact closeTab rules.
+// SINGLE MUTATION PATH: the two must never drift, so tabs are opened, closed and
+// selected through one place that updates both — `instance-utility`'s
+// `createTabContextSceneInstance` and `views/layout/tabActions`. Nothing else should
+// touch `globalObject.selectedTab` or splice `tabContext` directly.
 
 export interface TabInfo {
   /** SceneInstance name shown on the tab. */
   name: string;
   /** SceneInstance uuid — stable key for React and for locating the tab. */
   uuid: string;
-  /** True once >=2 access entries make the scene collaborative (P10). */
+  /** True once at least two users hold access, which makes the scene collaborative. */
   isShared: boolean;
 }
 
@@ -27,13 +25,13 @@ interface TabsState {
 
   /** Append a tab and select it; returns its index. */
   openTab: (tab: TabInfo) => number;
-  /** Close the tab at `index`, adjusting the selection like the old closeTab. */
+  /** Close the tab at `index`, clamping the selection to a still-valid tab. */
   closeTab: (index: number) => void;
   /** Activate an existing tab by index. */
   selectTab: (index: number) => void;
   /** Rename the tab at `index` (its SceneInstance name shown on the tab). */
   renameTab: (index: number, name: string) => void;
-  /** Mark a tab shared/unshared (used when collaboration attaches, P10). */
+  /** Mark a tab shared or unshared (set when a collaboration session attaches). */
   setTabShared: (index: number, isShared: boolean) => void;
 }
 
@@ -54,7 +52,7 @@ export const useTabsStore = create<TabsState>((set) => ({
     set((s) => {
       if (index < 0 || index >= s.tabs.length) return s;
       const tabs = s.tabs.filter((_, i) => i !== index);
-      // Mirror the old main-body-tab-bar.closeTab selection rules: keep a valid
+      // Selection rules on close: keep a valid
       // selection, clamp to the last tab, and drop to -1 when nothing is left.
       let selectedTab = s.selectedTab;
       if (tabs.length === 0) {

@@ -19,20 +19,17 @@ import { remoteCursorRenderer } from "@/resources/collaboration/remote-cursor-re
 import { remoteSelectionRenderer } from "@/resources/collaboration/remote-selection-renderer";
 
 /**
- * Tab select/close operations — the "single mutation path" for tab *selection* and
- * *closing* (opening lives in instance-utility.createTabContextSceneInstance, P3).
- * Ported from `views/main-body-tab-bar/main-body-tab-bar.ts` (clickedTab / closeTab).
- * Each operation mutates BOTH `globalObject.tabContext`/`selectedTab` (the engine)
- * and the reactive `tabsStore`, keeping the two in lockstep.
+ * Selecting, renaming and closing tabs — the single mutation path for everything except
+ * opening, which belongs to `instance-utility.createTabContextSceneInstance`. Each
+ * operation updates BOTH the engine (`globalObject.tabContext` / `selectedTab`) and the
+ * reactive `tabsStore`, which is what keeps the two in lockstep.
  *
- * The old `closeTab` always jumped selection to `index-1`/`0`. Here the store's
- * `closeTab` owns the selection-clamp rules (which preserve the current selection
- * where possible — the P1 improvement); the engine is then reconciled to whatever
- * index the store settled on, so the two never drift.
+ * The store owns the selection-clamp rules on close — it preserves the current
+ * selection where it can — and the engine is then reconciled to whatever index the
+ * store settled on, so the two can never drift apart.
  *
- * The engine work (scene swap, transform controls) is only valid after the canvas
- * has mounted; every operation is a no-op on the engine side until then (tabs can
- * only exist post-mount anyway), but the store side always runs.
+ * The engine half (scene swap, transform controls) is only valid once the canvas has
+ * mounted; until then it is skipped while the store half still runs.
  */
 
 // Engine half of clickedTab: swap the active THREE.Scene to the tab's scene and
@@ -49,7 +46,7 @@ async function applyEngineTabSelection(index: number): Promise<void> {
   if (!tab) return;
 
   // Undo is scoped to the scene you are looking at (same rule as the metamodeling
-  // twin's per-tab history), so the controls follow the selection.
+  // per-tab history), so the controls follow the selection.
   historyService.setActiveScene(tab.sceneInstance);
 
   const threeScene = tab.threeScene;
@@ -166,19 +163,19 @@ export async function closeTab(index: number): Promise<void> {
     return;
   }
 
-  // Tear down any shared session before removing the tab so the websocket is closed
-  // gracefully and the user disappears from other clients' awareness (P10).
-  // P11: drop this tab's remote cursor/selection helpers FIRST — clearForTab needs the
+  // Drop this tab's remote cursor and selection helpers FIRST: `clearForTab` needs the
   // session alive to unsubscribe its awareness handler, and the tabContext entry alive
-  // to remove the helpers from the right scene. Same order as the old main-body-tab-bar.
+  // to remove the helpers from the right scene.
   remoteCursorRenderer.clearForTab(index);
   remoteSelectionRenderer.clearForTab(index);
+
+  // Then tear the shared session down, so the websocket closes gracefully and the user
+  // disappears from the other clients' awareness.
   //
-  // KNOWN LIMITATION, faithful to the old client: sessions are keyed by tab INDEX, and
-  // the splice below shifts every later tab down one. Their sessions keep the old key,
-  // so with two shared tabs open, closing the lower one leaves the survivor's session
-  // stranded (forTab() misses it, and its observers still write to the old index).
-  // Recorded in state.json → known_issues rather than redesigned here.
+  // KNOWN LIMITATION: sessions are keyed by tab INDEX, and the splice below shifts every
+  // later tab down one while their sessions keep the old key. With two shared tabs open,
+  // closing the lower one therefore strands the survivor's session — `forTab()` misses
+  // it, and its observers still write to the old index.
   sharedDocService.detach(index);
 
   // Remove the tab from the engine's tabContext (same position the store removes).

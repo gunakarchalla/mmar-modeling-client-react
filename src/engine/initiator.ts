@@ -10,55 +10,26 @@ import { sceneInitiator } from "@/engine/scene-initiator";
 import { resize } from "@/engine/resize";
 
 /**
- * Port of the old `resources/initiator.ts` (DI-stripping recipe): every injected
- * dependency becomes a module-singleton import. Deviations from the original, all
- * required by the React port (plan §3.1 mount facade):
+ * One-time boot of the three.js world: cameras, orbit controls, the mouse pointer
+ * sphere, the invisible intersection plane, the scene itself (delegated to
+ * `sceneInitiator`) and the global DOM event listeners.
  *
- *  - the old DOM-polling `initDomObjectElements`/`setElementsById('container', …)`
- *    flow is superseded by `engine.mount(container)` passing the ref directly. Those
- *    methods are kept for fidelity but are no longer used.
- *  - the XRButton creation (old init appended it to document.body with a polling
- *    styler + `renderer.xr.enabled = true`) is REMOVED here: the XRButton is deferred
- *    to P13 via `engine.createXRButton()`, and enabling XR + wiring the
- *    sessionstart/sessionend listeners moves into `arInitiator.enableXR()` (called
- *    from `engine.mount`).
- *  - `OrbitControls.addEventListener('mouseUp', …)` is cast to `any` (three's
- *    EventDispatcher typing only knows change/start/end) and the now-invalid
- *    `{ passive: true }` option (EventDispatcher takes no options arg) is dropped.
- *  - 2D orthographic camera is the modeling default (`normalCamera = normalCamera2d`),
- *    matching the original (the metamodeling twin defaulted to 3D).
+ * `engine.mount(container)` is the only caller — it passes the canvas host element in
+ * directly, which is why there is no DOM lookup here. XR is enabled separately by
+ * `arInitiator.enableXR()` (also from `engine.mount`), and the XR entry button is
+ * created on demand by `engine.createXRButton()`.
+ *
+ * 2D (orthographic) is the modeling default: `normalCamera` starts as `normalCamera2d`.
  */
 export class Initiator {
   private globalObjectInstance = globalObject;
   private globalStateObject = globalStateObject;
   private arInitiator = arInitiator;
   private mouseObject = mouseObject;
-  private interactonHandler = interactionHandler;
+  private interactionHandler = interactionHandler;
   private logger = logger;
   private sceneInitiator = sceneInitiator;
   private resize = resize;
-
-  //------------------------------------------------
-  //this gets all the dom elements for the globalObject
-  //------------------------------------------------
-  async initDomObjectElements() {
-    // event on pointermove call updateMousePosText
-    await this.setElementsById("container", this.globalObjectInstance, "elementContainer");
-    this.logger.log("init DomElementObjects to globalObject", "done");
-  }
-
-  //custom function that tries to query an element until it is available
-  async setElementsById(id: string, object: any, propertyToAssign: string) {
-    const interval = window.setInterval(() => {
-      object[propertyToAssign] = document.querySelector("#" + id);
-
-      if (object[propertyToAssign]) {
-        clearInterval(interval);
-      } else {
-        this.logger.log("element " + id + " undefined", "close");
-      }
-    }, 1000);
-  }
 
   async init() {
     const containerWidth = this.globalObjectInstance.elementContainer.clientWidth;
@@ -99,13 +70,8 @@ export class Initiator {
 
     await this.createIntersectionPlane();
 
-    // XRButton creation is deferred to P13 (engine.createXRButton); enabling XR +
-    // the sessionstart/sessionend listeners live in arInitiator.enableXR(), called
-    // from engine.mount().
-
-    //added for VR support
-    // we set the animation loop that is always called.
-    //we bind .this since a callback has a higher order function
+    // The render loop runs through the renderer's animation loop so that it also
+    // drives WebXR sessions (bound because the callback loses `this`).
     this.globalObjectInstance.renderer.setAnimationLoop(this.arInitiator.render.bind(this.arInitiator));
   }
 
@@ -143,22 +109,17 @@ export class Initiator {
     this.globalObjectInstance.orbitControls2d.maxAzimuthAngle = 0; // radians
     this.globalObjectInstance.orbitControls2d.minAzimuthAngle = 0; // radians
 
-    if (!this.globalObjectInstance.threeDimensional) {
-      this.globalObjectInstance.orbitControls = this.globalObjectInstance.orbitControls2d;
-    }
-    if (this.globalObjectInstance.threeDimensional) {
-      this.globalObjectInstance.orbitControls = this.globalObjectInstance.orbitControls3d;
-    }
+    this.globalObjectInstance.orbitControls = this.globalObjectInstance.threeDimensional
+      ? this.globalObjectInstance.orbitControls3d
+      : this.globalObjectInstance.orbitControls2d;
 
-    this.globalObjectInstance.orbitControls3d.addEventListener("change", () => (this.globalObjectInstance.render = true));
-    (this.globalObjectInstance.orbitControls3d as any).addEventListener("mouseUp", () => (this.globalObjectInstance.render = true));
-    this.globalObjectInstance.orbitControls2d.addEventListener("change", () => (this.globalObjectInstance.render = true));
-    (this.globalObjectInstance.orbitControls2d as any).addEventListener("mouseUp", () => (this.globalObjectInstance.render = true));
-
-    //save state of orbitcontrols
-    this.globalObjectInstance.orbitControls2d.saveState();
-    //save state of orbitcontrols
-    this.globalObjectInstance.orbitControls3d.saveState();
+    // Any camera move must trigger a redraw. `mouseUp` is not in three's
+    // EventDispatcher typing, hence the cast.
+    for (const controls of [this.globalObjectInstance.orbitControls2d, this.globalObjectInstance.orbitControls3d]) {
+      controls.addEventListener("change", () => (this.globalObjectInstance.render = true));
+      (controls as any).addEventListener("mouseUp", () => (this.globalObjectInstance.render = true));
+      controls.saveState();
+    }
   }
 
   createSphereMesh(color: THREE.Color) {
@@ -173,17 +134,14 @@ export class Initiator {
   async initEventListeners() {
     this.globalStateObject.setState(0);
 
-    // we add the method to a global variable so that we can remove the listener later with just calling the variable
-    this.globalObjectInstance.onDocumentMouseDownEventListener = await this.interactonHandler.onDocumentMouseDown.bind(this.interactonHandler);
-    // we do not init the event listener here since it must be initialized after the transform controls are initialized
-    //this.globalObjectInstance.renderer.domElement.addEventListener('pointerdown', this.globalObjectInstance.onDocumentMouseDownEventListener, false);
+    // Keep the bound handler around so the same reference can be added and removed as
+    // a listener. It is registered by `sceneInitiator.initTransformControls`, not here:
+    // the transform controls must claim `pointerdown` first.
+    this.globalObjectInstance.onDocumentMouseDownEventListener = this.interactionHandler.onDocumentMouseDown.bind(this.interactionHandler);
 
     this.globalObjectInstance.elementContainer.addEventListener("pointermove", this.mouseObject.updateMousePos.bind(this.mouseObject), { passive: true });
 
-    //init resize event listener
     window.addEventListener("resize", this.resize.resize.bind(this.resize));
-
-    //AR listeners are registered by arInitiator.enableXR() (called from engine.mount).
   }
 
   async createIntersectionPlane() {
@@ -200,5 +158,5 @@ export class Initiator {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const initiator = new Initiator();

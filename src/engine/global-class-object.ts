@@ -4,17 +4,14 @@ import { logger } from "@/resources/services/logger";
 import { metaUtility } from "@/resources/services/meta-utility";
 
 /**
- * Port of the old `resources/global_class_object.ts` (DI-stripping recipe):
- * GlobalDefinition / Logger injections become module-singleton imports. The old
- * class also injected MetaUtility + FileUtility; FileUtility was unused and is
- * dropped. MetaUtility is used in `getIcon` (the P7 palette button-groups) to
- * resolve a `getImageByUUID(...)`-referenced icon file from the `Files` cache.
- * Bodies are otherwise unchanged.
+ * The palette's classes for the open scene type, and which of them is armed for
+ * drawing. `initClasses()` flattens the scene type's classes into three parallel
+ * arrays (name / geometry / uuid) so drawing does not have to walk the metamodel
+ * again on every click.
  *
- * P7 UN-STUB: the `getImageByUUID(` branch below now reads the referenced file's
- * data-URL from `metaUtility.Files.get(uuid)[1]`, matching the old
- * `this.metaUtility.Files.get(...)[1]`. (The engine now imports a service — an
- * edge that already exists via animator -> mechanism-utility; verified no cycle.)
+ * `getIcon` digs the palette button's image out of a vizRep code string: it prefers an
+ * `icon` declaration and falls back to a `map`, accepting either an inline data-URL or
+ * a `getImageByUUID(...)` reference resolved through the meta-utility file cache.
  */
 export class GlobalClassObject {
   classUUID: UUID[];
@@ -54,11 +51,6 @@ export class GlobalClassObject {
   }
   getSelectedClassUUID() {
     return this.selectedClassUUID;
-  }
-  setSelectedClass(index: number) {
-    this.selectedClass = this.classNames[index];
-    this.selectedClassUUID = this.classUUID[index];
-    this.onObjectChange();
   }
   setSelectedClassByUUID(theUUID: string) {
     const index = this.classUUID.findIndex((uuid) => uuid === theUUID);
@@ -112,5 +104,5 @@ export class GlobalClassObject {
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const globalClassObject = new GlobalClassObject();

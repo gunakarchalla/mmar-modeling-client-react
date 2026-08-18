@@ -6,16 +6,15 @@ import { metaUtility } from "./meta-utility";
 import { fileUtility } from "./file-utility";
 
 /**
- * Port of the old modeling `resources/expression_utility.ts` — the `gc.expression.*`
- * API surface the VizRep code strings call. DI stripped: globalObject /
- * instanceUtility / eventBus (was EventAggregator) / metaUtility / fileUtility become
- * module-singleton imports. Bodies unchanged (including the `readyForVizRepUpdate`
- * lock + bus publishes that drive the live-preview loop).
+ * The `gc.expression.*` API that stored vizRep and mechanism code strings call.
  *
- * MODELING-SPECIFIC (differs from the metamodeling twin): keeps `getImageByUUID`
- * (File -> data-URL, for image/icon vizreps) and `getGltfByUUID` (File -> ArrayBuffer,
- * for glTF/urdf loaders) instead of the twin's single `getFile`. Both resolve the
- * cached `File` through `metaUtility.getFileByUUID` (the modeling `Files` map).
+ * Like `graphic-context`, the method surface is a contract with code held in the
+ * database: names and parameter order must not change, and methods are kept even when
+ * nothing in this repository calls them.
+ *
+ * The `attrval*` family reads attribute values (by meta uuid, by meta name, or for an
+ * arbitrary instance), the relation helpers walk incoming and outgoing relations, and
+ * the `checkForVisualizationUpdate*` pair asks the vizRep pipeline for a redraw.
  */
 export class ExpressionUtility {
   private globalObjectInstance = globalObject;
@@ -117,13 +116,7 @@ export class ExpressionUtility {
     instanceUUID: string,
     metaAttributeUUID: string,
   ): Promise<AttributeInstance | undefined> {
-    const instance = await this.instanceUtility.getAnyInstance(instanceUUID);
-    const attributeInstance = await this.instanceUtility.getAttributeInstanceFromAnyInstance(
-      metaAttributeUUID,
-      instance!.uuid,
-      "uuid",
-    );
-    return attributeInstance;
+    return this.findAttributeInstance(instanceUUID, metaAttributeUUID);
   }
 
   /**
@@ -134,12 +127,7 @@ export class ExpressionUtility {
    * @param {any} value - The new value of the attribute instance.
    */
   async setAttrvalByInstanceUUID(instanceUUID: string, metaAttributeUUID: string, value: any) {
-    const instance = await this.instanceUtility.getAnyInstance(instanceUUID);
-    const attributeInstance = await this.instanceUtility.getAttributeInstanceFromAnyInstance(
-      metaAttributeUUID,
-      instance!.uuid,
-      "uuid",
-    );
+    const attributeInstance = await this.findAttributeInstance(instanceUUID, metaAttributeUUID);
     attributeInstance!.value = value;
   }
 
@@ -209,11 +197,7 @@ export class ExpressionUtility {
     instanceUUID: string,
     metaClassUUID: string | null = null,
   ): Promise<RelationclassInstance[]> {
-    const relationClasses = await this.instanceUtility.getIncomingRelationsFromInstance(
-      instanceUUID,
-      metaClassUUID,
-    );
-    return relationClasses;
+    return this.instanceUtility.getIncomingRelationsFromInstance(instanceUUID, metaClassUUID);
   }
 
   /**
@@ -227,11 +211,7 @@ export class ExpressionUtility {
     instanceUUID: string,
     metaClassUUID: string | null = null,
   ): Promise<RelationclassInstance[]> {
-    const relationClasses = await this.instanceUtility.getOutgoingRelationsFromInstance(
-      instanceUUID,
-      metaClassUUID,
-    );
-    return relationClasses;
+    return this.instanceUtility.getOutgoingRelationsFromInstance(instanceUUID, metaClassUUID);
   }
 
   /**
@@ -247,51 +227,48 @@ export class ExpressionUtility {
   }
 
   /**
-   *  Checks if there is a visual update
+   * Wait for any vizRep update in flight to finish, then claim the lock for the update
+   * we are about to request. The pipeline runs asynchronously, so without this two
+   * requests could interleave and redraw against a half-updated instance.
    */
-  async checkForVisualizationUpdate() {
-    //wait while the vizrep update is not ready since it is running in another thread
+  private async claimVizRepUpdate(): Promise<void> {
     while (!this.globalObjectInstance.readyForVizRepUpdate) {
-      // wait 100ms
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     this.globalObjectInstance.readyForVizRepUpdate = false;
+  }
+
+  /** Ask the vizRep pipeline to re-evaluate the whole open scene. */
+  async checkForVisualizationUpdate() {
+    await this.claimVizRepUpdate();
     this.eventAggregator.publish("checkForVizRepUpdate");
   }
 
-  /**
-   *  Checks if there is a visual update regarding a specific AttributeInstance
-   */
+  /** Ask the vizRep pipeline to re-evaluate just the instance holding one attribute. */
   async checkForVisualizationUpdateByAttributeUUID(instanceUUID: string, metaAttributeUUID: string) {
+    const attributeInstance = await this.findAttributeInstance(instanceUUID, metaAttributeUUID);
+    if (!attributeInstance) return;
+
+    await this.claimVizRepUpdate();
+    this.eventAggregator.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
+  }
+
+  /** The attribute instance of `metaAttributeUUID` on any kind of instance. */
+  private async findAttributeInstance(instanceUUID: string, metaAttributeUUID: string): Promise<AttributeInstance | undefined> {
     const instance = await this.instanceUtility.getAnyInstance(instanceUUID);
-    const attributeInstance = await this.instanceUtility.getAttributeInstanceFromAnyInstance(
-      metaAttributeUUID,
-      instance!.uuid,
-      "uuid",
-    );
-    if (attributeInstance) {
-      //wait while the vizrep update is not ready since it is running in another thread
-      while (!this.globalObjectInstance.readyForVizRepUpdate) {
-        // wait 100ms
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      this.globalObjectInstance.readyForVizRepUpdate = false;
-      this.eventAggregator.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
-    }
+    return this.instanceUtility.getAttributeInstanceFromAnyInstance(metaAttributeUUID, instance!.uuid, "uuid");
   }
 
+  /** A cached file as a data-URL, for image and icon vizReps. */
   async getImageByUUID(fileUUID: UUID): Promise<string> {
-    const file = this.metaUtility.getFileByUUID(fileUUID);
-    const str = await this.fileUtility.FiletoDataUrl(file);
-    return str;
+    return this.fileUtility.FiletoDataUrl(this.metaUtility.getFileByUUID(fileUUID));
   }
 
+  /** A cached file as raw bytes, for the glTF and URDF loaders. */
   async getGltfByUUID(fileUUID: UUID): Promise<ArrayBuffer> {
-    const file = this.metaUtility.getFileByUUID(fileUUID);
-    const str = await file.arrayBuffer();
-    return str;
+    return this.metaUtility.getFileByUUID(fileUUID).arrayBuffer();
   }
 }
 
-// Module singleton (replaces the Aurelia @singleton() DI registration).
+// Module singleton — one shared instance.
 export const expressionUtility = new ExpressionUtility();

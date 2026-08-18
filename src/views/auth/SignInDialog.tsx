@@ -19,14 +19,12 @@ interface Props {
 }
 
 /**
- * Replaces dialogs/user-management (user-management.ts|html). Logs in against the
- * authStore; on success the store publishes the `login` event (which the
- * scenegroup subscribes to in P7) and this dialog closes. The old "1s delay then
- * open if no valid token" lifecycle now lives in App.tsx: it renders this dialog
- * whenever there is no authenticated user.
+ * The sign-in form. Logs in through `authStore`; on success the store publishes the
+ * `login` event, which is what makes the scene tree build itself, and this dialog
+ * closes. AppLayout decides when to show it: whenever no user is authenticated.
  *
- * Dev autofill: the old client prefilled from process.env.USERNAME/PASSWORD; here
- * the fields seed from VITE_USERNAME/VITE_PASSWORD when set (unset in production).
+ * The fields seed from `VITE_USERNAME` / `VITE_PASSWORD` when those are set, which
+ * saves typing during development. Both are unset in production.
  */
 export default function SignInDialog({ open, onClose }: Props) {
   const [username, setUsername] = useState(DEV_USERNAME ?? "");
@@ -52,7 +50,7 @@ export default function SignInDialog({ open, onClose }: Props) {
   }
 
   return (
-    // The old dialog is non-dismissable until logged in; disable backdrop/escape close.
+    // Non-dismissable until logged in: no backdrop or escape close.
     <Dialog open={open} maxWidth="xs" fullWidth disableEscapeKeyDown>
       <DialogTitle>User Management</DialogTitle>
       <DialogContent>
