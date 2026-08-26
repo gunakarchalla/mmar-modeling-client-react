@@ -242,7 +242,11 @@ export class GraphicContext {
   //load a predefined gltf to the object
   //!! this must load async in the vizRep
   async graphic_gltf(objectString: string | ArrayBuffer, x_rel?: number, y_rel?: number, z_rel?: number, scale?: number[]) {
-    const effectiveScale = scale && scale.length === 3 ? scale : [1, 1, 1];
+    // A glTF node carries its own scale in its node matrix — that is how a vizRep
+    // authors e.g. the flattened sphere of "Place" — and `mergeOjects` later bakes
+    // `mesh.scale` into the geometry. An explicit `scale` therefore has to multiply
+    // that authored scale, and no `scale` at all must leave it untouched.
+    const extraScale = scale && scale.length === 3 ? scale : undefined;
     // return array
     const meshes: THREE.Mesh[] = [];
 
@@ -273,7 +277,9 @@ export class GraphicContext {
         mesh.position.x = x_rel ? mesh.position.x + x_rel : mesh.position.x;
         mesh.position.y = y_rel ? mesh.position.y + y_rel : mesh.position.y;
         mesh.position.z = z_rel ? mesh.position.z + z_rel : mesh.position.z;
-        mesh.scale.set(effectiveScale[0], effectiveScale[1], effectiveScale[2]);
+        if (extraScale) {
+          mesh.scale.set(mesh.scale.x * extraScale[0], mesh.scale.y * extraScale[1], mesh.scale.z * extraScale[2]);
+        }
 
         this.object3D[mesh.uuid] = mesh;
         meshes.push(mesh);

@@ -168,3 +168,45 @@ describe("deleteObject", () => {
     expect(fakeGlobal.globalObject.buttonObjects).toHaveLength(0);
   });
 });
+
+/**
+ * Minimal glTF holding one triangle under a node whose matrix flattens it on z.
+ * Real vizReps author flattened primitives exactly this way — the "Sphere" node of
+ * the Petri-net "Place" model carries a `matrix` with 0.1 in the z-scale slot.
+ */
+function makeFlattenedGltf(): string {
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const bytes = new Uint8Array(positions.buffer);
+  const uri = "data:application/octet-stream;base64," + btoa(String.fromCharCode(...bytes));
+
+  return JSON.stringify({
+    asset: { version: "2.0" },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    // column-major; the 0.1 in slot 10 is the z scale
+    nodes: [{ name: "Sphere", mesh: 0, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 1] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [1, 1, 0] },
+    ],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: bytes.byteLength, target: 34962 }],
+    buffers: [{ byteLength: bytes.byteLength, uri }],
+  });
+}
+
+describe("graphic_gltf", () => {
+  it("keeps the scale a glTF node bakes into its own matrix", async () => {
+    const [mesh] = await graphicContext.graphic_gltf(makeFlattenedGltf());
+
+    // Regression: the flattened spheres of Place / Variable / Start Event rendered as
+    // full spheres because an unconditional scale.set() overwrote the node's own scale.
+    expect(mesh.scale.z).toBeCloseTo(0.1);
+    expect(mesh.scale.x).toBeCloseTo(1);
+  });
+
+  it("multiplies an explicit scale onto the node's own scale", async () => {
+    const [mesh] = await graphicContext.graphic_gltf(makeFlattenedGltf(), 0, 0, 0, [2, 2, 2]);
+
+    expect(mesh.scale.toArray().map((v) => Number(v.toFixed(3)))).toEqual([2, 2, 0.2]);
+  });
+});
