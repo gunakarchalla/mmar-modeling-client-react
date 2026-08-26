@@ -92,7 +92,7 @@ export default function AppLayout() {
             autoSaveId="mmar-modeling-panels"
             style={{ flex: 1, minHeight: 0 }}
           >
-            <Panel defaultSize={20} minSize={12} maxSize={35}>
+            <Panel defaultSize={20} minSize={0} maxSize={35}>
               <LeftNav />
             </Panel>
             <ResizeHandle />
@@ -105,7 +105,7 @@ export default function AppLayout() {
               </Box>
             </Panel>
             <ResizeHandle />
-            <Panel defaultSize={22} minSize={12} maxSize={40}>
+            <Panel defaultSize={22} minSize={0} maxSize={40}>
               <RightNav />
             </Panel>
           </PanelGroup>
