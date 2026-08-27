@@ -102,7 +102,12 @@ vi.mock("@/resources/services/file-utility", () => ({ fileUtility: mocks.fileUti
 import AttributeWindow from "./AttributeWindow";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
+import { useLogStore } from "@/resources/store/logStore";
 import { useSelectionStore } from "@/resources/store/selectionStore";
+import { NOT_ALLOWED_MESSAGE } from "@/resources/services/metamodel-constraints";
+
+/** The Float attribute type's regex, as the database ships it. */
+const FLOAT_REGEX = "^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$";
 
 const CLASS_INSTANCE_UUID = "ci-1";
 const SCENE_INSTANCE_UUID = "si-1";
@@ -202,6 +207,7 @@ beforeEach(() => {
   ) as Record<string, boolean>;
   useUiStore.setState({ dialogs: closed as never, dialogPayloads: {} });
   useSelectionStore.setState({ selectedInstanceUuid: null, selectedType: null, revision: 0 });
+  useLogStore.setState({ logArray: [], snackbar: { open: false, message: "", severity: "info" } });
 });
 
 describe("AttributeWindow", () => {
@@ -257,6 +263,72 @@ describe("AttributeWindow", () => {
     expect(published).toHaveLength(1);
     expect(published[0].uuid).toBe("ai-1");
     await waitFor(() => expect(mocks.globalObject.doSceneInstancePatch).toBe(true));
+  });
+
+  // The reported bug: letters typed into a Float attribute were written onto the
+  // AttributeInstance, so the next autosave was answered with 403 — which alerted
+  // "not authorized", rolled the scene back and left the canvas throwing vizrep /
+  // transform-control / ray errors against objects that had just been removed.
+  it("refuses a value that breaks the attribute type's regex, with the metamodel snackbar", async () => {
+    const classInstance = selectClassInstanceWith([attributeInstanceJson({ value: "1.5" })]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(
+      metaAttribute({ attribute_type: { uuid: "at-float", name: "Float", regex_value: FLOAT_REGEX, role: null, has_table_attribute: [] } }),
+    );
+    const published: AttributeInstance[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (p) => published.push(p));
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    const input = await screen.findByDisplayValue("1.5");
+
+    fireEvent.change(input, { target: { value: "abc" } });
+    fireEvent.blur(input);
+    sub.dispose();
+
+    // The refused value reaches neither the model nor the save nor the vizrep...
+    expect(classInstance.attribute_instance[0].value).toBe("1.5");
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
+    expect(published).toHaveLength(0);
+    // ...the field snaps back to the stored value...
+    expect((input as HTMLInputElement).value).toBe("1.5");
+    // ...and the user is told, through the same snackbar a refused relation raises.
+    const snackbar = useLogStore.getState().snackbar;
+    expect(snackbar.open).toBe(true);
+    expect(snackbar.severity).toBe("error");
+    expect(snackbar.message).toBe(NOT_ALLOWED_MESSAGE);
+  });
+
+  it("commits a value that satisfies the attribute type's regex", async () => {
+    const classInstance = selectClassInstanceWith([attributeInstanceJson({ value: "1.5" })]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(
+      metaAttribute({ attribute_type: { uuid: "at-float", name: "Float", regex_value: FLOAT_REGEX, role: null, has_table_attribute: [] } }),
+    );
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    const input = await screen.findByDisplayValue("1.5");
+
+    fireEvent.change(input, { target: { value: "-2.75e3" } });
+    fireEvent.blur(input);
+
+    expect(classInstance.attribute_instance[0].value).toBe("-2.75e3");
+    expect(useLogStore.getState().snackbar.open).toBe(false);
+    await waitFor(() => expect(mocks.globalObject.doSceneInstancePatch).toBe(true));
+  });
+
+  it("leaves the AttributeInstance untouched until the edit is committed", async () => {
+    const classInstance = selectClassInstanceWith([attributeInstanceJson()]);
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    const input = await screen.findByDisplayValue("hello");
+
+    // Typing alone must not reach the model: an uncommitted value would still be sent
+    // by the next autosave, which is how an in-progress edit could be refused.
+    fireEvent.change(input, { target: { value: "edite" } });
+
+    expect(classInstance.attribute_instance[0].value).toBe("hello");
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
   });
 
   it("renders a dropdown for a faceted attribute and commits the picked facet", async () => {

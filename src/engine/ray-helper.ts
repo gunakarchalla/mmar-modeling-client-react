@@ -143,7 +143,20 @@ export class RayHelper {
     });
   }
 
-  shootRayFromObject(fromObject: THREE.Mesh, toObject: THREE.Mesh) {
+  /**
+   * The nearest point on `toObject` seen from `fromObject`, or undefined when there is
+   * no such point.
+   *
+   * Both call sites in the animator resolve their objects by walking the scene and cast
+   * the result to a Mesh, so either can be undefined — a relation whose endpoints were
+   * removed from the scene (a save rolled back, an element deleted) keeps being drawn
+   * for as long as its line is still in `updateLinesArray`. Answering undefined makes
+   * the animator skip that line's frame; dereferencing it threw
+   * "Cannot read properties of undefined (reading 'getWorldPosition')" once per frame.
+   */
+  shootRayFromObject(fromObject: THREE.Mesh | undefined, toObject: THREE.Mesh | undefined) {
+    if (!fromObject || !toObject) return undefined;
+
     const direction = new THREE.Vector3();
     const fromPosition: THREE.Vector3 = new THREE.Vector3();
     const toPosition: THREE.Vector3 = new THREE.Vector3();

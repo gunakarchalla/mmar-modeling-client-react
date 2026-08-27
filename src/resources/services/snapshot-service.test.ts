@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject }));
 
 import { snapshotService } from "./snapshot-service";
+import { globalSelectedObject } from "@/engine/global-selected-object";
 
 function fakeScene(): any {
   return { uuid: "", remove: vi.fn(), traverse: vi.fn() };
@@ -137,6 +138,43 @@ describe("SnapshotService — per-SceneInstance deep clone/restore", () => {
     expect(g.attribute_instances).toHaveLength(0);
     // The tab now points at the restored clone.
     expect(g.tabContext[0].sceneInstance).toBe(restored);
+  });
+
+  // A rollback pulls every mesh of the tab out of the THREE scene. Anything still
+  // holding one of them keeps working against an object that is no longer in the scene
+  // graph: the transform gizmo logs "TransformControls: The attached 3D object must be
+  // a part of the scene graph" once per frame, and the selection box measures a mesh
+  // that is gone.
+  it("lets go of the selection and the transform gizmo before dropping the meshes", () => {
+    const g = mocks.globalObject;
+    const droppedMesh = { uuid: "A", isMesh: true } as any;
+    const original = makeSceneInstance("s-detach", "Original Name");
+    g.selectedTab = 0;
+    g.transformControls = { detach: vi.fn() };
+    g.tabContext = [
+      { sceneInstance: original, threeScene: g.scene, contextDragObjects: [droppedMesh], isShared: false },
+    ];
+    globalSelectedObject.object = droppedMesh;
+
+    snapshotService.setSceneInstanceSnapshot(original);
+    snapshotService.restoreSceneInstanceToCurrentTab();
+
+    expect(g.transformControls.detach).toHaveBeenCalled();
+    expect(globalSelectedObject.object).toBeUndefined();
+  });
+
+  it("restores without a transform gizmo (no scene open yet)", () => {
+    const g = mocks.globalObject;
+    const original = makeSceneInstance("s-no-gizmo", "Original Name");
+    g.selectedTab = 0;
+    g.transformControls = undefined;
+    g.tabContext = [
+      { sceneInstance: original, threeScene: g.scene, contextDragObjects: [], isShared: false },
+    ];
+
+    snapshotService.setSceneInstanceSnapshot(original);
+
+    expect(snapshotService.restoreSceneInstanceToCurrentTab()).not.toBeNull();
   });
 
   it("returns null when there is no snapshot for the current tab", () => {

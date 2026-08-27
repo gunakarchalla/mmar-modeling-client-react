@@ -50,6 +50,11 @@ vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUti
 import TableAttributeDialog from "./TableAttributeDialog";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
+import { useLogStore } from "@/resources/store/logStore";
+import { NOT_ALLOWED_MESSAGE } from "@/resources/services/metamodel-constraints";
+
+/** The Float attribute type's regex, as the database ships it. */
+const FLOAT_REGEX = "^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$";
 
 const TABLE_ATTRIBUTE_UUID = "attr-table";
 
@@ -93,6 +98,30 @@ function tableMetaAttribute() {
             default_value: "x",
             facets: "x|y",
             attribute_type: { uuid: "at-enum", has_table_attribute: [] },
+          },
+        },
+      ],
+    },
+  };
+}
+
+/** The same table, but with a single column of the Float attribute type. */
+function floatColumnMetaAttribute() {
+  return {
+    uuid: TABLE_ATTRIBUTE_UUID,
+    name: "BPMN Table",
+    attribute_type: {
+      uuid: "at-table",
+      has_table_attribute: [
+        {
+          sequence: 1,
+          ui_component: "text",
+          attribute: {
+            uuid: "col-attr-1",
+            name: "Column A",
+            default_value: "0",
+            facets: "",
+            attribute_type: { uuid: "at-float", name: "Float", regex_value: FLOAT_REGEX, has_table_attribute: [] },
           },
         },
       ],
@@ -144,6 +173,7 @@ beforeEach(() => {
     ) as never,
     dialogPayloads: {},
   });
+  useLogStore.setState({ logArray: [], snackbar: { open: false, message: "", severity: "info" } });
 });
 
 describe("TableAttributeDialog", () => {
@@ -197,6 +227,31 @@ describe("TableAttributeDialog", () => {
     expect(attributeInstance.table_attributes[0].value).toBe("edited");
     expect(published[0].uuid).toBe("cell-1");
     expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
+  });
+
+  // Cells are saved as part of the scene instance, so a cell value the rule engine
+  // refuses fails the same autosave with the same 403 as a plain attribute. The cell is
+  // checked against the attribute type of ITS COLUMN.
+  it("refuses a cell value that breaks its column's regex, with the metamodel snackbar", async () => {
+    mocks.metaUtility.getMetaClass.mockResolvedValue({
+      uuid: "class-1",
+      attributes: [floatColumnMetaAttribute()],
+    });
+    const attributeInstance = openWith([cellJson({ uuid: "cell-1", value: "1.5" })]);
+    const published: AttributeInstance[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", (p) => published.push(p));
+
+    render(<TableAttributeDialog />);
+    const input = await screen.findByDisplayValue("1.5");
+    fireEvent.change(input, { target: { value: "abc" } });
+    fireEvent.blur(input);
+    sub.dispose();
+
+    expect(attributeInstance.table_attributes[0].value).toBe("1.5");
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
+    expect(published).toHaveLength(0);
+    expect((input as HTMLInputElement).value).toBe("1.5");
+    expect(useLogStore.getState().snackbar.message).toBe(NOT_ALLOWED_MESSAGE);
   });
 
   it("Create Row appends one cell per column, with the meta default value and the next row number", async () => {

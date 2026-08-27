@@ -25,6 +25,11 @@ import {
   OBJECT_3D_ATTRIBUTE_UUID,
   OBJECT_3D_DEFAULT_VALUE,
 } from "@/constants";
+import {
+  attributeTypeName,
+  attributeValueMatchesRegex,
+  reportMetamodelViolation,
+} from "@/resources/services/metamodel-constraints";
 import { applyFieldChange, type AttributeOwner, type EnhancedAttributeInstance } from "./attributeModel";
 
 /**
@@ -37,10 +42,12 @@ import { applyFieldChange, type AttributeOwner, type EnhancedAttributeInstance }
  * text field showing its uuid AND the upload/delete/download buttons — the text-field
  * branch only excludes the Object-3D and Image attributes, not File). That is kept.
  *
- * Value editing follows a commit-on-blur
- * pair: keystrokes update the gds AttributeInstance in place (and local state so the
- * input stays controlled), and the commit (blur / slider release / select) runs
- * `applyFieldChange`, which publishes the vizrep-update event and flags the scene dirty.
+ * Value editing follows a commit-on-blur pair: keystrokes update only local state (so
+ * the input stays controlled), and the commit (blur / slider release / select) writes
+ * the value onto the gds AttributeInstance and runs `applyFieldChange`, which publishes
+ * the vizrep-update event and flags the scene dirty.
+ *
+ * A commit that the metamodel refuses does neither — see `commit` below.
  */
 interface PlainAttributeRowProps {
   enhanced: EnhancedAttributeInstance;
@@ -53,7 +60,7 @@ interface PlainAttributeRowProps {
 }
 
 export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, onChanged }: PlainAttributeRowProps) {
-  const { attributeInstance, facets, uiType } = enhanced;
+  const { attributeInstance, facets, metaAttribute, uiType } = enhanced;
   const openDialog = useUiStore((s) => s.openDialog);
   const [value, setValue] = useState<string>(attributeInstance.value ?? "");
 
@@ -67,12 +74,37 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
   const isImage = attributeInstance.uuid_attribute === IMAGE_TO_DETECT_ATTRIBUTE_UUID;
   const lowerUiType = (uiType ?? "").toLowerCase();
 
-  function commit(next: string) {
+  /**
+   * Write an edited value onto the attribute instance and save it — unless the
+   * metamodel refuses it, in which case the field snaps back to the stored value and
+   * the user gets the rejection snackbar.
+   *
+   * The value reaches the AttributeInstance HERE and nowhere else: a value the server's
+   * rule engine refuses (letters in a Float attribute, say) used to sit on the instance
+   * from the first keystroke, so the next autosave was answered with a 403 that rolled
+   * the whole scene back — and the re-import behind that rollback is what produced the
+   * "not authorized" alert and the burst of vizrep / transform-control / ray errors.
+   *
+   * Returns whether the value was accepted.
+   */
+  function commit(next: string): boolean {
+    // A blur that changed nothing has neither a value to save nor a verdict to report.
+    if (next === (attributeInstance.value ?? "")) return true;
+
+    if (!attributeValueMatchesRegex(next, metaAttribute)) {
+      reportMetamodelViolation(
+        `"${next}" is not a valid ${attributeTypeName(metaAttribute)} value for ${attributeInstance.name}.`,
+      );
+      setValue(attributeInstance.value ?? "");
+      return false;
+    }
+
     attributeInstance.value = next;
     setValue(next);
     void applyFieldChange(attributeInstance, owner).catch((err) =>
       logger.log("attribute change failed: " + describeError(err), "error"),
     );
+    return true;
   }
 
   // attribute-window.ts:73 — deleteFile
@@ -80,8 +112,10 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
     if (!uuidValidate(attributeInstance.value)) return;
     await backendService.deleteFileByUUID(attributeInstance.value);
     metaUtility.deleteFileByUUID(attributeInstance.value);
-    const metaAttribute = await metaUtility.getMetaAttribute(attributeInstance.uuid_attribute);
-    attributeInstance.value = metaAttribute!.default_value;
+    // Re-fetched rather than reusing `metaAttribute` from the props: the delete path
+    // only needs the default value, and shadowing the destructured one would confuse.
+    const fileMetaAttribute = await metaUtility.getMetaAttribute(attributeInstance.uuid_attribute);
+    attributeInstance.value = fileMetaAttribute!.default_value;
     setValue(attributeInstance.value ?? "");
     onChanged();
   }
@@ -129,10 +163,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
           label={attributeInstance.name}
           type={uiType || "text"}
           value={value}
-          onChange={(e) => {
-            attributeInstance.value = e.target.value;
-            setValue(e.target.value);
-          }}
+          onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             // Enter commits without waiting for blur, so the scene vizrep updates
             // immediately, matching how a plain <input> commits on Enter.
@@ -208,11 +239,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
               max={Number(facets[1])}
               step={Number(facets[2]) || 1}
               value={numerise(value, undefined, Number(facets[0]))}
-              onChange={(_e, next) => {
-                const asString = stringifyNumber(next as number);
-                attributeInstance.value = asString;
-                setValue(asString);
-              }}
+              onChange={(_e, next) => setValue(stringifyNumber(next as number))}
               onChangeCommitted={(_e, next) => commit(stringifyNumber(next as number))}
               aria-label={attributeInstance.name}
             />

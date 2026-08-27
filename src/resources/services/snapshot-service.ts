@@ -1,5 +1,6 @@
 import { SceneInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
+import { globalSelectedObject } from "@/engine/global-selected-object";
 import { eventBus } from "./event-bus";
 
 /**
@@ -103,6 +104,13 @@ export class SnapshotService {
     if (!snapshot) {
       return null;
     }
+
+    // Nothing that was selected survives the rebuild below, so let go of it FIRST:
+    // three.js logs "TransformControls: The attached 3D object must be a part of the
+    // scene graph" on every frame for as long as the gizmo stays attached to a mesh
+    // that has been removed, and the selection box helper would keep measuring it.
+    this.globalObjectInstance.transformControls?.detach();
+    globalSelectedObject.removeObject();
 
     // Remove all 3D objects from the Three.js scene and clear tracking arrays
     // so the canvas reflects the restored state after importInstances() re-draws it.

@@ -46,6 +46,8 @@ vi.mock("./snapshot-service", () => ({ snapshotService: mocks.snapshotService })
 vi.mock("./backend-service", () => ({ backendService: mocks.backendService }));
 
 import { persistencyHandler } from "./persistency-handler";
+import { useLogStore } from "@/resources/store/logStore";
+import { NOT_ALLOWED_MESSAGE } from "./metamodel-constraints";
 
 function makeScene(uuid: string, name: string): SceneInstance {
   return SceneInstance.fromJS({
@@ -67,6 +69,7 @@ beforeEach(() => {
     tabContext: [{}],
     autoSave: true,
   });
+  useLogStore.setState({ logArray: [], snackbar: { open: false, message: "", severity: "info" } });
 });
 
 describe("persistency-handler.persistSceneInstanceToDB", () => {
@@ -103,7 +106,7 @@ describe("persistency-handler.persistSceneInstanceToDB", () => {
     mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
     mocks.metaUtility.getTabContextSceneType.mockResolvedValue({ uuid: "st-1" });
     mocks.backendService.sceneInstancesPATCH.mockRejectedValue(
-      Object.assign(new Error("Failed to update scene instance (403)"), { status: 403 }),
+      Object.assign(new Error("You are not authorized to update this scene instance"), { status: 403 }),
     );
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
 
@@ -112,8 +115,34 @@ describe("persistency-handler.persistSceneInstanceToDB", () => {
     expect(mocks.backendService.sceneInstancesPOST).not.toHaveBeenCalled();
     expect(mocks.snapshotService.restoreSceneInstanceToCurrentTab).toHaveBeenCalled();
     expect(mocks.snapshotService.setSceneInstanceSnapshot).not.toHaveBeenCalled();
+    // Reported through the snackbar; the blocking window.alert is gone.
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(useLogStore.getState().snackbar.message).toContain("authorization");
 
     alertSpy.mockRestore();
+  });
+
+  // The rule engine answers a broken metamodel rule with the SAME 403 as a missing
+  // access right, so the message is what tells them apart. Saying "not authorized" for
+  // a value that simply does not match its attribute type's regex sent users looking
+  // for a permissions problem that was not there.
+  it("reports a refused metamodel rule as such, not as an authorization problem", async () => {
+    const scene = makeScene("s-4", "My Scene");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.metaUtility.getTabContextSceneType.mockResolvedValue({ uuid: "st-1" });
+    mocks.backendService.sceneInstancesPATCH.mockRejectedValue(
+      Object.assign(
+        new Error("The rule error was fired for the attribute ai-1: abc does not match the regex /^[0-9]+$/gmi"),
+        { status: 403 },
+      ),
+    );
+
+    await persistencyHandler.persistSceneInstanceToDB();
+
+    expect(useLogStore.getState().snackbar.message).toBe(NOT_ALLOWED_MESSAGE);
+    expect(mocks.snapshotService.restoreSceneInstanceToCurrentTab).toHaveBeenCalled();
+    // The server's own wording is kept for the log window.
+    expect(useLogStore.getState().logArray.some((entry) => entry.value.includes("does not match the regex"))).toBe(true);
   });
 
   it("logs and skips when there is no active scene instance", async () => {

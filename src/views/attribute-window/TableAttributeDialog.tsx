@@ -31,6 +31,11 @@ import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { numerise, stringifyNumber } from "@/resources/services/format";
+import {
+  attributeTypeName,
+  attributeValueMatchesRegex,
+  reportMetamodelViolation,
+} from "@/resources/services/metamodel-constraints";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useSelectionStore } from "@/resources/store/selectionStore";
 import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
@@ -207,11 +212,33 @@ function TableAttributeDialogView({
     historyService.record("edit table cell", { coalesceKey: `table-cell:${cell.uuid}` });
   }
 
-  function commitCell(cell: AttributeInstance, next: string) {
+  /**
+   * Write an edited cell value and save it — unless the metamodel refuses it, in which
+   * case nothing is written and the user gets the rejection snackbar.
+   *
+   * A cell is validated against the META ATTRIBUTE OF ITS COLUMN, which is where its
+   * attribute type (and so its regex) comes from. Cells are saved as part of the scene
+   * instance, so a refused value fails the same autosave with the same 403 as a plain
+   * attribute — see the note on `commit` in PlainAttributeRow.
+   *
+   * Returns whether the value was accepted, so the cell can put its field back.
+   */
+  function commitCell(cell: AttributeInstance, next: string, columnAttribute?: Attribute): boolean {
+    // A blur that changed nothing has neither a value to save nor a verdict to report.
+    if (next === (cell.value ?? "")) return true;
+
+    if (!attributeValueMatchesRegex(next, columnAttribute)) {
+      reportMetamodelViolation(
+        `"${next}" is not a valid ${attributeTypeName(columnAttribute)} value for ${cell.name}.`,
+      );
+      return false;
+    }
+
     cell.value = next;
     void fieldChange(cell).catch((err) =>
       logger.log("table attribute change failed: " + describeError(err), "error"),
     );
+    return true;
   }
 
   // dialog-table-attribute.ts:166 — createRow / createCell
@@ -302,7 +329,7 @@ function TableAttributeDialogView({
                           cell={cell}
                           uiComponent={uiComponent}
                           facets={facetsAll[j] ?? []}
-                          onCommit={(next) => commitCell(cell, next)}
+                          onCommit={(next) => commitCell(cell, next, columns[j]?.attribute)}
                           onOpenNested={() => setNestedCell({ row: i, col: j })}
                         />
                       )}
@@ -352,7 +379,8 @@ function TableAttributeCell({
   cell: AttributeInstance;
   uiComponent: string;
   facets: string[];
-  onCommit: (next: string) => void;
+  /** Returns false when the metamodel refused the value; the field then snaps back. */
+  onCommit: (next: string) => boolean;
   onOpenNested: () => void;
 }) {
   const [value, setValue] = useState<string>(cell.value ?? "");
@@ -361,16 +389,19 @@ function TableAttributeCell({
     setValue(cell.value ?? "");
   }, [cell, cell.value]);
 
+  // Put the field back to the stored value when a commit was refused. The cell was
+  // never written to, so the stored value is the last accepted one.
+  function commit(next: string) {
+    if (!onCommit(next)) setValue(cell.value ?? "");
+  }
+
   if (uiComponent === "text") {
     return (
       <TextField
         size="small"
         value={value}
-        onChange={(e) => {
-          cell.value = e.target.value;
-          setValue(e.target.value);
-        }}
-        onBlur={() => onCommit(value)}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => commit(value)}
         inputProps={{ "aria-label": cell.name }}
       />
     );
@@ -388,12 +419,8 @@ function TableAttributeCell({
           max={Number(facets[1])}
           step={Number(facets[2]) || 1}
           value={numerise(value, undefined, Number(facets[0]))}
-          onChange={(_e, next) => {
-            const asString = stringifyNumber(next as number);
-            cell.value = asString;
-            setValue(asString);
-          }}
-          onChangeCommitted={(_e, next) => onCommit(stringifyNumber(next as number))}
+          onChange={(_e, next) => setValue(stringifyNumber(next as number))}
+          onChangeCommitted={(_e, next) => commit(stringifyNumber(next as number))}
           aria-label={cell.name}
         />
       </Box>
@@ -408,7 +435,7 @@ function TableAttributeCell({
           labelId={`cell-${cell.uuid}`}
           label={cell.name}
           value={value}
-          onChange={(e) => onCommit(e.target.value)}
+          onChange={(e) => commit(e.target.value)}
         >
           {facets.map((facet) => (
             <MenuItem key={facet} value={facet}>

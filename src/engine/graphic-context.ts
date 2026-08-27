@@ -617,6 +617,15 @@ export class GraphicContext {
     const mergedMesh = await this.getMergedObjects();
     // Retrieve the class instance from the scene
     const classObjectToUpdate: THREE.Mesh = (await this.globalObjectInstance.scene.getObjectByProperty("uuid", class_instance.uuid)) as THREE.Mesh;
+    // There is nothing to update when the instance is no longer drawn — a refresh that
+    // was in flight while the scene was rebuilt (a rolled-back save re-imports it) finds
+    // no object, where it used to throw "Cannot set properties of undefined (setting
+    // 'geometry')". The next draw pass renders the instance from scratch anyway.
+    if (!classObjectToUpdate) {
+      this.logger.log(`no drawn object for class instance ${class_instance.uuid}, vizrep update skipped`, "close");
+      await this.resetInstance();
+      return;
+    }
     // Update the geometry and material of the object.
     classObjectToUpdate.geometry = mergedMesh.geometry;
     classObjectToUpdate.material = mergedMesh.material;
@@ -665,6 +674,14 @@ export class GraphicContext {
 
     // Retrieve the port instance object from the scene
     const portObjectInScene = this.globalObjectInstance.scene.getObjectByProperty("uuid", port_instance.uuid) as THREE.Mesh;
+
+    // Same as updateVizRepClass: a port that is no longer drawn has no geometry to
+    // update, and dereferencing it would throw instead of skipping the refresh.
+    if (!portObjectInScene) {
+      this.logger.log(`no drawn object for port instance ${port_instance.uuid}, vizrep update skipped`, "close");
+      await this.resetInstance();
+      return;
+    }
 
     // Update the geometry and material of the object.
     portObjectInScene.geometry = mergedMesh.geometry;

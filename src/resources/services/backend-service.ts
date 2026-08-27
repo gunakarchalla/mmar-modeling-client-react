@@ -6,7 +6,7 @@ import { UUID } from "@gds/models/meta/Metamodel_metaobjects.structure";
 import { SceneInstance } from "@gds/models/instance/Instance_scenes.structure";
 import { ClassInstance } from "@gds/models/instance/Instance_classes.structure";
 import { RelationclassInstance } from "@gds/models/instance/Instance_relationclasses.structure";
-import { apiFetch, ApiError } from "./api";
+import { apiFetch, ApiError, responseErrorMessage } from "./api";
 import { getToken } from "./token";
 import { useLogStore } from "@/resources/store/logStore";
 
@@ -202,8 +202,15 @@ export class BackendService {
       `instances/sceneInstances/${encodeURIComponent(sceneInstanceUUID)}`,
       { method: "PATCH", headers: authHeaders(), body: JSON.stringify(body) },
     );
-    if (!response.ok)
-      throw new ApiError(`Failed to update scene instance (${response.status})`, response.status);
+    if (!response.ok) {
+      // The server's own message is carried along: persistSceneInstanceToDB needs it to
+      // tell a refused metamodel rule from missing edit rights, which share the 403.
+      const detail = await responseErrorMessage(
+        response,
+        `Failed to update scene instance (${response.status})`,
+      );
+      throw new ApiError(detail, response.status);
+    }
     return SceneInstance.fromJS(await response.json()) as SceneInstance;
   }
 

@@ -11,6 +11,21 @@ import { snapshotService } from "./snapshot-service";
 import { backendService } from "./backend-service";
 import { eventBus } from "./event-bus";
 import { logger } from "./logger";
+import { NOT_ALLOWED_MESSAGE } from "./metamodel-constraints";
+
+/** Shown when the server refuses the save because the user may only read the scene. */
+const NOT_AUTHORIZED_MESSAGE = "You don't have enough authorization to edit this scene instance.";
+
+/**
+ * Whether a refused save was refused by the rule engine rather than by the access
+ * check. Both answer 403, and the response body carries nothing but a message, so the
+ * message is what tells them apart: every rule refusal is phrased "The rule error was
+ * fired for the ..." (`Instance_attributes.rules.ts`, `Instance_commons.rules.ts`), and
+ * the regex rule's own wording is matched as well so a reworded prefix still lands.
+ */
+function violatesMetamodelRule(serverMessage: string): boolean {
+  return /rule error was fired|does not match the regex/i.test(serverMessage);
+}
 
 /**
  * Turns a stored SceneInstance into a drawn scene, and back.
@@ -342,10 +357,16 @@ export class PersistencyHandler {
       const patchError = error as any;
       const statusCode = Number(patchError?.status);
 
-      // 403: read-only access to a shared scene. Revert to the last snapshot and
-      // re-import so the canvas reflects the server's state rather than the rejected edit.
+      // 403: the save was refused, for one of two reasons — read-only access to a
+      // shared scene, or a metamodel rule the scene breaks (a value that does not match
+      // its attribute type's regex is the common one). Both revert to the last snapshot
+      // and re-import, so the canvas reflects the server's state rather than the
+      // rejected edit; only the message differs, and both go to the snackbar rather
+      // than a blocking window.alert. The full server text goes to the log window.
       if (statusCode === 403) {
-        window.alert("You don't have enough authorization to edit this scene instance.");
+        const detail = String(patchError?.message ?? "");
+        this.logger.log(violatesMetamodelRule(detail) ? NOT_ALLOWED_MESSAGE : NOT_AUTHORIZED_MESSAGE, "error");
+        this.logger.log(`SceneInstance save refused: ${detail}`, "close");
         this.snapshotService.restoreSceneInstanceToCurrentTab();
         await this.importInstances();
         return;

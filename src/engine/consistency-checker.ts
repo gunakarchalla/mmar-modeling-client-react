@@ -1,9 +1,7 @@
 import { Relationclass, ClassInstance, PortInstance, RoleInstance, Role } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { logger } from "@/resources/services/logger";
-
-/** Message shown when the metamodel forbids the relation the user is drawing. */
-const NOT_ALLOWED_MESSAGE = "This action is not allowed due to some restrictions in the metamodel!";
+import { reportMetamodelViolation } from "@/resources/services/metamodel-constraints";
 
 /**
  * Guards relation drawing against the metamodel.
@@ -61,8 +59,7 @@ export class ConsistencyChecker {
 
   /** Report a rejected relation to the user (snackbar) and to the log window. */
   private rejectAction(): void {
-    this.logger.log(NOT_ALLOWED_MESSAGE, "error");
-    this.logger.log(NOT_ALLOWED_MESSAGE, "close");
+    reportMetamodelViolation();
   }
 
   countSameRelationsOnClassInstance(roleInstances: RoleInstance[], roleToCheck: Role, classInstance: ClassInstance, min: number, max: number) {

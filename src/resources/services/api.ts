@@ -20,6 +20,27 @@ export class ApiError extends Error {
 }
 
 /**
+ * The message the server put in a failed response, if it carries one.
+ *
+ * Errors come back as `{ "error": "..." }` (see the server's error_handling
+ * middleware). The text matters where two different refusals share a status code —
+ * a PATCH is answered with 403 both for "no edit rights" and for a broken metamodel
+ * rule — so the caller can tell the user which of the two happened. Falls back to
+ * `fallback` for a body that is empty, not JSON, or shaped differently.
+ */
+export async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.text();
+    if (!body) return fallback;
+    const parsed: unknown = JSON.parse(body);
+    const message = (parsed as { error?: unknown })?.error;
+    return typeof message === "string" && message ? message : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * The single fetch wrapper every request goes through: it prefixes `API_URL` and sets
  * the default headers. A JSON body gets `Content-Type: application/json` so the server
  * parses it; FormData must NOT — the browser sets that header itself, together with the

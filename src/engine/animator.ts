@@ -189,7 +189,10 @@ import { describeError } from "@/resources/util/describe-error";
         }
       });
 
-      const startObjectNearestPoint: THREE.Vector3 | undefined = this.rayHelper.shootRayFromObject(obj2 as THREE.Mesh, obj1 as THREE.Mesh);
+      // No cast: either object is undefined when the line outlived the meshes it
+      // connects, and shootRayFromObject answers undefined for that — which the guard
+      // below turns into a skipped frame.
+      const startObjectNearestPoint: THREE.Vector3 | undefined = this.rayHelper.shootRayFromObject(obj2, obj1);
       let endObjectNearestPoint;
 
       //todo sometimes error, thus try -> problem not visible for user
@@ -204,7 +207,7 @@ import { describeError } from "@/resources/util/describe-error";
           }
         });
 
-        endObjectNearestPoint = this.rayHelper.shootRayFromObject(fromObj as unknown as THREE.Mesh, toObj as unknown as THREE.Mesh);
+        endObjectNearestPoint = this.rayHelper.shootRayFromObject(fromObj, toObj);
       } catch (error) {
         // Happens when the line's endpoint objects cannot be raycast against each other
         // (e.g. an unusual orientation). The frame is skipped rather than failed.
