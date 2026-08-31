@@ -21,6 +21,15 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
  *
  * Each deletion removes the instance from the gds scene, from the THREE scene, from the
  * database (when auto-save is on), and announces it to peers and to the rest of the app.
+ *
+ * Every removal from a gds collection goes through `removeInstance`, by uuid, at the
+ * moment of the removal. An index taken before the cascade cannot be trusted: the
+ * cascade splices the very arrays it would index into (deleting a relation takes its
+ * bendpoints, which are class instances, out of `class_instances`), so a stale index
+ * removed a bystander and left the instance the user deleted behind. That instance was
+ * already gone from the database, so the next auto-save PATCH asked the server to
+ * re-create it — and re-creating an instance whose roles the database has already
+ * cascaded away is the 500 that surfaced as "SceneInstance save failed".
  */export class DeletionHandler {
   private globalObjectInstance = globalObject;
   private globalStateObject = globalStateObject;
@@ -40,6 +49,8 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       index = sceneInstance.class_instances.findIndex((instance) => instance.uuid == this.globalObjectInstance.current_class_instance.uuid);
       index2 = sceneInstance.relationclasses_instances.findIndex((instance) => instance.uuid == this.globalObjectInstance.current_class_instance.uuid);
     }
+    // The indices only decide WHICH of the two deletes to run; neither method splices
+    // by the index it is handed (see removeInstance).
     if (index !== undefined && index >= 0) {
       await this.deleteClassInstance(this.globalObjectInstance.current_class_instance, index);
     } else if (index2 !== undefined && index2 >= 0) {
@@ -55,7 +66,12 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     this.globalStateObject.setState(0);
   }
 
-  async deleteClassInstance(classInstance: ClassInstance, index: number) {
+  /**
+   * @param _index - Ignored. The position is re-derived at removal time, because the
+   * cascade below splices `class_instances` before we get to it.
+   */
+  async deleteClassInstance(classInstance: ClassInstance, _index?: number) {
+    if (!classInstance) return;
     const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
     //delete connected relationclassInstances
     await this.deleteConnectedRelationclassInstances(classInstance);
@@ -63,12 +79,18 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     //delete connected portInstances
     await this.deleteConnectedPortInstances(classInstance);
 
-    sceneInstance.class_instances.splice(index, 1);
+    // Nothing was removed: this instance is already gone from the scene, so it has
+    // already been deleted once and must not be deleted from the database a second
+    // time — that DELETE would take a re-created instance of the same uuid with it.
+    if (!this.removeInstance(sceneInstance.class_instances, classInstance.uuid)) {
+      this.logger.log(`ClassInstance ${classInstance.uuid} is no longer in the scene, delete skipped`, "close");
+      return;
+    }
 
     // Propagate deletion to peers before removing from the THREE scene.
     publishLocalChange({ type: "remove_class_instance", classInstanceUuid: classInstance.uuid });
 
-    const object: THREE.Object3D = this.globalObjectInstance.scene.getObjectByProperty("uuid", classInstance.uuid)!;
+    const object = this.globalObjectInstance.scene.getObjectByProperty("uuid", classInstance.uuid);
 
     await this.gc.deleteObject(object as unknown as THREE.Mesh);
 
@@ -122,14 +144,20 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     this.announceDeletion(sceneInstance.uuid, "class", classInstance.uuid);
   }
 
-  async deleteRelationclassInstance(_relationclassInstance: ClassInstance, index: number) {
+  /**
+   * @param _index - Ignored, see `deleteClassInstance`.
+   */
+  async deleteRelationclassInstance(_relationclassInstance: ClassInstance, _index?: number) {
+    if (!_relationclassInstance) return;
     const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
     const relationclassInstance = _relationclassInstance as RelationclassInstance;
     let role_from_instance;
     let role_to_instance;
 
     //find role_from_instance in gc.role_instances
-    const role_from_instance_index = this.globalObjectInstance.role_instances.findIndex((role) => role.uuid == relationclassInstance.role_instance_from.uuid);
+    const role_from_instance_index = relationclassInstance.role_instance_from
+      ? this.globalObjectInstance.role_instances.findIndex((role) => role.uuid == relationclassInstance.role_instance_from.uuid)
+      : -1;
     if (role_from_instance_index != -1) {
       role_from_instance = this.globalObjectInstance.role_instances[role_from_instance_index];
 
@@ -153,15 +181,20 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       this.logger.log("Role Instance " + role_to_instance.uuid + " deleted", "done");
     }
 
-    sceneInstance.relationclasses_instances.splice(index, 1);
+    // Already gone (an earlier step of the same cascade took it): stop before the
+    // database delete, exactly as deleteClassInstance does.
+    if (!this.removeInstance(sceneInstance.relationclasses_instances, relationclassInstance.uuid)) {
+      this.logger.log(`RelationclassInstance ${relationclassInstance.uuid} is no longer in the scene, delete skipped`, "close");
+      return;
+    }
 
     // Propagate deletion to peers.
     publishLocalChange({ type: "remove_relation_class_instance", relationClassInstanceUuid: relationclassInstance.uuid });
 
-    const object: THREE.Object3D = this.globalObjectInstance.scene.getObjectByProperty("uuid", relationclassInstance.uuid)!;
+    const object = this.globalObjectInstance.scene.getObjectByProperty("uuid", relationclassInstance.uuid);
 
     //push to log file
-    this.logger.log("Relationclass Instance " + object.name + " deleted from THREE scene", "done");
+    this.logger.log("Relationclass Instance " + (object?.name ?? relationclassInstance.name) + " deleted from THREE scene", "done");
 
     await this.gc.deleteObject(object as unknown as THREE.Mesh);
     //remove active state line
@@ -179,7 +212,10 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
 
     //remove from gc.updateLinesArray
     const lineIndex = this.globalObjectInstance.updateLinesArray.findIndex((line) => line.uuid == relationclassInstance.uuid);
-    this.globalObjectInstance.updateLinesArray.splice(lineIndex, 1);
+    // splice(-1, 1) would drop the LAST line instead of none.
+    if (lineIndex != -1) {
+      this.globalObjectInstance.updateLinesArray.splice(lineIndex, 1);
+    }
 
     //this.globalStateObject.setState(0);
     this.globalSelectedObject.removeObject();
@@ -215,6 +251,12 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
 
   async deleteAttributeInstance(attributeInstance: AttributeInstance) {
     const index = this.globalObjectInstance.attribute_instances.findIndex((instance) => instance.uuid == attributeInstance.uuid);
+    // Not in the flat list (an attribute of a port, or one already removed): splicing
+    // at -1 would delete an unrelated attribute and then read name off nothing.
+    if (index == -1) {
+      this.logger.log(`Attribute Instance ${attributeInstance.uuid} not in the global list, nothing to remove`, "close");
+      return;
+    }
     const instance: AttributeInstance[] = this.globalObjectInstance.attribute_instances.splice(index, 1);
 
     //push to log file
@@ -226,18 +268,23 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     const linePoints: { UUID: UUID; Point: THREE.Vector3 }[] = relationclassInstance.line_points as { UUID: UUID; Point: THREE.Vector3 }[];
 
     //find linePoint in line_points array and delete it
-    const linePoint = linePoints.find((linePoint) => {
-      return linePoint.UUID === bendpointUUID;
-    });
-    const index = linePoints.indexOf(linePoint!);
-    relationclassInstance.line_points.splice(index, 1);
+    const index = linePoints.findIndex((linePoint) => linePoint.UUID === bendpointUUID);
+    // splice(-1, 1) would drop the line's END POINT instead, detaching the relation
+    // from the object it points at.
+    if (index != -1) {
+      relationclassInstance.line_points.splice(index, 1);
+    }
 
     //remove bendpoint classInstance if not specified otherwise
     if (!relationsOnly) {
-      const ClassInstance = sceneInstance.class_instances.find((classInstance) => classInstance.uuid == bendpointUUID);
-      const classInstanceIndex = sceneInstance.class_instances.findIndex((classInstance) => classInstance.uuid == bendpointUUID);
-      //let sceneInstanceIndex = sceneInstance.class_instances.findIndex(classInstance => classInstance.uuid == bendpointUUID);
-      await this.deleteClassInstance(ClassInstance!, classInstanceIndex);
+      const bendpointClassInstance = sceneInstance.class_instances.find((classInstance) => classInstance.uuid == bendpointUUID);
+      // A bendpoint that is no longer a class instance of the scene has nothing left to
+      // delete. Calling deleteClassInstance(undefined) threw on its port_instance.
+      if (!bendpointClassInstance) {
+        this.logger.log(`Bendpoint ${bendpointUUID} has no class instance in the scene, nothing to remove`, "close");
+        return;
+      }
+      await this.deleteClassInstance(bendpointClassInstance);
     }
   }
 
@@ -260,15 +307,30 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     );
 
     for (const role of connectedRoles) {
+      // A relation being drawn has no "to" role yet, and reading .uuid off it threw.
       const connectedRelations = relationclassInstances.filter(
-        (relationclassInstance) => relationclassInstance.role_instance_from.uuid == role.uuid || relationclassInstance.role_instance_to.uuid == role.uuid,
+        (relationclassInstance) =>
+          relationclassInstance.role_instance_from?.uuid == role.uuid || relationclassInstance.role_instance_to?.uuid == role.uuid,
       );
-      for (const relationclassInstance of connectedRelations) {
-        // Re-read the index on every iteration: each delete splices the array.
-        const index = relationclassInstances.findIndex((instance) => instance.uuid == relationclassInstance.uuid);
-        await this.deleteRelationclassInstance(relationclassInstance, index);
+      // Snapshot: deleteRelationclassInstance splices the array this list came from,
+      // and it skips anything an earlier iteration already removed.
+      for (const relationclassInstance of [...connectedRelations]) {
+        await this.deleteRelationclassInstance(relationclassInstance);
       }
     }
+  }
+
+  /**
+   * Remove the instance with `uuid` from a gds collection, found at the moment of the
+   * removal rather than at an index taken earlier. Returns whether anything was
+   * removed, which is how the callers tell "deleted" from "was already gone" — the
+   * distinction that keeps the scene and the database in step.
+   */
+  private removeInstance(collection: { uuid: UUID }[], uuid: UUID): boolean {
+    const index = collection.findIndex((instance) => instance.uuid == uuid);
+    if (index == -1) return false;
+    collection.splice(index, 1);
+    return true;
   }
 
   async deleteConnectedPortInstances(classInstance: ClassInstance) {

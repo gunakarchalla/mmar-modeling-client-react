@@ -29,6 +29,14 @@ const fakeGlobal = vi.hoisted(() => ({
     selectedTab: 0,
     tabContext: [] as unknown[],
     render: false,
+    // Stands in for three's TransformControls: deleteObject has to let go of a
+    // gizmo pointed at anything it is about to unparent.
+    transformControls: {
+      object: undefined as THREE.Object3D | undefined,
+      detach() {
+        this.object = undefined;
+      },
+    },
   },
 }));
 
@@ -77,6 +85,7 @@ beforeEach(async () => {
   fakeGlobal.globalObject.updateLinesArray = [];
   fakeGlobal.globalObject.current_class_instance = null;
   fakeGlobal.globalObject.current_port_instance = null;
+  fakeGlobal.globalObject.transformControls.object = undefined;
   await graphicContext.resetInstance();
   graphicContext.custom_variables = {};
 });
@@ -166,6 +175,62 @@ describe("deleteObject", () => {
     expect(fakeGlobal.globalObject.scene.getObjectByProperty("uuid", classInstance.uuid)).toBeUndefined();
     expect(fakeGlobal.globalObject.dragObjects).not.toContain(object);
     expect(fakeGlobal.globalObject.buttonObjects).toHaveLength(0);
+  });
+
+  // three's TransformControls dereferences `object.parent` on every frame and logs
+  // "The attached 3D object must be a part of the scene graph" once that is null. A
+  // delete is a chain of awaited HTTP calls, so the render loop draws many frames
+  // between the removal and whatever detaches afterwards — the gizmo has to be let go
+  // HERE, at the removal, or every one of those frames logs the error.
+  it("detaches the transform gizmo from the object it removes", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+    fakeGlobal.globalObject.transformControls.object = object;
+
+    await graphicContext.deleteObject(object);
+
+    expect(fakeGlobal.globalObject.transformControls.object).toBeUndefined();
+  });
+
+  // The gizmo is attached to whatever was picked, and a label or a port is a child of
+  // the instance mesh rather than the mesh itself — deleting the instance orphans it
+  // just the same, so the whole subtree has to be checked.
+  it("detaches the gizmo when it holds a CHILD of the object being removed", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+    const label = object.children[0];
+    expect(label).toBeDefined();
+    fakeGlobal.globalObject.transformControls.object = label;
+
+    await graphicContext.deleteObject(object);
+
+    expect(fakeGlobal.globalObject.transformControls.object).toBeUndefined();
+  });
+
+  it("leaves a gizmo attached to an unrelated object alone", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+    const other = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    fakeGlobal.globalObject.scene.add(other);
+    fakeGlobal.globalObject.transformControls.object = other;
+
+    await graphicContext.deleteObject(object);
+
+    expect(fakeGlobal.globalObject.transformControls.object).toBe(other);
+  });
+
+  // A mesh the scene no longer holds still has to release its buffers; `object.parent!`
+  // threw here, which aborted the rest of the delete cascade.
+  it("tolerates an object that is already out of the scene graph", async () => {
+    const orphan = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+
+    await expect(graphicContext.deleteObject(orphan)).resolves.toBeUndefined();
   });
 });
 

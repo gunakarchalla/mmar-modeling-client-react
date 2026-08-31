@@ -97,9 +97,10 @@ export class ExpressionUtility {
    */
   async attrvalByInst(attrUUID: string, instUUID: string): Promise<string | undefined> {
     const instance = await this.instanceUtility.getAnyInstance(instUUID);
+    if (!instance) return undefined;
     const attributeInstances = await this.instanceUtility.getAttributeInstanceFromAnyInstance(
       attrUUID,
-      instance!.uuid,
+      instance.uuid,
       "uuid",
     );
     return attributeInstances?.value;
@@ -128,7 +129,14 @@ export class ExpressionUtility {
    */
   async setAttrvalByInstanceUUID(instanceUUID: string, metaAttributeUUID: string, value: any) {
     const attributeInstance = await this.findAttributeInstance(instanceUUID, metaAttributeUUID);
-    attributeInstance!.value = value;
+    // Nothing to write to. Mechanisms run from the render loop, once per frame, against
+    // whatever the scene holds AT THAT MOMENT — and a delete is a chain of awaited HTTP
+    // calls, so frames are drawn while the cascade is still running and an instance a
+    // mechanism names can vanish between two of them. That is a normal race, not a
+    // fault, so it is skipped rather than thrown: the exception escaped as an unhandled
+    // rejection out of Animator.animate and took the rest of the frame with it.
+    if (!attributeInstance) return;
+    attributeInstance.value = value;
   }
 
   /**
@@ -253,10 +261,15 @@ export class ExpressionUtility {
     this.eventAggregator.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
   }
 
-  /** The attribute instance of `metaAttributeUUID` on any kind of instance. */
+  /**
+   * The attribute instance of `metaAttributeUUID` on any kind of instance, or undefined
+   * when the scene no longer holds that instance — which is the ordinary outcome for a
+   * mechanism naming something the user has just deleted.
+   */
   private async findAttributeInstance(instanceUUID: string, metaAttributeUUID: string): Promise<AttributeInstance | undefined> {
     const instance = await this.instanceUtility.getAnyInstance(instanceUUID);
-    return this.instanceUtility.getAttributeInstanceFromAnyInstance(metaAttributeUUID, instance!.uuid, "uuid");
+    if (!instance) return undefined;
+    return this.instanceUtility.getAttributeInstanceFromAnyInstance(metaAttributeUUID, instance.uuid, "uuid");
   }
 
   /** A cached file as a data-URL, for image and icon vizReps. */

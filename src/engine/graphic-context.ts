@@ -1016,9 +1016,21 @@ export class GraphicContext {
     return object;
   }
 
+  /**
+   * The single place an object leaves the scene graph, so it is also where the
+   * transform gizmo has to let go of it: three's TransformControls dereferences
+   * `object.parent` every frame and logs "The attached 3D object must be a part of the
+   * scene graph" for as long as it points at a detached object. A delete is a chain of
+   * awaited HTTP calls, so the render loop draws many frames between the removal here
+   * and whatever detaches later — every one of them used to log that error.
+   */
   async deleteObject(object: THREE.Mesh) {
+    if (!object) return;
+
+    this.detachTransformControlsFrom(object);
+
     //remove from scene
-    object.parent!.remove(object);
+    object.parent?.remove(object);
 
     //remove children
     for (const child of object.children) {
@@ -1049,6 +1061,23 @@ export class GraphicContext {
       mat.dispose();
     } catch {
       this.logger.log("no material to delete", "close");
+    }
+  }
+
+  /**
+   * Let the transform gizmo go before `object` (or anything under it) is unparented.
+   * The gizmo may be holding a CHILD of what is being deleted — a label or a port is
+   * attached directly — so the whole subtree is checked, not just the object itself.
+   */
+  private detachTransformControlsFrom(object: THREE.Object3D): void {
+    const controls = this.globalObjectInstance.transformControls;
+    const attached = controls?.object;
+    if (!attached) return;
+    for (let node: THREE.Object3D | null = attached; node; node = node.parent) {
+      if (node === object) {
+        controls.detach();
+        return;
+      }
     }
   }
 
