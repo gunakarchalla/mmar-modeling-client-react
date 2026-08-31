@@ -50,18 +50,39 @@ export class SceneInitiator {
   }
 
   async initTransformControls() {
-    let oldTransformControls: TransformControls | undefined;
-    //search in scene for transformControls
-    this.globalObjectInstance.scene.traverse((child: THREE.Object3D) => {
-      if (child instanceof TransformControls) {
-        oldTransformControls = child;
-      }
-    });
-
+    // Retire the previous controls before building the replacement.
+    //
+    // This used to look for them by traversing the scene, which since three 0.169 can
+    // never find them: TransformControls extends Controls (an EventDispatcher), not
+    // Object3D, so it is not IN the scene — only its helper is. The search therefore
+    // always came up empty and every call to this method leaked a live controls object
+    // whose canvas pointer listeners stayed registered, plus an orphaned helper. A
+    // leaked instance still dispatching 'mouseUp' is what surfaced as "Cannot read
+    // properties of undefined (reading 'userData')" in onTransformControlsMouseUp: the
+    // handler reads the CURRENT controls, which has nothing attached.
+    //
+    // `globalObject` is where the live instance actually is, so retire that one.
+    const oldTransformControls: TransformControls | undefined = this.globalObjectInstance.transformControls;
     if (oldTransformControls) {
-      //remove old transformControls from scene.children
-      //(cast: three >=0.169 TransformControls no longer extends Object3D)
-      this.globalObjectInstance.scene.remove(oldTransformControls as any);
+      // The helper may sit in a scene we have already swapped away from (sceneInit and
+      // the tab switch both reassign `globalObject.scene` first), so detach it from
+      // whatever parent it actually has rather than from the current scene.
+      const oldHelper = oldTransformControls.getHelper();
+      oldHelper.removeFromParent();
+      oldHelper.traverse((child: THREE.Object3D) => {
+        const mesh = child as Partial<THREE.Mesh>;
+        if (mesh.geometry) mesh.geometry.dispose();
+        // Gizmo materials are built per instance in the TransformControlsGizmo
+        // constructor, so nothing else is holding these.
+        const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+        if (Array.isArray(material)) material.forEach((m) => m.dispose());
+        else if (material) material.dispose();
+      });
+      // `disconnect()` rather than `dispose()`: three 0.169's TransformControls.dispose
+      // calls `this.traverse`, which Controls does not define, so it throws. Removing
+      // the canvas pointerdown/move/up listeners is the part that matters here, and
+      // that is exactly what disconnect does.
+      oldTransformControls.disconnect();
     }
 
     this.globalObjectInstance.transformControls = new TransformControls(this.globalObjectInstance.camera, this.globalObjectInstance.renderer.domElement);

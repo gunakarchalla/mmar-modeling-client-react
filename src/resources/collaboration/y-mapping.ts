@@ -80,6 +80,13 @@ export interface YDocChangeResult {
   classInstanceAdded: boolean;
   relationInstanceAdded: boolean;
   changedAttributeInstances: AttributeInstance[];
+  /**
+   * UUIDs of the class / relationclass instances a PEER deleted. The observer needs
+   * them because the local selection may be one of them: nothing else in this module
+   * knows about the selection, and a deleted instance that stays selected leaves the
+   * attribute window showing an object that is no longer in the scene.
+   */
+  deletedInstanceUuids: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -245,13 +252,15 @@ export function applyYDocClassChangeToSceneInstance(
   threeScene: THREE.Scene,
   globalObjectInstance: GlobalDefinition,
 ): YDocChangeResult {
-  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
   const path = event.path as Array<string | number>;
 
   // Path is relative to the 'class_instances' Y.Map (the observeDeep root).
   if (path.length === 0) {
     (event as Y.YMapEvent<Y.Map<unknown>>).changes.keys.forEach((change, uuid) => {
       if (change.action === "delete") {
+        // Report it back so the observer can drop a selection that pointed here.
+        result.deletedInstanceUuids.push(uuid);
         // Remove from in-memory sceneInstance
         const idx = sceneInstance.class_instances.findIndex((c) => c.uuid === uuid);
         if (idx !== -1) sceneInstance.class_instances.splice(idx, 1);
@@ -378,13 +387,15 @@ export function applyYDocRelationChangeToSceneInstance(
   threeScene: THREE.Scene,
   globalObjectInstance: GlobalDefinition,
 ): YDocChangeResult {
-  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
   const path = event.path as Array<string | number>;
 
   // Top-level add / delete of an entire RelationclassInstance entry
   if (path.length === 0) {
     (event as Y.YMapEvent<Y.Map<unknown>>).changes.keys.forEach((change, uuid) => {
       if (change.action === "delete") {
+        // Report it back so the observer can drop a selection that pointed here.
+        result.deletedInstanceUuids.push(uuid);
         const idx = sceneInstance.relationclasses_instances.findIndex((r) => r.uuid === uuid);
         if (idx !== -1) sceneInstance.relationclasses_instances.splice(idx, 1);
         const obj = threeScene.getObjectByProperty("uuid", uuid);
@@ -476,7 +487,7 @@ export function applyYDocSceneAttributeChangeToSceneInstance(
   sceneInstance: SceneInstance,
   globalObjectInstance: GlobalDefinition,
 ): YDocChangeResult {
-  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
   const path = event.path as Array<string | number>;
   sceneInstance.attribute_instances = sceneInstance.attribute_instances ?? [];
 

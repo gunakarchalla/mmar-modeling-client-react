@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as Y from "yjs";
 import * as THREE from "three";
-import { SceneInstance, type AttributeInstance } from "@gds";
+import { SceneInstance, ClassInstance, type AttributeInstance } from "@gds";
 
 // vi.mock is hoisted above every top-level declaration, so FakeProvider has to be
 // defined INSIDE vi.hoisted — declaring the class below and referencing it from the
@@ -92,6 +92,13 @@ const mocks = vi.hoisted(() => {
       render: false,
       sharedDocServiceRef: null as unknown,
       accessToken: "",
+      // The real GlobalDefinition builds these in its constructor; clearing a
+      // remotely-deleted selection detaches the gizmo and removes the box helper.
+      scene: null as unknown,
+      boxHelper: undefined as unknown,
+      transformControls: { detach: vi.fn(), attach: vi.fn() },
+      current_class_instance: undefined as unknown,
+      current_port_instance: undefined as unknown,
     } as any,
     backendService: {
       sceneInstancesGET: vi.fn(async (): Promise<SceneInstance | undefined> => undefined),
@@ -112,6 +119,8 @@ import { SharedDocService } from "./shared-doc-service";
 import { useCollabStore } from "@/resources/store/collabStore";
 import { useSelectionStore } from "@/resources/store/selectionStore";
 import { eventBus } from "@/resources/services/event-bus";
+import { globalSelectedObject } from "@/engine/global-selected-object";
+import { globalStateObject } from "@/engine/global-state-object";
 
 const SCENE_UUID = "scene-1";
 const CI_UUID = "ci-1";
@@ -163,6 +172,11 @@ beforeEach(() => {
     role_instances: [],
     render: false,
     accessToken: mocks.token,
+    scene: new THREE.Scene(),
+    boxHelper: undefined,
+    transformControls: { detach: vi.fn(), attach: vi.fn() },
+    current_class_instance: undefined,
+    current_port_instance: undefined,
   });
   useCollabStore.setState({ tabs: {} });
   service = new SharedDocService();
@@ -403,6 +417,150 @@ describe("observers", () => {
     expect(mocks.globalObject.attribute_instances.map((a: AttributeInstance) => a.uuid)).toEqual([
       "scene-attr-remote",
     ]);
+  });
+
+  /**
+   * A peer deleting the instance the local user has selected: the object leaves the
+   * scene, so every piece of selection state naming it has to go too — otherwise the
+   * attribute window keeps rendering a deleted element's attributes.
+   */
+  describe("selection of a remotely deleted instance", () => {
+    /** Select CI_UUID the way the interaction handler does. */
+    function selectClassInstance(): THREE.Mesh {
+      const mesh = new THREE.Mesh();
+      Object.defineProperty(mesh, "uuid", { value: CI_UUID });
+      globalSelectedObject.setObject(mesh);
+      mocks.globalObject.current_class_instance = scene.class_instances[0];
+      useSelectionStore.getState().setSelection(CI_UUID, "class");
+      return mesh;
+    }
+
+    it("clears it when a peer deletes the selected class instance", () => {
+      const session = service.attach(0, scene, "edit");
+      selectClassInstance();
+      const published: string[] = [];
+      const sub = eventBus.subscribe("removeAttributeGui", () => published.push("removeAttributeGui"));
+
+      session.ydoc.transact(() => {
+        session.ydoc.getMap<Y.Map<unknown>>("class_instances").delete(CI_UUID);
+      }, "remote-peer");
+      sub.dispose();
+
+      expect(useSelectionStore.getState().selectedInstanceUuid).toBeNull();
+      expect(useSelectionStore.getState().selectedType).toBeNull();
+      expect(globalSelectedObject.object).toBeUndefined();
+      expect(mocks.globalObject.current_class_instance).toBeUndefined();
+      // The gizmo must come off before the mesh leaves the scene graph.
+      expect(mocks.globalObject.transformControls.detach).toHaveBeenCalled();
+      // The attribute window falls back to the scene's own attributes.
+      expect(published).toEqual(["removeAttributeGui"]);
+    });
+
+    it("clears it when a peer deletes the selected RELATION instance", () => {
+      scene.relationclasses_instances = [
+        {
+          uuid: "ri-sel",
+          uuid_class: "rc-1",
+          name: "Flow",
+          coordinates_2d: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          custom_variables: {},
+          attribute_instance: [],
+          line_points: [],
+        },
+      ] as any;
+      const session = service.attach(0, scene, "edit");
+
+      const mesh = new THREE.Mesh();
+      Object.defineProperty(mesh, "uuid", { value: "ri-sel" });
+      globalSelectedObject.setObject(mesh);
+      // A relation is held in current_class_instance too — see onSelectionMode.
+      mocks.globalObject.current_class_instance = scene.relationclasses_instances[0];
+      useSelectionStore.getState().setSelection("ri-sel", "relationclass");
+
+      session.ydoc.transact(() => {
+        session.ydoc.getMap<Y.Map<unknown>>("relationclasses_instances").delete("ri-sel");
+      }, "remote-peer");
+
+      expect(useSelectionStore.getState().selectedInstanceUuid).toBeNull();
+      expect(globalSelectedObject.object).toBeUndefined();
+      expect(globalStateObject.activeStateLine).toBeUndefined();
+    });
+
+    it("clears a selected PORT when its owning class instance is deleted", () => {
+      const session = service.attach(0, scene, "edit");
+      // A port has no Y.Doc entry of its own; it goes with its class instance, so the
+      // deleted uuid never matches the port's.
+      const mesh = new THREE.Mesh();
+      Object.defineProperty(mesh, "uuid", { value: "port-1" });
+      globalSelectedObject.setObject(mesh);
+      mocks.globalObject.current_port_instance = { uuid: "port-1", uuid_class_instance: CI_UUID };
+      useSelectionStore.getState().setSelection("port-1", "port");
+
+      session.ydoc.transact(() => {
+        session.ydoc.getMap<Y.Map<unknown>>("class_instances").delete(CI_UUID);
+      }, "remote-peer");
+
+      expect(useSelectionStore.getState().selectedInstanceUuid).toBeNull();
+      expect(mocks.globalObject.current_port_instance).toBeUndefined();
+    });
+
+    it("LEAVES a selection of a different instance alone", () => {
+      scene.class_instances.push(
+        ClassInstance.fromJS({
+          uuid: "ci-other",
+          uuid_class: "class-1",
+          name: "Other",
+          coordinates_2d: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          custom_variables: {},
+          attribute_instance: [],
+        }) as ClassInstance,
+      );
+      const session = service.attach(0, scene, "edit");
+
+      const mesh = new THREE.Mesh();
+      Object.defineProperty(mesh, "uuid", { value: "ci-other" });
+      globalSelectedObject.setObject(mesh);
+      mocks.globalObject.current_class_instance = scene.class_instances[1];
+      useSelectionStore.getState().setSelection("ci-other", "class");
+
+      session.ydoc.transact(() => {
+        session.ydoc.getMap<Y.Map<unknown>>("class_instances").delete(CI_UUID);
+      }, "remote-peer");
+
+      expect(useSelectionStore.getState().selectedInstanceUuid).toBe("ci-other");
+      expect(globalSelectedObject.object).toBe(mesh);
+      expect(mocks.globalObject.current_class_instance.uuid).toBe("ci-other");
+    });
+
+    it("LEAVES the selection alone when the delete arrives on a BACKGROUND tab", () => {
+      // Session on tab 1 while the user is looking at tab 0.
+      mocks.globalObject.tabContext[1] = { sceneInstance: scene, threeScene: new THREE.Scene(), contextDragObjects: [] };
+      const session = service.attach(1, scene, "edit");
+      const mesh = selectClassInstance();
+
+      session.ydoc.transact(() => {
+        session.ydoc.getMap<Y.Map<unknown>>("class_instances").delete(CI_UUID);
+      }, "remote-peer");
+
+      expect(useSelectionStore.getState().selectedInstanceUuid).toBe(CI_UUID);
+      expect(globalSelectedObject.object).toBe(mesh);
+      expect(mocks.globalObject.current_class_instance).toBeDefined();
+    });
+
+    it("does not touch the selection when NOTHING was deleted", () => {
+      const session = service.attach(0, scene, "edit");
+      selectClassInstance();
+
+      session.ydoc.transact(() => {
+        const ci = session.ydoc.getMap<Y.Map<unknown>>("class_instances").get(CI_UUID)!;
+        (ci.get("coordinates_2d") as Y.Map<number>).set("x", 7);
+      }, "remote-peer");
+
+      expect(useSelectionStore.getState().selectedInstanceUuid).toBe(CI_UUID);
+      expect(mocks.globalObject.transformControls.detach).not.toHaveBeenCalled();
+    });
   });
 
   it("does nothing when the tab context is gone (a closed tab must not resurrect state)", () => {

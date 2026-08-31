@@ -1,8 +1,10 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { jwtDecode } from "jwt-decode";
-import { SceneInstance } from "@gds";
+import { SceneInstance, type ClassInstance, type PortInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
+import { globalSelectedObject } from "@/engine/global-selected-object";
+import { globalStateObject } from "@/engine/global-state-object";
 import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
@@ -231,11 +233,12 @@ export class SharedDocService {
 
       session.applyingRemote = true;
       try {
-        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
         for (const event of events) {
           const r = applyYDocClassChangeToSceneInstance(event, tabCtx.sceneInstance, tabCtx.threeScene, this.globalObjectInstance);
           if (r.classInstanceAdded) aggregate.classInstanceAdded = true;
           aggregate.changedAttributeInstances.push(...r.changedAttributeInstances);
+          aggregate.deletedInstanceUuids.push(...r.deletedInstanceUuids);
         }
         // Signal Three.js renderer to redraw
         this.globalObjectInstance.render = true;
@@ -251,6 +254,7 @@ export class SharedDocService {
         // A remote edit mutated the gds objects in place; the attribute window only
         // re-renders when selectionStore's revision changes (its bump() contract).
         this.notifyRemoteMutation(aggregate);
+        this.clearSelectionOfRemotelyDeleted(tabIndex, aggregate);
         this.notifyRemoteInstances(tabIndex, events);
       } finally {
         session.applyingRemote = false;
@@ -269,11 +273,12 @@ export class SharedDocService {
 
       session.applyingRemote = true;
       try {
-        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
         for (const event of events) {
           const r = applyYDocRelationChangeToSceneInstance(event, tabCtx.sceneInstance, tabCtx.threeScene, this.globalObjectInstance);
           if (r.relationInstanceAdded) aggregate.relationInstanceAdded = true;
           aggregate.changedAttributeInstances.push(...r.changedAttributeInstances);
+          aggregate.deletedInstanceUuids.push(...r.deletedInstanceUuids);
         }
         this.globalObjectInstance.render = true;
 
@@ -284,6 +289,7 @@ export class SharedDocService {
           eventBus.publish("remoteRelationInstanceAdded", { tabIndex });
         }
         this.notifyRemoteMutation(aggregate);
+        this.clearSelectionOfRemotelyDeleted(tabIndex, aggregate);
         this.notifyRemoteInstances(tabIndex, events);
       } finally {
         session.applyingRemote = false;
@@ -304,7 +310,7 @@ export class SharedDocService {
 
       session.applyingRemote = true;
       try {
-        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [] };
+        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
         for (const event of events) {
           const r = applyYDocSceneAttributeChangeToSceneInstance(event, tabCtx.sceneInstance, this.globalObjectInstance);
           aggregate.changedAttributeInstances.push(...r.changedAttributeInstances);
@@ -361,6 +367,76 @@ export class SharedDocService {
   private notifyRemoteMutation(aggregate: YDocChangeResult): void {
     if (aggregate.changedAttributeInstances.length === 0) return;
     useSelectionStore.getState().bump();
+  }
+
+  /**
+   * Drop the local selection when a PEER deleted the very instance it points at.
+   *
+   * Without this the object vanishes from the scene while every piece of selection
+   * state still names it: the attribute window keeps rendering the deleted element's
+   * attributes (it only rebuilds on a selection change or a `bump()`, and a deletion
+   * produces neither), the red box helper hangs in empty space, and the transform
+   * gizmo stays attached to a mesh that is no longer in the scene graph.
+   *
+   * Clearing goes through the same path a click on empty space takes — engine state
+   * first, then the reactive store — so the attribute window falls back to the open
+   * scene instance's own attributes rather than blanking. `removeObject()` also
+   * publishes the now-empty selection over awareness, so collaborators stop drawing
+   * their presence box around it too.
+   *
+   * The selection is global while sessions are per tab, so a deletion arriving on a
+   * BACKGROUND tab must leave it alone.
+   */
+  private clearSelectionOfRemotelyDeleted(tabIndex: number, aggregate: YDocChangeResult): void {
+    if (aggregate.deletedInstanceUuids.length === 0) return;
+    if (tabIndex !== this.globalObjectInstance.selectedTab) return;
+
+    const deleted = new Set(aggregate.deletedInstanceUuids);
+    if (!this.selectionUuids().some((uuid) => deleted.has(uuid))) return;
+
+    // Detach the gizmo before the mesh it is attached to leaves the scene graph.
+    this.globalObjectInstance.transformControls?.detach();
+    globalSelectedObject.removeObject();
+    // A relation instance's selected line is tracked separately from the mesh.
+    globalStateObject.activeStateLine = undefined;
+    this.globalObjectInstance.current_class_instance = undefined as unknown as ClassInstance;
+    this.globalObjectInstance.current_port_instance = undefined as unknown as PortInstance;
+
+    useSelectionStore.getState().clearSelection();
+    eventBus.publish("removeAttributeGui");
+    this.globalObjectInstance.render = true;
+  }
+
+  /**
+   * Every uuid the current selection is known by, so a remote delete can be matched
+   * against it whichever of them the peer named. They are normally the same instance
+   * seen from three places (the THREE mesh, the engine's `current_*`, the reactive
+   * store), but they drift apart mid-interaction, and a stale one left behind is
+   * exactly the state this guards against.
+   *
+   * A PORT has no entry of its own in the Y.Doc — it is deleted as part of its class
+   * instance — so a selected port also answers to its owner's uuid.
+   */
+  private selectionUuids(): string[] {
+    const uuids: string[] = [];
+    // Starts life as an empty THREE.Mesh whose uuid matches no instance, which is
+    // harmless here: it simply never matches a deleted uuid.
+    const selectedMesh = globalSelectedObject.object;
+    if (selectedMesh?.uuid) uuids.push(selectedMesh.uuid);
+
+    const storeUuid = useSelectionStore.getState().selectedInstanceUuid;
+    if (storeUuid) uuids.push(storeUuid);
+
+    // Holds the relationclass instance too, when one is selected (see the
+    // interaction handler's onSelectionMode).
+    const currentClass = this.globalObjectInstance.current_class_instance;
+    if (currentClass?.uuid) uuids.push(currentClass.uuid);
+
+    const currentPort = this.globalObjectInstance.current_port_instance;
+    if (currentPort?.uuid) uuids.push(currentPort.uuid);
+    if (currentPort?.uuid_class_instance) uuids.push(currentPort.uuid_class_instance);
+
+    return uuids;
   }
 
   private installConnectionLifecycle(session: SharedSession, tabIndex: number): void {

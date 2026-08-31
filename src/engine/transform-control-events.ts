@@ -37,13 +37,25 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     this.globalObjectInstance.render = true;
   }
 
-  /** Fired when the user releases the gizmo, i.e. once per completed drag. */
+  /**
+   * Fired when the user releases the gizmo, i.e. once per completed drag.
+   *
+   * A 'mouseUp' can arrive with NOTHING attached. The listener is registered per
+   * TransformControls instance (see sceneInitiator.initTransformControls), but this
+   * handler resolves the controls through `globalObject` — so an event dispatched by a
+   * previous instance is read against the CURRENT one, which may have no object. A
+   * freshly built one also defaults to mode "scale", which is exactly the branch that
+   * dereferences `object.userData`: that is the "Cannot read properties of undefined
+   * (reading 'userData')" this guard closes. No object means no drag to record.
+   */
   async onTransformControlsMouseUp() {
     const controls = this.globalObjectInstance.transformControls;
-    const object: THREE.Mesh = controls.object as THREE.Mesh;
-    const mode = controls.mode;
+    const object = controls?.object as THREE.Mesh | undefined;
+    const mode = controls?.mode;
 
-    if (controls && object && mode == "translate") {
+    if (!controls || !object) return;
+
+    if (mode == "translate") {
       const instance = await this.findOwningInstance(object);
       // Position variables (indices 0-2) of a moved label.
       this.lockCustomVariables(object, instance, 0, [object.position.x, object.position.y, object.position.z]);
@@ -70,7 +82,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       this.globalSelectedObject.getObject();
     }
 
-    if (controls && object && mode == "rotate") {
+    if (mode == "rotate") {
       const instance = await this.findOwningInstance(object);
       // Rotation variables (indices 3-6) of a rotated label.
       this.lockCustomVariables(object, instance, 3, [object.quaternion.x, object.quaternion.y, object.quaternion.z, object.quaternion.w]);
