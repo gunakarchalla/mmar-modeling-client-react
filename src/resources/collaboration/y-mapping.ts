@@ -36,7 +36,7 @@ import type { GlobalDefinition } from "@/engine/global-definition";
 //     <uuid> →
 //       uuid, uuid_class, name, description : string
 //       coordinates_2d          Y.Map<number>   { x, y, z }
-//       rotation                Y.Map<number>   { x, y, z, w }
+//       rotation                string          JSON-encoded unit quaternion { x, y, z, w }
 //       custom_variables        Y.Map<string>   values are JSON strings (incl. 'scale')
 //       attribute_instance      Y.Map<Y.Map>    keyed by AttributeInstance.uuid
 //         <uuid> → { uuid, uuid_attribute, name, value } : string
@@ -45,19 +45,36 @@ import type { GlobalDefinition } from "@/engine/global-definition";
 //     <uuid> →
 //       uuid, uuid_class, name, description : string
 //       coordinates_2d          Y.Map<number>   { x, y, z }
-//       rotation                Y.Map<number>   { x, y, z, w }
+//       rotation                string          JSON-encoded unit quaternion { x, y, z, w }
 //       line_points             Y.Array<string> each element a JSON-encoded point
 //       attribute_instance      Y.Map<Y.Map>    (same shape as above)
 //       role_instance_from,
 //       role_instance_to        string          JSON-encoded RoleInstance (for delete cascades)
 //
-// Encoding note: nested values without their own CRDT semantics (custom_variables
-// entries, line_points, role instances) are stored as JSON strings rather than nested
-// Y types — they are replaced wholesale on change, never merged field-by-field.
+// Encoding note: nested values without their own CRDT semantics (rotation,
+// custom_variables entries, line_points, role instances) are stored as JSON strings
+// rather than nested Y types — they are replaced wholesale on change, never merged
+// field-by-field.
+//
+// ROTATION IS DELIBERATELY NOT DECOMPOSED. A Y.Map merges per KEY, so holding the
+// quaternion as { x, y, z, w } would let a merge take some components from one peer
+// and the rest from another. Positions survive that (every (x, y, z) triple is a
+// valid position); quaternions do not — a component-wise blend of two unit
+// quaternions is not itself unit-length, and THREE's `quaternion.set` does not
+// normalize, so the mixed value reaches the object's matrix and shears the mesh
+// instead of rotating it. Encoding the quaternion as ONE key makes the merge atomic:
+// whichever peer wins, it wins with the whole rotation it actually authored.
 //
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * A rotation, structurally identical to the gds `Quaternion` class. Declared locally
+ * rather than imported: it is a decorated class over there, and this module only ever
+ * needs the four numbers.
+ */
+type Quaternion = { x: number; y: number; z: number; w: number };
 
 export type LocalChangeType =
   | { type: "coordinates"; classInstanceUuid: string; x: number; y: number; z: number }
@@ -144,12 +161,9 @@ export function applyLocalChangeToYDoc(ydoc: Y.Doc, change: LocalChangeType, ori
       case "rotation": {
         const ciMap = classInstances.get(change.classInstanceUuid);
         if (!ciMap) break;
-        const rotMap = ciMap.get("rotation") as Y.Map<number>;
-        if (!rotMap) break;
-        rotMap.set("x", change.x);
-        rotMap.set("y", change.y);
-        rotMap.set("z", change.z);
-        rotMap.set("w", change.w);
+        // ONE key write, so a concurrent rotation merges as a whole quaternion rather
+        // than component-by-component (see the encoding note at the top).
+        ciMap.set("rotation", rotationToJson(change));
         break;
       }
       case "scale": {
@@ -314,19 +328,17 @@ export function applyYDocClassChangeToSceneInstance(
     return result;
   }
 
-  // rotation nested Y.Map changed
-  if (changedField === "rotation") {
-    const rotMap = event.target as Y.Map<number>;
+  // rotation changed. It is a single JSON-encoded key ON the class-instance map, not a
+  // nested Y.Map, so the event lands at path [uuid] with `rotation` among the changed
+  // keys — one write carrying the whole quaternion, never a partial one.
+  if (path.length === 1) {
+    if (!(event as Y.YMapEvent<unknown>).changes.keys.has("rotation")) return result;
     const ci = sceneInstance.class_instances.find((c) => c.uuid === classInstanceUuid);
-    if (ci && ci.rotation) {
-      if (rotMap.has("x")) ci.rotation.x = rotMap.get("x")!;
-      if (rotMap.has("y")) ci.rotation.y = rotMap.get("y")!;
-      if (rotMap.has("z")) ci.rotation.z = rotMap.get("z")!;
-      if (rotMap.has("w")) ci.rotation.w = rotMap.get("w")!;
-      const obj = threeScene.getObjectByProperty("uuid", classInstanceUuid);
-      if (obj) {
-        (obj as THREE.Mesh).quaternion.set(ci.rotation.x, ci.rotation.y, ci.rotation.z, ci.rotation.w);
-      }
+    if (!ci) return result;
+    ci.rotation = rotationFromJson((event.target as Y.Map<unknown>).get("rotation") as string | undefined);
+    const obj = threeScene.getObjectByProperty("uuid", classInstanceUuid);
+    if (obj) {
+      (obj as THREE.Mesh).quaternion.set(ci.rotation.x, ci.rotation.y, ci.rotation.z, ci.rotation.w);
     }
     return result;
   }
@@ -623,7 +635,7 @@ function classInstanceToYMap(ci: ClassInstance): Y.Map<unknown> {
   m.set("name", ci.name ?? "");
   m.set("description", ci.description ?? "");
   m.set("coordinates_2d", coordsToYMap(ci.coordinates_2d));
-  m.set("rotation", rotationToYMap(ci.rotation));
+  m.set("rotation", rotationToJson(ci.rotation));
   m.set("custom_variables", customVariablesToYMap(ci.custom_variables as Record<string, unknown> | undefined));
   m.set("attribute_instance", attrInstancesToYMap(ci.attribute_instance ?? []));
   return m;
@@ -639,13 +651,7 @@ function classInstanceFromYMap(yMap: Y.Map<unknown>): ClassInstance {
     y: coordMap?.get("y") ?? 0,
     z: coordMap?.get("z") ?? 0,
   };
-  const rotMap = yMap.get("rotation") as Y.Map<number>;
-  ci.rotation = {
-    x: rotMap?.get("x") ?? 0,
-    y: rotMap?.get("y") ?? 0,
-    z: rotMap?.get("z") ?? 0,
-    w: rotMap?.get("w") ?? 1,
-  };
+  ci.rotation = rotationFromJson(yMap.get("rotation") as string | undefined);
   ci.port_instance = [];
   // custom_variables are stored as a Y.Map of JSON strings (see customVariablesToYMap).
   const cvMap = yMap.get("custom_variables") as Y.Map<string>;
@@ -670,7 +676,7 @@ function relationClassInstanceToYMap(ri: RelationclassInstance): Y.Map<unknown> 
   m.set("name", ri.name ?? "");
   m.set("description", ri.description ?? "");
   m.set("coordinates_2d", coordsToYMap(ri.coordinates_2d));
-  m.set("rotation", rotationToYMap(ri.rotation));
+  m.set("rotation", rotationToJson(ri.rotation));
   const linePoints = new Y.Array<string>();
   for (const lp of ri.line_points ?? []) {
     linePoints.push([JSON.stringify(lp)]);
@@ -736,13 +742,49 @@ function coordsToYMap(coords: { x: number; y: number; z: number } | undefined): 
   return m;
 }
 
-function rotationToYMap(rot: { x: number; y: number; z: number; w: number } | undefined): Y.Map<number> {
-  const m = new Y.Map<number>();
-  m.set("x", rot?.x ?? 0);
-  m.set("y", rot?.y ?? 0);
-  m.set("z", rot?.z ?? 0);
-  m.set("w", rot?.w ?? 1);
-  return m;
+/** The rotation of an instance that has none, and the fallback for anything unusable. */
+const IDENTITY_ROTATION: Quaternion = { x: 0, y: 0, z: 0, w: 1 };
+
+/**
+ * Coerce a quaternion to unit length. Only a unit quaternion is a rotation: THREE
+ * composes `quaternion` straight into the object's matrix without normalizing, so a
+ * non-unit one scales and shears the mesh rather than turning it.
+ *
+ * Callers pass `object3D.quaternion`, which THREE already keeps normalized, so this is
+ * a no-op on the live path — it is here to stop a value that is not a rotation from
+ * being written to the doc and handed to every peer. A zero-length quaternion has no
+ * direction to preserve, so it degrades to identity.
+ */
+function normalizeQuaternion(rot: Partial<Quaternion> | undefined): Quaternion {
+  const x = rot?.x, y = rot?.y, z = rot?.z, w = rot?.w;
+  if (![x, y, z, w].every((n) => typeof n === "number" && Number.isFinite(n))) return { ...IDENTITY_ROTATION };
+  const length = Math.hypot(x!, y!, z!, w!);
+  if (length === 0) return { ...IDENTITY_ROTATION };
+  return { x: x! / length, y: y! / length, z: z! / length, w: w! / length };
+}
+
+/**
+ * Encode a quaternion as the single atomic value the doc stores under `rotation`.
+ * Normalizing here makes the doc's copy canonical: every rotation in the document is a
+ * real rotation, whatever the caller passed.
+ */
+function rotationToJson(rot: Partial<Quaternion> | undefined): string {
+  return JSON.stringify(normalizeQuaternion(rot));
+}
+
+/**
+ * Decode the `rotation` value written by `rotationToJson`. Malformed JSON, a missing
+ * field or a non-finite component all fall back to identity rather than propagating a
+ * value that would corrupt the object's matrix.
+ */
+function rotationFromJson(raw: string | undefined): Quaternion {
+  if (typeof raw !== "string") return { ...IDENTITY_ROTATION };
+  try {
+    const parsed = JSON.parse(raw) as Partial<Quaternion> | null;
+    return normalizeQuaternion(parsed ?? undefined);
+  } catch {
+    return { ...IDENTITY_ROTATION };
+  }
 }
 
 function customVariablesToYMap(vars: Record<string, unknown> | undefined): Y.Map<string> {

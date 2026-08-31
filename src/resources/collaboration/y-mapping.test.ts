@@ -28,6 +28,9 @@ const RI_UUID = "ri-1";
 const ATTR_UUID = "attr-1";
 const SCENE_ATTR_UUID = "scene-attr-1";
 
+/** Structural match for the gds Quaternion, same as y-mapping's own local alias. */
+type Quat = { x: number; y: number; z: number; w: number };
+
 function classInstanceJson(over: Record<string, unknown> = {}) {
   return {
     uuid: CI_UUID,
@@ -129,7 +132,9 @@ describe("sceneInstanceToYDoc", () => {
     const ciMap = ydoc.getMap<Y.Map<unknown>>("class_instances").get(CI_UUID)!;
     expect(ciMap.get("uuid_class")).toBe("class-1");
     expect((ciMap.get("coordinates_2d") as Y.Map<number>).get("x")).toBe(1);
-    expect((ciMap.get("rotation") as Y.Map<number>).get("w")).toBe(1);
+    // rotation is ONE JSON string, not a nested Y.Map — that is what makes a
+    // concurrent rotation merge as a whole quaternion (encoding note).
+    expect(ciMap.get("rotation")).toBe('{"x":0,"y":0,"z":0,"w":1}');
     // custom_variables values are JSON strings, not nested Y types (encoding note).
     expect((ciMap.get("custom_variables") as Y.Map<string>).get("scale")).toBe('{"x":2,"y":2,"z":2}');
     const attrEntry = (ciMap.get("attribute_instance") as Y.Map<Y.Map<unknown>>).get(ATTR_UUID)!;
@@ -169,10 +174,9 @@ describe("applyLocalChangeToYDoc", () => {
     expect([coords.get("x"), coords.get("y"), coords.get("z")]).toEqual([10, 20, 30]);
   });
 
-  it("writes rotation", () => {
-    applyLocalChangeToYDoc(ydoc, { type: "rotation", classInstanceUuid: CI_UUID, x: 0.1, y: 0.2, z: 0.3, w: 0.4 }, origin);
-    const rot = ciMap().get("rotation") as Y.Map<number>;
-    expect([rot.get("x"), rot.get("y"), rot.get("z"), rot.get("w")]).toEqual([0.1, 0.2, 0.3, 0.4]);
+  it("writes rotation as a single JSON string, not a nested Y.Map", () => {
+    applyLocalChangeToYDoc(ydoc, { type: "rotation", classInstanceUuid: CI_UUID, x: 0.5, y: 0.5, z: 0.5, w: 0.5 }, origin);
+    expect(ciMap().get("rotation")).toBe('{"x":0.5,"y":0.5,"z":0.5,"w":0.5}');
   });
 
   it("writes scale as a JSON string under custom_variables", () => {
@@ -318,6 +322,23 @@ describe("applyYDocClassChangeToSceneInstance", () => {
     const ci = sceneB.class_instances.find((c) => c.uuid === CI_UUID)!;
     expect([ci.rotation.x, ci.rotation.y, ci.rotation.z, ci.rotation.w]).toEqual([0, 0, 1, 0]);
     expect(mesh.quaternion.z).toBe(1);
+  });
+
+  it("falls back to identity rather than applying a rotation it cannot decode", () => {
+    const mesh = new THREE.Mesh();
+    Object.defineProperty(mesh, "uuid", { value: CI_UUID });
+    threeScene.add(mesh);
+
+    relayAndApply(ydoc, docB, "class_instances", applyTo);
+    // A peer on a different build, or a corrupted value: whatever the cause, an
+    // undecodable rotation must not reach the object's matrix.
+    ydoc.transact(() => {
+      (ydoc.getMap<Y.Map<unknown>>("class_instances").get(CI_UUID) as Y.Map<unknown>).set("rotation", "{not json");
+    });
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    const ci = sceneB.class_instances.find((c) => c.uuid === CI_UUID)!;
+    expect([ci.rotation.x, ci.rotation.y, ci.rotation.z, ci.rotation.w]).toEqual([0, 0, 0, 1]);
   });
 
   it("reports a remote attribute change so the caller can refresh the vizrep", () => {
@@ -510,5 +531,117 @@ describe("applyYDocSceneAttributeChangeToSceneInstance", () => {
     Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
 
     expect(sceneB.attribute_instances.filter((a) => a.uuid === SCENE_ATTR_UUID)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The invariant the rotation encoding exists to protect.
+// ---------------------------------------------------------------------------
+//
+// A Y.Map merges per KEY. Holding the quaternion as a nested { x, y, z, w } map let a
+// merge take some components from one peer and the rest from another — and a
+// component-wise blend of two unit quaternions is not unit-length, so it is not a
+// rotation at all. THREE does not normalize what it is handed, so such a value reaches
+// the object's matrix and shears the mesh. These tests pin the property that rules that
+// out: the quaternion is ONE value, so a merge can only ever return a whole one.
+
+describe("rotation merge atomicity", () => {
+  /** Two peers that already share the scene, each free to make a concurrent edit. */
+  function twoPeers(): [Y.Doc, Y.Doc] {
+    const a = new Y.Doc();
+    sceneInstanceToYDoc(makeScene(), a, {});
+    const b = new Y.Doc();
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    return [a, b];
+  }
+
+  /** Exchange exactly what the other side is missing, in both directions. */
+  function merge(a: Y.Doc, b: Y.Doc): void {
+    const fromA = Y.encodeStateAsUpdate(a, Y.encodeStateVector(b));
+    const fromB = Y.encodeStateAsUpdate(b, Y.encodeStateVector(a));
+    Y.applyUpdate(b, fromA);
+    Y.applyUpdate(a, fromB);
+  }
+
+  const rotate = (doc: Y.Doc, q: Quat) =>
+    applyLocalChangeToYDoc(doc, { type: "rotation", classInstanceUuid: CI_UUID, ...q }, {});
+
+  const storedRotation = (doc: Y.Doc) =>
+    (doc.getMap<Y.Map<unknown>>("class_instances").get(CI_UUID) as Y.Map<unknown>).get("rotation");
+
+  const rotationOf = (doc: Y.Doc): Quat => JSON.parse(storedRotation(doc) as string);
+
+  const norm = (q: Quat) => Math.hypot(q.x, q.y, q.z, q.w);
+
+  // Two unit quaternions that share NO component, so any per-component blend of them is
+  // both detectable and (being a blend of unit vectors) no longer unit-length.
+  const Q_A: Quat = { x: 0.5, y: 0.5, z: 0.5, w: 0.5 };
+  const Q_B: Quat = { x: 0, y: 0.6, z: 0, w: 0.8 };
+  const Q_C: Quat = { x: 0.8, y: 0, z: 0.6, w: 0 };
+
+  it("stores the quaternion under one key, so no writer can publish half a rotation", () => {
+    const [a] = twoPeers();
+    rotate(a, Q_A);
+    // A string has no sub-keys to merge independently — that is the whole fix.
+    expect(typeof storedRotation(a)).toBe("string");
+    expect(storedRotation(a)).not.toBeInstanceOf(Y.Map);
+  });
+
+  it("resolves a concurrent rotation to one peer's whole quaternion, never a blend", () => {
+    const [a, b] = twoPeers();
+    rotate(a, Q_A);
+    rotate(b, Q_B);
+    merge(a, b);
+
+    expect(rotationOf(a)).toEqual(rotationOf(b));
+    // Which peer wins is Yjs's call; that it wins with the rotation it authored is ours.
+    expect([Q_A, Q_B]).toContainEqual(rotationOf(a));
+    expect(norm(rotationOf(a))).toBeCloseTo(1, 12);
+  });
+
+  it("holds when a peer rotates twice against another peer's single rotation", () => {
+    const [a, b] = twoPeers();
+    rotate(a, Q_A);
+    merge(a, b);
+    // Both rotate again from the same base, so the second round is concurrent too.
+    rotate(a, Q_C);
+    rotate(b, Q_B);
+    merge(a, b);
+
+    expect(rotationOf(a)).toEqual(rotationOf(b));
+    expect([Q_C, Q_B]).toContainEqual(rotationOf(a));
+    expect(norm(rotationOf(a))).toBeCloseTo(1, 12);
+  });
+
+  it("holds for three peers whose updates arrive in different orders", () => {
+    const [a, b] = twoPeers();
+    const c = new Y.Doc();
+    Y.applyUpdate(c, Y.encodeStateAsUpdate(a));
+
+    rotate(a, Q_A);
+    rotate(b, Q_B);
+    rotate(c, Q_C);
+    // Each pair meets in a different order before the doc is whole again.
+    merge(a, b);
+    merge(b, c);
+    merge(a, c);
+    merge(a, b);
+
+    expect(rotationOf(a)).toEqual(rotationOf(b));
+    expect(rotationOf(b)).toEqual(rotationOf(c));
+    expect([Q_A, Q_B, Q_C]).toContainEqual(rotationOf(a));
+    expect(norm(rotationOf(a))).toBeCloseTo(1, 12);
+  });
+
+  it("normalizes a non-unit quaternion before it reaches the doc", () => {
+    const [a] = twoPeers();
+    rotate(a, { x: 0, y: 0, z: 3, w: 4 });
+    expect(rotationOf(a)).toEqual({ x: 0, y: 0, z: 0.6, w: 0.8 });
+  });
+
+  it("falls back to identity for a quaternion with no direction to preserve", () => {
+    const [a] = twoPeers();
+    rotate(a, { x: 0, y: 0, z: 0, w: 0 });
+    expect(rotationOf(a)).toEqual({ x: 0, y: 0, z: 0, w: 1 });
   });
 });
