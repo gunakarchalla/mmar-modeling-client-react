@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { Class, Relationclass, SceneInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { globalStateObject } from "@/engine/global-state-object";
@@ -10,6 +11,7 @@ import { instanceUtility } from "./instance-utility";
 import { snapshotService } from "./snapshot-service";
 import { backendService } from "./backend-service";
 import { eventBus } from "./event-bus";
+import { runExclusive } from "./draw-lock";
 import { logger } from "./logger";
 import { NOT_ALLOWED_MESSAGE } from "./metamodel-constraints";
 
@@ -67,15 +69,30 @@ export class PersistencyHandler {
     });
   }
 
-  /** Run a draw pass against `tabIndex` and restore the previously selected tab. */
+  /**
+   * Run a draw pass against `tabIndex` and restore the previously selected tab.
+   *
+   * The whole thing goes through the draw lock, tab swap included: a draw pass and a
+   * click the user makes while it runs would otherwise interleave over the shared
+   * graphic context, and the tab swap would move the ground under the click's feet.
+   * Handed over with `void` — a caller waiting on the lane from inside it would deadlock.
+   */
   private drawForTab(tabIndex: number, draw: () => Promise<void>, channel: string): void {
-    const savedTab = this.globalObjectInstance.selectedTab;
-    this.globalObjectInstance.selectedTab = tabIndex;
-    void draw()
-      .catch((error) => this.logger.log(`${channel} failed: ${describeError(error)}`, "error"))
-      .finally(() => {
+    void runExclusive(async () => {
+      const savedTab = this.globalObjectInstance.selectedTab;
+      // The draw passes BORROW current_class_instance to tell the vizRep pipeline which
+      // instance they are drawing, and leave it pointing at the last one they drew. That
+      // field is also what a Delete keypress deletes (deletion-handler.onPressDelete), so
+      // a peer's addition landing here must hand back whatever the local user had.
+      const savedClassInstance = this.globalObjectInstance.current_class_instance;
+      this.globalObjectInstance.selectedTab = tabIndex;
+      try {
+        await draw();
+      } finally {
         this.globalObjectInstance.selectedTab = savedTab;
-      });
+        this.globalObjectInstance.current_class_instance = savedClassInstance;
+      }
+    }).catch((error) => this.logger.log(`${channel} failed: ${describeError(error)}`, "error"));
   }
 
   async checkIfClassinstanceInScene() {
@@ -230,14 +247,18 @@ export class PersistencyHandler {
       //we call the function that is stored in the metamodel
       await this.gc.runVizRepFunction(metaFunction);
       // we call the function for drawing the information in the gc
-      await this.gc.drawVizRep_rel();
+      // The line comes back from the draw call. This pass draws relations the LOCAL USER
+      // did not just click into being — a peer's, or a scene being loaded — so it must
+      // not touch globalStateObject.activeStateLine: that field belongs to the relation
+      // the local user is drawing right now, and overwriting (then clearing) it stranded
+      // a half-drawn line whenever a collaborator's relation arrived mid-gesture.
+      const line: Line2 = await this.gc.drawVizRep_rel();
       this.globalObjectInstance.render = true;
 
       //also set the uuid for old uuid for the children
       //otherwise there is an error in the animationloop of the line
-      // (activeStateLine is a Line2 while dragObjects is typed Mesh[]; the line does
-      // belong in the pick list, hence the cast.)
-      const line = this.globalStateObject.activeStateLine!;
+      // (the line is a Line2 while dragObjects is typed Mesh[]; the line does belong in
+      // the pick list, hence the cast.)
       line.uuid = relationclass_instance.uuid;
       for (const child of line.children) {
         child.uuid = relationclass_instance.uuid;
@@ -254,8 +275,6 @@ export class PersistencyHandler {
       }
       this.globalObjectInstance.dragObjects.unshift(line as unknown as THREE.Mesh);
     }
-
-    this.globalStateObject.activeStateLine = undefined as any;
   }
 
   async mapClassInstancetoClass() {
@@ -396,6 +415,12 @@ export class PersistencyHandler {
 
   //function to import stored instances to the model
   async importInstances() {
+    // The scene is rebuilt from stored data, so a line the user was drawing into the
+    // scene being replaced no longer exists. Dropping the reference here rather than in
+    // checkIfRelationclassinstanceInScene keeps the remote-add path (which shares that
+    // draw pass, and runs while the user may well be mid-gesture) from clearing it.
+    this.globalStateObject.activeStateLine = undefined;
+
     //map class_instances to class_pattern and push to globalObjectInstance.attribute_instances
     await this.mapClassInstancetoClass();
     await this.gc.resetInstance();

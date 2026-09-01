@@ -3,9 +3,12 @@ import { create } from "zustand";
 /**
  * The reactive mirror of the current selection in the THREE scene.
  *
- * The engine is the source of truth (`globalObject.current_class_instance` /
- * `current_port_instance`) and writes here ONE WAY from the interaction handler; React
- * components read the identity of the selection from the store. The
+ * `globalSelectedObject` is the source of truth for what is selected (it owns the mesh,
+ * the box helper and the instance behind them) and writes here ONE WAY from the
+ * interaction handler; React components read the identity of the selection from the
+ * store. Note `globalObject.current_class_instance` is NOT that source: it is the vizRep
+ * pipeline's "instance being drawn" pointer, which merely happens to name the selection
+ * some of the time. The
  * `updateAttributeGui` / `removeAttributeGui` bus channels still exist alongside it as
  * the coarse "re-render everything" signal.
  *

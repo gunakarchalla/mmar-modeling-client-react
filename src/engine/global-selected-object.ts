@@ -1,8 +1,23 @@
 import * as THREE from "three";
+import type { ClassInstance, PortInstance, RelationclassInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 
+/** The gds instance behind a selected mesh — a relation is a ClassInstance subtype. */
+export type SelectedInstance = ClassInstance | RelationclassInstance | PortInstance;
+
 /**
- * The locally selected object, and the red box helper drawn around it.
+ * THE SELECTION: what the user has picked, the red box helper drawn around it, and the
+ * gds instance behind it.
+ *
+ * `getSelectedInstance()` is the authority on "what is selected", and commands that act
+ * on the selection ask it — `deletionHandler.onPressDelete` above all. It used to ask
+ * `globalObject.current_class_instance` instead, which is a DIFFERENT question:
+ * that field is the vizRep pipeline's "which instance am I drawing right now" scratch
+ * variable, written by every draw path and left pointing at whatever was drawn last. So
+ * Delete fired on things nobody had selected — the box you just dropped in drawing mode,
+ * the element a collaborator's change happened to redraw, the object you deselected by
+ * clicking empty canvas. Selection state is set HERE and nowhere else, so there is one
+ * answer rather than four that drift apart.
  *
  * Selecting also publishes the selection over the active tab's awareness, so
  * collaborators can draw a presence box around the same object
@@ -12,7 +27,28 @@ import { globalObject } from "@/engine/global-definition";
 export class GlobalSelectedObject {
   public object: THREE.Mesh = new THREE.Mesh();
 
+  /** The instance `object` stands for; null whenever nothing is selected. */
+  private instance: SelectedInstance | null = null;
+
   private globalObjectInstance = globalObject;
+
+  /**
+   * The selected instance, or null when nothing is selected — including during the gap
+   * between the mesh being picked and the instance behind it being resolved (the lookup
+   * is async). Null is the safe answer there: a command that fires in that window does
+   * nothing rather than acting on the previous selection.
+   */
+  getSelectedInstance(): SelectedInstance | null {
+    return this.instance;
+  }
+
+  /**
+   * Name the instance the picked mesh stands for. Called once `onSelectionMode` has
+   * resolved it, which is necessarily after `setObject`.
+   */
+  setSelectedInstance(instance: SelectedInstance | null) {
+    this.instance = instance ?? null;
+  }
 
   getObject() {
     // Only refresh the box helper when there is actually something selected. After
@@ -27,6 +63,8 @@ export class GlobalSelectedObject {
   }
 
   setObject(object: THREE.Mesh) {
+    // Clears the previous instance too: the new one is resolved asynchronously and
+    // recorded by `setSelectedInstance`, and until it arrives nothing is selected.
     this.removeObject();
     if (this.globalObjectInstance.boxHelper != undefined) {
       this.object = object;
@@ -41,6 +79,13 @@ export class GlobalSelectedObject {
 
   removeObject() {
     this.object = undefined as unknown as THREE.Mesh;
+    this.instance = null;
+    // The engine's "instance in context" pointers describe the selection while one
+    // exists, so they must not outlive it — every caller of this method means "nothing
+    // is selected now", and a pointer left behind is what the attribute dialogs had to
+    // work around ("may still hold the last selected element").
+    this.globalObjectInstance.current_class_instance = undefined as unknown as ClassInstance;
+    this.globalObjectInstance.current_port_instance = undefined as unknown as PortInstance;
     this.removeSelectionBoxHelper();
     // Tell collaborators we no longer have anything selected.
     this.publishSelection(null);

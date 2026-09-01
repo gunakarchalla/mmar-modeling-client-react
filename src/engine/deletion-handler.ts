@@ -40,21 +40,42 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
   private fetchHelper = backendService;
   private eventAggregator = eventBus;
 
+  /**
+   * Delete what the user has SELECTED, and nothing when nothing is selected.
+   *
+   * The selection comes from `globalSelectedObject` — the thing with the red box drawn
+   * around it. It used to come from `globalObject.current_class_instance`, which answers
+   * a different question: that field is the vizRep pipeline's "which instance am I
+   * drawing" scratch variable, so it names whatever was drawn or picked most recently
+   * and stays pointing there. Delete therefore fired with nothing selected — on the box
+   * just dropped in drawing mode, on an element a collaborator's change had redrawn, on
+   * the object the user had deselected by clicking empty canvas.
+   */
   async onPressDelete() {
+    const selectedInstance = this.globalSelectedObject.getSelectedInstance();
+    if (!selectedInstance) {
+      this.logger.log("nothing is selected, delete skipped", "info");
+      return;
+    }
+
     const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
 
-    let index: number | undefined;
-    let index2: number | undefined;
-    if (this.globalObjectInstance.current_class_instance) {
-      index = sceneInstance.class_instances.findIndex((instance) => instance.uuid == this.globalObjectInstance.current_class_instance.uuid);
-      index2 = sceneInstance.relationclasses_instances.findIndex((instance) => instance.uuid == this.globalObjectInstance.current_class_instance.uuid);
+    const index = sceneInstance.class_instances.findIndex((instance) => instance.uuid == selectedInstance.uuid);
+    const index2 = sceneInstance.relationclasses_instances.findIndex((instance) => instance.uuid == selectedInstance.uuid);
+
+    // Neither list holds it: a selected PORT (deleted with its class, never on its own),
+    // or an instance already gone from the scene. Nothing to delete, so no undo step.
+    if (index < 0 && index2 < 0) {
+      this.logger.log(`selected instance ${selectedInstance.uuid} is not a deletable element of the scene, delete skipped`, "info");
+      return;
     }
+
     // The indices only decide WHICH of the two deletes to run; neither method splices
     // by the index it is handed (see removeInstance).
-    if (index !== undefined && index >= 0) {
-      await this.deleteClassInstance(this.globalObjectInstance.current_class_instance, index);
-    } else if (index2 !== undefined && index2 >= 0) {
-      await this.deleteRelationclassInstance(this.globalObjectInstance.current_class_instance, index2);
+    if (index >= 0) {
+      await this.deleteClassInstance(selectedInstance as ClassInstance, index);
+    } else {
+      await this.deleteRelationclassInstance(selectedInstance as RelationclassInstance, index2);
     }
 
     // One undo step for the whole delete, cascade included. Recording here rather than

@@ -18,6 +18,7 @@ import { logger } from "@/resources/services/logger";
 import { eventBus } from "@/resources/services/event-bus";
 import { useSelectionStore, type SelectionType } from "@/resources/store/selectionStore";
 import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
+import { runExclusive } from "@/resources/services/draw-lock";
 
 /**
  * The canvas interaction state machine. `onDocumentMouseDown` is the renderer's
@@ -73,7 +74,21 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
   // ------------------------------------
   // check sequence diagram in the wiki of mm-ar: https://github.com/MM-AR/mmar/wiki/InteractionHandler
   // ------------------------------------
+  /**
+   * Runs one click's worth of work, and only one at a time.
+   *
+   * The modes below draw, and drawing runs on shared single-slot state (see draw-lock).
+   * A peer's change arrives out of a websocket callback and starts a draw pass of its
+   * own, so without the lane it lands in the middle of this one — which is how a relation
+   * a collaborator finished used to break the relation the local user was still drawing.
+   * The per-click fields this class parks on `this` are inside the lane too, so a second
+   * click cannot overwrite them while the first is still being served.
+   */
   async onDocumentMouseDown(event: MouseEvent) {
+    await runExclusive(() => this.dispatchMouseDown(event));
+  }
+
+  private async dispatchMouseDown(event: MouseEvent) {
     this.clickedButton = event.button;
     this.dragging = this.globalObjectInstance.transformControls.dragging;
     this.programState = this.globalStateObject.getState();
@@ -88,7 +103,9 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
 
     //if state === SelectionMode
     if (this.programState === this.globalStateObject.stateNames[0] && !this.dragging) {
-      this.onSelectionMode();
+      // Awaited like every other mode, so the whole click stays inside the lane: this one
+      // resolves and publishes the selection, which the draw passes also write.
+      await this.onSelectionMode();
     } else if (this.programState === this.globalStateObject.stateNames[0] && this.dragging) {
       this.logger.log("dragging", "info");
     }
@@ -151,6 +168,16 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
           this.globalStateObject.activeStateLine = this.intersect.object as unknown as Line2;
         }
       }
+
+      // Record THE selection — the one commands like Delete act on. Set here, once the
+      // mesh's instance has actually been resolved, rather than inferred later from the
+      // engine's draw-pipeline pointers.
+      const selectedInstance =
+        (class_instance as ClassInstance | undefined) ??
+        (this.globalObjectInstance.current_class_instance as RelationclassInstance | undefined) ??
+        (port_instance as PortInstance | undefined) ??
+        null;
+      this.globalSelectedObject.setSelectedInstance(selectedInstance);
 
       // Drive the reactive selection store (engine -> store) alongside the bus.
       let selType: SelectionType = null;
@@ -415,14 +442,19 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       //we call the function that is stored in the metamodel
       await this.gc.runVizRepFunction(metaFunction);
       // we call the function for drawing the information in the gc
-      await this.gc.drawVizRep_rel();
+      // The draw hands the line back directly. It becomes the ACTIVE line — the one the
+      // rest of this gesture (bendpoints, the closing click) works on — and only a draw
+      // started by THIS user's click may claim that role, which is why the line travels
+      // as a return value rather than through globalStateObject.
+      const line: Line2 = await this.gc.drawVizRep_rel();
+      this.globalStateObject.setActiveStateLine(line);
       this.globalObjectInstance.render = true;
 
-      this.globalObjectInstance.dragObjects.unshift(this.globalStateObject.activeStateLine as unknown as THREE.Mesh);
-      this.globalObjectInstance.scene.add(this.globalStateObject.activeStateLine!);
+      this.globalObjectInstance.dragObjects.unshift(line as unknown as THREE.Mesh);
+      this.globalObjectInstance.scene.add(line);
 
-      this.globalStateObject.activeStateLine!.userData.relObj.push(this.intersect.object);
-      this.globalStateObject.activeStateLine!.userData.relObj.push(this.globalObjectInstance.mousePointer3d);
+      line.userData.relObj.push(this.intersect.object);
+      line.userData.relObj.push(this.globalObjectInstance.mousePointer3d);
 
       // add first point object to array
       this.instanceCreationHandler.addPointToClassInstance(relationclass_instance, fromObject);

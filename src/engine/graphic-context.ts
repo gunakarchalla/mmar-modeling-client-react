@@ -12,7 +12,6 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { ObjectInstance, ClassInstance, PortInstance, UUID, RelationclassInstance } from "@gds";
 
 import { globalObject } from "@/engine/global-definition";
-import { globalStateObject } from "@/engine/global-state-object";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
@@ -38,7 +37,6 @@ interface custom_object {
 
 export class GraphicContext {
   private globalObjectInstance = globalObject;
-  private globalStateObject = globalStateObject;
   private metaUtility = metaUtility;
   private instanceUtility = instanceUtility;
   private logger = logger;
@@ -435,13 +433,15 @@ export class GraphicContext {
     this.globalObjectInstance.updateLinesArray.push(line);
 
     //add line to gc.object3D object
+    //this is also how the caller gets the line back: drawVizRep_rel() returns
+    //object3D[current class_instance uuid], i.e. exactly this line. It is deliberately
+    //NOT published on globalStateObject.activeStateLine — that field means "the line the
+    //local user is currently drawing", and a draw triggered by a peer's change or by a
+    //scene load would overwrite the half-drawn line the user is holding.
     this.object3D[line.uuid] = line;
 
     //set start, end object array to empty (init)
     line.userData.relObj = [];
-
-    //set the line to the state object as active line
-    this.globalStateObject.activeStateLine = line;
   }
 
   //this is the function that defines a object for the from end of a relation (can be called multiple times)
@@ -842,9 +842,10 @@ export class GraphicContext {
     }
   }
 
-  async drawVizRep_rel() {
+  /** Draws the relation and returns ITS line — the caller decides what to do with it. */
+  async drawVizRep_rel(): Promise<Line2> {
     const uuid = await this.instanceUtility.get_current_class_instance_uuid();
-    const obj = this.object3D[uuid];
+    const obj: Line2 = this.object3D[uuid];
 
     // if there is a from object, add it to the object
     if (Object.values(this.rel_from_objects).length > 0) {

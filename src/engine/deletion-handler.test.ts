@@ -40,8 +40,16 @@ vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject 
 vi.mock("@/engine/graphic-context", () => ({ graphicContext: mocks.graphicContext, GraphicContext: class {} }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.backendService }));
+// onPressDelete finishes with setState(0), and the real state machine reaches for
+// transformControls / orbitControls / the DOM container, none of which the faked
+// globalObject has. globalSelectedObject stays REAL — it is the thing under test.
+vi.mock("@/engine/global-state-object", () => ({
+  globalStateObject: { activeStateLine: undefined, setState: vi.fn() },
+}));
 
 const { deletionHandler } = await import("./deletion-handler");
+const { globalSelectedObject } = await import("./global-selected-object");
+const { eventBus } = await import("@/resources/services/event-bus");
 
 const CI_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CI_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -257,5 +265,97 @@ describe("DeletionHandler.deleteClassInstance — cascade over chained relations
     const classB = scene.class_instances.find((instance) => instance.uuid === CI_B)!;
     await expect(deletionHandler.deleteClassInstance(classB, 1)).resolves.toBeUndefined();
     expect(scene.class_instances.map((instance) => instance.uuid)).toEqual([CI_A, CI_C]);
+  });
+});
+
+/**
+ * Delete acts on THE SELECTION — what has the red box around it — and on nothing when
+ * nothing is selected.
+ *
+ * It used to act on `globalObject.current_class_instance`, which answers a different
+ * question: that field is the vizRep pipeline's "instance being drawn" pointer, so it
+ * keeps naming whatever was drawn or picked last. Delete therefore fired when the user
+ * had deselected by clicking empty canvas, and on the instance just dropped in drawing
+ * mode — in both cases with nothing selected on screen to explain what was destroyed.
+ */
+describe("DeletionHandler.onPressDelete — acts on the selection", () => {
+  beforeEach(() => {
+    globalSelectedObject.removeObject();
+  });
+
+  /**
+   * Select an instance exactly the way onSelectionMode does — including setting the
+   * engine's `current_class_instance`, which it also does. Without that the "deselect
+   * then Delete" case below would not reproduce: the whole point is that clearing the
+   * selection has to clear that pointer too.
+   */
+  function select(uuid: string, instance: unknown) {
+    globalSelectedObject.setObject(meshFor(uuid, uuid));
+    mocks.globalObject.current_class_instance = instance;
+    globalSelectedObject.setSelectedInstance(instance as never);
+  }
+
+  it("deletes the selected class instance", async () => {
+    select(CI_A, sceneInstance.class_instances[0]);
+
+    await deletionHandler.onPressDelete();
+
+    expect(sceneInstance.class_instances.map((instance) => instance.uuid)).toEqual([CI_B]);
+  });
+
+  it("deletes the selected relation instance", async () => {
+    select(REL, sceneInstance.relationclasses_instances[0]);
+
+    await deletionHandler.onPressDelete();
+
+    expect(sceneInstance.relationclasses_instances).toHaveLength(0);
+    // The classes it connected are untouched.
+    expect(sceneInstance.class_instances.map((instance) => instance.uuid)).toEqual([CI_A, CI_B]);
+  });
+
+  // The reported bug: select something, click empty canvas to deselect, press Delete.
+  it("deletes nothing after the selection was cleared by a click on empty canvas", async () => {
+    select(CI_A, sceneInstance.class_instances[0]);
+    // What onSelectionMode does when the click hits nothing.
+    globalSelectedObject.removeObject();
+
+    await deletionHandler.onPressDelete();
+
+    expect(sceneInstance.class_instances.map((instance) => instance.uuid)).toEqual([CI_A, CI_B]);
+    expect(sceneInstance.relationclasses_instances).toHaveLength(1);
+  });
+
+  // Drawing mode leaves the engine pointer on the instance it just created, and never
+  // clears it — nothing is selected, so Delete must still do nothing.
+  it("deletes nothing when only the engine's draw pointer names an instance", async () => {
+    mocks.globalObject.current_class_instance = sceneInstance.class_instances[0];
+
+    await deletionHandler.onPressDelete();
+
+    expect(sceneInstance.class_instances.map((instance) => instance.uuid)).toEqual([CI_A, CI_B]);
+  });
+
+  it("deletes nothing when the selected instance is no longer in the scene", async () => {
+    // A peer deleted it while it was selected here.
+    select(CI_A, { uuid: "a-uuid-the-scene-does-not-hold" });
+
+    await deletionHandler.onPressDelete();
+
+    expect(sceneInstance.class_instances.map((instance) => instance.uuid)).toEqual([CI_A, CI_B]);
+  });
+
+  it("records no undo step when it deleted nothing", async () => {
+    const steps: unknown[] = [];
+    const subscription = eventBus.subscribe("historyRecord", (payload) => steps.push(payload));
+
+    await deletionHandler.onPressDelete();
+    expect(steps).toHaveLength(0);
+
+    // ...but a real delete still records exactly one.
+    select(CI_A, sceneInstance.class_instances[0]);
+    await deletionHandler.onPressDelete();
+    expect(steps).toHaveLength(1);
+
+    subscription.dispose();
   });
 });

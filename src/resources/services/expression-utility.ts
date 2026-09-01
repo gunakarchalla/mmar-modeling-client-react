@@ -4,6 +4,10 @@ import { instanceUtility } from "./instance-utility";
 import { eventBus } from "./event-bus";
 import { metaUtility } from "./meta-utility";
 import { fileUtility } from "./file-utility";
+import { logger } from "./logger";
+
+/** How long a redraw request waits on an in-flight update before going ahead anyway. */
+const CLAIM_VIZREP_TIMEOUT_MS = 2000;
 
 /**
  * The `gc.expression.*` API that stored vizRep and mechanism code strings call.
@@ -235,12 +239,27 @@ export class ExpressionUtility {
   }
 
   /**
-   * Wait for any vizRep update in flight to finish, then claim the lock for the update
-   * we are about to request. The pipeline runs asynchronously, so without this two
-   * requests could interleave and redraw against a half-updated instance.
+   * Wait for any vizRep update in flight to finish, then claim the flag for the update
+   * we are about to request, so requests do not pile onto a half-updated instance.
+   *
+   * BOUNDED, because one wait can never be satisfied: this is part of the `gc.expression.*`
+   * surface that stored code strings call, and a vizRep asking for a redraw from INSIDE
+   * the update that is running it waits for a flag only that same update's `finally` can
+   * clear. That used to hang the one call chain; now that vizRep updates hold the draw
+   * lane, an unbounded wait would hold the lane with it and freeze clicks, remote changes
+   * and undo along with it. After the deadline the request goes ahead and says so —
+   * a redraw racing a stale flag is recoverable, a frozen canvas is not.
    */
   private async claimVizRepUpdate(): Promise<void> {
+    const deadline = Date.now() + CLAIM_VIZREP_TIMEOUT_MS;
     while (!this.globalObjectInstance.readyForVizRepUpdate) {
+      if (Date.now() >= deadline) {
+        logger.log(
+          `vizRep update still in flight after ${CLAIM_VIZREP_TIMEOUT_MS}ms; requesting anyway`,
+          "close",
+        );
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     this.globalObjectInstance.readyForVizRepUpdate = false;

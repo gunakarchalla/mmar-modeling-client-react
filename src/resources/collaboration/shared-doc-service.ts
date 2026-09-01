@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { jwtDecode } from "jwt-decode";
-import { SceneInstance, type ClassInstance, type PortInstance } from "@gds";
+import { SceneInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { globalSelectedObject } from "@/engine/global-selected-object";
 import { globalStateObject } from "@/engine/global-state-object";
@@ -396,11 +396,11 @@ export class SharedDocService {
 
     // Detach the gizmo before the mesh it is attached to leaves the scene graph.
     this.globalObjectInstance.transformControls?.detach();
+    // Clears the selected instance and the engine's context pointers along with the mesh
+    // — one operation, so this path cannot drift from the others that deselect.
     globalSelectedObject.removeObject();
     // A relation instance's selected line is tracked separately from the mesh.
     globalStateObject.activeStateLine = undefined;
-    this.globalObjectInstance.current_class_instance = undefined as unknown as ClassInstance;
-    this.globalObjectInstance.current_port_instance = undefined as unknown as PortInstance;
 
     useSelectionStore.getState().clearSelection();
     eventBus.publish("removeAttributeGui");

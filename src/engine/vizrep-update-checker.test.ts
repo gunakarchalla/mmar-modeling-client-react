@@ -102,13 +102,20 @@ beforeEach(() => {
 
 describe("checkForVizRepUpdate", () => {
   it("re-runs and updates the vizrep when the geometry references the changed attribute", async () => {
+    // `current_class_instance` is what the running vizRep code reads its values through
+    // (gc.expression.attrval), so capture it AT THE MOMENT the geometry runs.
+    let instanceSeenByVizRep: unknown;
+    gcMock.graphicContext.runVizRepFunction.mockImplementationOnce(async () => {
+      instanceSeenByVizRep = fakeGlobal.globalObject.current_class_instance;
+    });
+
     await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
 
     expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR);
     expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledTimes(1);
     // The instance must be the one the vizrep code will read its values from.
     expect((gcMock.graphicContext.updateVizRep.mock.calls[0] as unknown[])[0]).toMatchObject({ uuid: CLASS_INSTANCE_UUID });
-    expect(fakeGlobal.globalObject.current_class_instance).toMatchObject({ uuid: CLASS_INSTANCE_UUID });
+    expect(instanceSeenByVizRep).toMatchObject({ uuid: CLASS_INSTANCE_UUID });
   });
 
   it("skips the redraw when the geometry does not reference the changed attribute", async () => {
@@ -220,5 +227,87 @@ describe("event-bus channels", () => {
     await vizrepUpdateChecker.checkForVisualizationUpdate();
 
     expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The update BORROWS `globalObject.current_class_instance` to tell the vizRep pipeline
+ * which instance it is drawing. That field is also the one a Delete keypress acts on —
+ * `deletionHandler.onPressDelete` reads it and nothing else — so an update that walks
+ * away leaving it set silently re-aims the user's next Delete. No timing coincidence is
+ * needed: every remote attribute edit went through here.
+ */
+describe("checkForVizRepUpdate — the borrowed current_class_instance", () => {
+  it("hands the field back to whatever the local user had selected", async () => {
+    const userSelection = { uuid: "the-users-own-selection" };
+    fakeGlobal.globalObject.current_class_instance = userSelection;
+
+    // A peer's edit to a DIFFERENT instance arrives and redraws it.
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+
+    expect(fakeGlobal.globalObject.current_class_instance).toBe(userSelection);
+  });
+
+  it("leaves nothing selected when nothing was selected before", async () => {
+    // The worst version of the bug: no selection on screen to explain what Delete hits.
+    fakeGlobal.globalObject.current_class_instance = null;
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+
+    expect(fakeGlobal.globalObject.current_class_instance).toBeNull();
+  });
+
+  it("hands the field back even when the redraw throws", async () => {
+    const userSelection = { uuid: "the-users-own-selection" };
+    fakeGlobal.globalObject.current_class_instance = userSelection;
+    gcMock.graphicContext.runVizRepFunction.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance())).rejects.toThrow("boom");
+
+    expect(fakeGlobal.globalObject.current_class_instance).toBe(userSelection);
+  });
+
+  it("hands it back on the early return where the attribute draws nothing", async () => {
+    const userSelection = { uuid: "the-users-own-selection" };
+    fakeGlobal.globalObject.current_class_instance = userSelection;
+    utils.metaUtility.getMetaClass.mockResolvedValue({ geometry: GEOMETRY_IGNORING_ATTR });
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+
+    // The field is set before the "does this attribute affect the drawing?" check, so the
+    // restore has to cover the paths that never redraw at all.
+    expect(fakeGlobal.globalObject.current_class_instance).toBe(userSelection);
+  });
+});
+
+/**
+ * Two updates launched back to back — one remote batch carrying two changed attributes
+ * publishes them synchronously — used to run at the same time on the one shared graphic
+ * context: each merged the other's half-built meshes into its instance, and whichever
+ * finished second found the map the first one's `resetInstance()` had emptied and drew
+ * an instance with no geometry, which vanished from the canvas with nothing logged.
+ */
+describe("checkForVizRepUpdate — one at a time", () => {
+  it("does not let a second update start while the first is still drawing", async () => {
+    const trace: string[] = [];
+    let call = 0;
+
+    // Each redraw is: run the geometry, then update. Overlap shows as interleaved marks.
+    gcMock.graphicContext.runVizRepFunction.mockImplementation(async () => {
+      const id = ++call;
+      trace.push(`run${id}`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      trace.push(`ran${id}`);
+    });
+    gcMock.graphicContext.updateVizRep.mockImplementation(async () => {
+      trace.push(`update${call}`);
+    });
+
+    await Promise.all([
+      vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance()),
+      vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance()),
+    ]);
+
+    expect(trace).toEqual(["run1", "ran1", "update1", "run2", "ran2", "update2"]);
   });
 });

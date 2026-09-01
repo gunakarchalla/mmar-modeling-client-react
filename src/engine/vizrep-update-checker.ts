@@ -4,6 +4,7 @@ import { graphicContext } from "@/engine/graphic-context";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { eventBus } from "@/resources/services/event-bus";
+import { runExclusive } from "@/resources/services/draw-lock";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 
@@ -20,9 +21,11 @@ import { describeError } from "@/resources/util/describe-error";
  * variables that are not `user_locked` are dropped first so the re-run recomputes them,
  * while anything the user positioned by hand survives.
  *
- * `globalObject.readyForVizRepUpdate` is the lock that serialises all of this; it is
- * released in a `finally`, because leaving it set would wedge every later refresh in a
- * spin.
+ * Serialisation is the DRAW LANE (`runExclusive`), not `globalObject.readyForVizRepUpdate`
+ * — that flag is only a "an update is in flight" signal for the request side, which
+ * expression-utility waits on before asking for another; nothing waits on it before
+ * STARTING one. It is still released in a `finally`, because leaving it set would wedge
+ * every later request in a spin.
  */
 export class VizrepUpdateChecker {
   private instanceUtility = instanceUtility;
@@ -56,12 +59,35 @@ export class VizrepUpdateChecker {
     return geometry ? geometry.toString() : "";
   }
 
+  /**
+   * On the draw lane, because this re-runs a vizRep through the SHARED graphic context —
+   * the same one a click, a peer's arriving change and every other vizRep update draw
+   * into. `readyForVizRepUpdate` never provided that: nothing WAITS on it before
+   * starting (it only gates expression-utility's request-side spin), so two updates
+   * launched back to back from the same remote batch used to run at once, merge each
+   * other's half-built meshes into one instance, and leave the other with the empty map
+   * the first one's `resetInstance()` left behind — an instance that simply vanished
+   * from the canvas, with nothing logged.
+   */
   async checkForVizRepUpdate(attributeInstance: AttributeInstance) {
+    return runExclusive(() => this.updateExclusive(attributeInstance));
+  }
+
+  private async updateExclusive(attributeInstance: AttributeInstance) {
     //if not set yet lock the vizrep update until the current update is finished
     this.globalObjectInstance.readyForVizRepUpdate = false;
 
-    // The lock is released in `finally`: it gates expression-utility's wait loops, so
-    // leaving it set on a failed update wedges every later vizrep refresh in a spin.
+    // The pipeline learns WHICH instance it is drawing from `current_class_instance`, so
+    // the update below borrows that field — and has to give it back. It is also what a
+    // Delete keypress acts on (`deletionHandler.onPressDelete` reads it and nothing
+    // else, with no cross-check against the actual selection), so an attribute a PEER
+    // edited used to leave the local user's next Delete aimed at the peer's element —
+    // no timing coincidence required, and no selection visible on screen to explain it.
+    const previousClassInstance = this.globalObjectInstance.current_class_instance;
+
+    // Both are released in `finally`, including on the early returns below: the flag
+    // gates expression-utility's wait loop, so leaving it set wedges every later refresh
+    // in a spin, and leaving the borrowed instance behind is the delete bug above.
     try {
       this.gc.current_instance_object = undefined as any;
       this.gc.resetInstance();
@@ -152,6 +178,8 @@ export class VizrepUpdateChecker {
         await this.gc.updateVizRep(objectInstance!);
       }
     } finally {
+      // hand the borrowed instance back to whatever the local user had selected
+      this.globalObjectInstance.current_class_instance = previousClassInstance;
       // unlock the vizrep update
       this.globalObjectInstance.readyForVizRepUpdate = true;
     }

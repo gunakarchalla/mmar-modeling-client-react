@@ -11,8 +11,17 @@ import { SceneInstance } from "@gds";
 const mocks = vi.hoisted(() => ({
   globalObject: {} as any,
   globalStateObject: {} as any,
-  graphicContext: { resetInstance: vi.fn() } as any,
-  metaUtility: { getTabContextSceneType: vi.fn() } as any,
+  graphicContext: {
+    resetInstance: vi.fn(),
+    runVizRepFunction: vi.fn(),
+    drawVizRep_rel: vi.fn(),
+    current_instance_object: undefined,
+  } as any,
+  metaUtility: {
+    getTabContextSceneType: vi.fn(),
+    getMetaRelationclass: vi.fn(),
+    parseMetaFunction: vi.fn(),
+  } as any,
   instanceUtility: {
     getTabContextSceneInstance: vi.fn(),
     getAllOpenSceneInstances: vi.fn(),
@@ -210,5 +219,103 @@ describe("persistency-handler.saveToTextfile", () => {
     await persistencyHandler.saveToTextfile();
 
     expect(createObjectURL).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The scenario the draw pass has to survive: the local user has clicked the first end of
+ * a relation and is still dragging the line to its second end, when a relation a peer
+ * just FINISHED arrives over the Y.Doc and lands in this same draw pass.
+ *
+ * The half-drawn line lives on `globalStateObject.activeStateLine`, and the pass used to
+ * take the line it drew from that very field (the graphic context published it there) and
+ * clear the field when it was done. So a peer's relation stole the local user's line and
+ * then threw it away: the next click started a SECOND relation instead of closing the
+ * first, which stayed in the scene forever with no `role_instance_to`, its last line
+ * point still pinned to the mouse pointer. The line now travels back as the return value
+ * of the draw, and `activeStateLine` is left alone.
+ */
+describe("persistency-handler.checkIfRelationclassinstanceInScene", () => {
+  /** A stand-in for the Line2 a vizRep's rel_graphic_line builds. */
+  function fakeLine(uuid: string) {
+    return {
+      uuid,
+      children: [{ uuid: "child-a" }, { uuid: "child-b" }],
+      userData: { relObj: [] as unknown[] },
+    } as any;
+  }
+
+  /** A scene holding one relation that is not drawn yet, connecting two class instances. */
+  function sceneWithUndrawnRelation(relationUuid: string) {
+    const scene = makeScene("s-collab", "Shared") as any;
+    scene.relationclasses_instances = [
+      {
+        uuid: relationUuid,
+        uuid_class: "meta-rel-1",
+        line_points: [{ UUID: "obj-from" }, { UUID: "obj-to" }],
+      },
+    ];
+    return scene;
+  }
+
+  beforeEach(() => {
+    Object.assign(mocks.globalObject, {
+      dragObjects: [{ uuid: "obj-from" }, { uuid: "obj-to" }],
+      scene: { add: vi.fn() },
+      render: false,
+      current_class_instance: undefined,
+    });
+    mocks.metaUtility.getMetaRelationclass.mockResolvedValue({ geometry: "() => {}" });
+    mocks.metaUtility.parseMetaFunction.mockResolvedValue(() => undefined);
+  });
+
+  it("draws the peer's relation without disturbing the line the local user is drawing", async () => {
+    const scene = sceneWithUndrawnRelation("rel-from-peer");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+
+    // What the local user is holding: their own half-drawn line, already in the pick list
+    // (the interaction handler puts it there on the opening click).
+    const lineBeingDrawn = fakeLine("rel-being-drawn-locally");
+    mocks.globalStateObject.activeStateLine = lineBeingDrawn;
+    mocks.globalObject.dragObjects.push(lineBeingDrawn);
+
+    mocks.graphicContext.drawVizRep_rel.mockResolvedValue(fakeLine("drawn-for-peer"));
+
+    await persistencyHandler.checkIfRelationclassinstanceInScene();
+
+    // The user's gesture is untouched — same line object, still active, still theirs.
+    expect(mocks.globalStateObject.activeStateLine).toBe(lineBeingDrawn);
+    // ...and it was not redrawn on top of itself: only the peer's relation was drawn.
+    expect(mocks.graphicContext.drawVizRep_rel).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the drawn line from the draw call and registers it under the relation's uuid", async () => {
+    const scene = sceneWithUndrawnRelation("rel-from-peer");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+
+    const drawn = fakeLine("uuid-the-vizrep-happened-to-use");
+    mocks.graphicContext.drawVizRep_rel.mockResolvedValue(drawn);
+    // A stale value here must not be what the pass picks up.
+    mocks.globalStateObject.activeStateLine = fakeLine("not-this-one");
+
+    await persistencyHandler.checkIfRelationclassinstanceInScene();
+
+    // The returned line is the one that gets the relation's identity and goes into the scene.
+    expect(drawn.uuid).toBe("rel-from-peer");
+    expect(drawn.children.map((child: any) => child.uuid)).toEqual(["rel-from-peer", "rel-from-peer"]);
+    expect(mocks.globalObject.scene.add).toHaveBeenCalledWith(drawn);
+    expect(mocks.globalObject.dragObjects[0]).toBe(drawn);
+    // Its line points resolved to the meshes they name.
+    expect(drawn.userData.relObj).toEqual([{ uuid: "obj-from" }, { uuid: "obj-to" }]);
+  });
+
+  it("skips a relation that is already drawn", async () => {
+    const scene = sceneWithUndrawnRelation("rel-already-drawn");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.globalObject.dragObjects.push({ uuid: "rel-already-drawn" });
+
+    await persistencyHandler.checkIfRelationclassinstanceInScene();
+
+    expect(mocks.graphicContext.drawVizRep_rel).not.toHaveBeenCalled();
   });
 });

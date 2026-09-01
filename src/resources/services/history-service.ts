@@ -7,6 +7,7 @@ import { deletionHandler } from "@/engine/deletion-handler";
 import { coordinatesUpdater } from "@/engine/coordinates-updater";
 import { persistencyHandler } from "./persistency-handler";
 import { eventBus } from "./event-bus";
+import { runExclusive } from "./draw-lock";
 import { logger } from "./logger";
 import { describeError } from "@/resources/util/describe-error";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
@@ -214,6 +215,14 @@ export class HistoryService {
    * entry we are moving onto.
    */
   private async travel(delta: -1 | 1): Promise<void> {
+    // On the draw lane: replaying a step redraws through the shared graphic context, so
+    // it must not interleave with a click or with a peer's arriving change (see
+    // draw-lock). `applying` still guards re-entry — it is what stops the replay from
+    // being recorded as new history — but it is a flag, not a queue.
+    return runExclusive(() => this.travelExclusive(delta));
+  }
+
+  private async travelExclusive(delta: -1 | 1): Promise<void> {
     if (this.applying) return;
 
     const scene = this.activeScene();
