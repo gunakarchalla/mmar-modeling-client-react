@@ -63,18 +63,33 @@ export class CoordinatesUpdater {
 
   /**
    * Copy the 2D coordinates of every moved object onto its class / port instance.
+   *
+   * The delta published to collaborators carries ONLY the axes that actually moved.
+   * That is what lets a peer dragging the same object along another axis keep their
+   * axis through the merge — see the position note in the y-mapping schema comment.
+   * The per-axis comparison against the instance is the same one that decides whether
+   * there is anything to do at all, so this costs nothing extra.
    */
   async updateCoordinates2DonClassAndPortInstance() {
     for await (const { object3D, instance } of this.mappedObjects(true)) {
       this.mathUtility.roundPosOfObject(object3D as THREE.Mesh, 100);
       const { x, y, z } = object3D.position;
-      if (instance.coordinates_2d.x == x && instance.coordinates_2d.y == y && instance.coordinates_2d.z == z) continue;
+      const movedX = instance.coordinates_2d.x != x;
+      const movedY = instance.coordinates_2d.y != y;
+      const movedZ = instance.coordinates_2d.z != z;
+      if (!movedX && !movedY && !movedZ) continue;
 
       instance.coordinates_2d.x = x;
       instance.coordinates_2d.y = y;
       instance.coordinates_2d.z = z;
       this.logger.log(`update coordinates in instance ${instance.name} to ${x} ${y} ${z}`, "done");
-      this.syncToYDoc({ type: "coordinates", classInstanceUuid: instance.uuid, x, y, z });
+      this.syncToYDoc({
+        type: "coordinates",
+        classInstanceUuid: instance.uuid,
+        ...(movedX ? { x } : {}),
+        ...(movedY ? { y } : {}),
+        ...(movedZ ? { z } : {}),
+      });
     }
   }
 

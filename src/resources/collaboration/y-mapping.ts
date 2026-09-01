@@ -2,6 +2,7 @@ import * as Y from "yjs";
 import * as THREE from "three";
 import { SceneInstance, ClassInstance, AttributeInstance, RelationclassInstance, RoleInstance } from "@gds";
 import type { GlobalDefinition } from "@/engine/global-definition";
+import { AXES, locallyDraggedAxes, rebaseDragBaseline } from "./drag-reconciler";
 
 /**
  * The bidirectional mapping between gds instances and the shared Y.Doc: the `*ToYMap`
@@ -56,6 +57,15 @@ import type { GlobalDefinition } from "@/engine/global-definition";
 // rather than nested Y types — they are replaced wholesale on change, never merged
 // field-by-field.
 //
+// POSITION IS DELIBERATELY DECOMPOSED, and each write must be MINIMAL. A Y.Map merges
+// per KEY, so x, y and z are resolved independently: two users dragging the same object
+// along different axes each keep their own axis, which is the intent-preserving merge —
+// but only while each peer writes JUST the axes it moved. A peer that also writes its
+// stale values for the other two makes every key concurrent, and per-key resolution
+// then hands all three to the same winner, which is indistinguishable from whole-
+// position last-writer-wins. Same-axis contention stays a single deterministic winner;
+// no CRDT can merge two absolute values for one scalar.
+//
 // ROTATION IS DELIBERATELY NOT DECOMPOSED. A Y.Map merges per KEY, so holding the
 // quaternion as { x, y, z, w } would let a merge take some components from one peer
 // and the rest from another. Positions survive that (every (x, y, z) triple is a
@@ -77,7 +87,11 @@ import type { GlobalDefinition } from "@/engine/global-definition";
 type Quaternion = { x: number; y: number; z: number; w: number };
 
 export type LocalChangeType =
-  | { type: "coordinates"; classInstanceUuid: string; x: number; y: number; z: number }
+  // PARTIAL ON PURPOSE: each axis is its own Y.Map key, so a delta carrying only the
+  // axes that actually moved lets a peer's concurrent drag along a DIFFERENT axis
+  // survive the merge. Publishing all three would author x, y and z on both sides and
+  // collapse the per-key merge back into whole-position last-writer-wins.
+  | { type: "coordinates"; classInstanceUuid: string; x?: number; y?: number; z?: number }
   | { type: "rotation"; classInstanceUuid: string; x: number; y: number; z: number; w: number }
   | { type: "scale"; classInstanceUuid: string; x: number; y: number; z: number }
   | { type: "custom_variable"; classInstanceUuid: string; key: string; value: unknown }
@@ -153,9 +167,12 @@ export function applyLocalChangeToYDoc(ydoc: Y.Doc, change: LocalChangeType, ori
         if (!ciMap) break;
         const coordMap = ciMap.get("coordinates_2d") as Y.Map<number>;
         if (!coordMap) break;
-        coordMap.set("x", change.x);
-        coordMap.set("y", change.y);
-        coordMap.set("z", change.z);
+        // Only the axes the delta carries — an axis left out is an axis this peer did
+        // not move, and NOT writing it is what lets a concurrent drag along it survive.
+        for (const axis of AXES) {
+          const value = change[axis];
+          if (value !== undefined) coordMap.set(axis, value);
+        }
         break;
       }
       case "rotation": {
@@ -315,14 +332,23 @@ export function applyYDocClassChangeToSceneInstance(
     const coordMap = event.target as Y.Map<number>;
     const ci = sceneInstance.class_instances.find((c) => c.uuid === classInstanceUuid);
     if (ci && ci.coordinates_2d) {
-      if (coordMap.has("x")) ci.coordinates_2d.x = coordMap.get("x")!;
-      if (coordMap.has("y")) ci.coordinates_2d.y = coordMap.get("y")!;
-      if (coordMap.has("z")) ci.coordinates_2d.z = coordMap.get("z")!;
       // Mirror to Three.js object (getObjectByProperty stops at the first match,
       // unlike traverse which would walk the whole scene on every drag frame).
       const obj = threeScene.getObjectByProperty("uuid", classInstanceUuid);
-      if (obj) {
-        obj.position.set(ci.coordinates_2d.x, ci.coordinates_2d.y, ci.coordinates_2d.z);
+      // Empty unless the local user is dragging THIS object right now.
+      const draggedAxes = locallyDraggedAxes(globalObjectInstance.transformControls, classInstanceUuid);
+
+      for (const axis of AXES) {
+        if (!coordMap.has(axis)) continue;
+        const value = coordMap.get(axis)!;
+        // The gds instance always follows the merged document, even on an axis the
+        // local pointer owns: that mismatch against the mesh is precisely what makes
+        // the animator's coordinates pass republish OUR value and win the axis back.
+        ci.coordinates_2d[axis] = value;
+        if (draggedAxes.has(axis)) continue;
+        if (obj) obj.position[axis] = value;
+        // Without this the next pointer-move would restore the pre-drag value here.
+        rebaseDragBaseline(globalObjectInstance.transformControls, classInstanceUuid, axis, value);
       }
     }
     return result;

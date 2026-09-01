@@ -174,6 +174,39 @@ describe("applyLocalChangeToYDoc", () => {
     expect([coords.get("x"), coords.get("y"), coords.get("z")]).toEqual([10, 20, 30]);
   });
 
+  it("writes only the axes the delta carries, leaving the rest untouched", () => {
+    applyLocalChangeToYDoc(ydoc, { type: "coordinates", classInstanceUuid: CI_UUID, x: 10 }, origin);
+    const coords = ciMap().get("coordinates_2d") as Y.Map<number>;
+    // y and z keep the fixture's values (2 and 3): not writing them is what leaves
+    // room for a peer's concurrent drag along those axes.
+    expect([coords.get("x"), coords.get("y"), coords.get("z")]).toEqual([10, 2, 3]);
+  });
+
+  /**
+   * The whole point of decomposing position into three Y.Map keys. Two peers drag the
+   * same object at the same time along different axes; each publishes only the axis it
+   * moved, and the merge keeps both intents rather than handing the object to one of
+   * them. Writing all three keys on both sides makes every key concurrent and collapses
+   * this back to whole-position last-writer-wins.
+   */
+  it("merges a concurrent drag along another axis instead of overwriting it", () => {
+    const peer = new Y.Doc();
+    Y.applyUpdate(peer, Y.encodeStateAsUpdate(ydoc));
+
+    // Neither update reaches the other client until both drags have been published.
+    applyLocalChangeToYDoc(ydoc, { type: "coordinates", classInstanceUuid: CI_UUID, x: 10 }, origin);
+    applyLocalChangeToYDoc(peer, { type: "coordinates", classInstanceUuid: CI_UUID, y: 20 }, {});
+
+    const before = Y.encodeStateAsUpdate(ydoc);
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(peer));
+    Y.applyUpdate(peer, before);
+
+    for (const doc of [ydoc, peer]) {
+      const coords = doc.getMap<Y.Map<unknown>>("class_instances").get(CI_UUID)!.get("coordinates_2d") as Y.Map<number>;
+      expect([coords.get("x"), coords.get("y"), coords.get("z")]).toEqual([10, 20, 3]);
+    }
+  });
+
   it("writes rotation as a single JSON string, not a nested Y.Map", () => {
     applyLocalChangeToYDoc(ydoc, { type: "rotation", classInstanceUuid: CI_UUID, x: 0.5, y: 0.5, z: 0.5, w: 0.5 }, origin);
     expect(ciMap().get("rotation")).toBe('{"x":0.5,"y":0.5,"z":0.5,"w":0.5}');
@@ -308,6 +341,63 @@ describe("applyYDocClassChangeToSceneInstance", () => {
     const ci = sceneB.class_instances.find((c) => c.uuid === CI_UUID)!;
     expect([ci.coordinates_2d.x, ci.coordinates_2d.y, ci.coordinates_2d.z]).toEqual([7, 8, 9]);
     expect([mesh.position.x, mesh.position.y, mesh.position.z]).toEqual([7, 8, 9]);
+  });
+
+  /**
+   * The local user is holding the X arrow of the very object a peer is dragging along
+   * Y. three's translate branch recomputes `position = _offset + _positionStart` on
+   * every pointer-move with `_offset.y` zeroed, so writing the peer's y onto the mesh
+   * alone would be undone on the next frame and then republished as OUR stale y. The
+   * baseline has to move with it.
+   */
+  it("keeps the axis the local user is dragging and rebases the gizmo baseline for the rest", () => {
+    const mesh = new THREE.Mesh();
+    Object.defineProperty(mesh, "uuid", { value: CI_UUID });
+    mesh.position.set(50, 2, 3); // dragged out to x=50, still at the fixture's y and z
+    threeScene.add(mesh);
+    const controls = { object: mesh, mode: "translate", axis: "X", dragging: true, space: "world", _positionStart: { x: 1, y: 2, z: 3 } };
+    (globalObjectInstance as unknown as { transformControls: unknown }).transformControls = controls;
+
+    relayAndApply(ydoc, docB, "class_instances", applyTo);
+    applyLocalChangeToYDoc(ydoc, { type: "coordinates", classInstanceUuid: CI_UUID, y: 20 }, {});
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    // The peer's y lands on the mesh AND on the baseline, so the next pointer-move
+    // (position.y = _positionStart.y + 0) reproduces it rather than reverting it.
+    expect(mesh.position.y).toBe(20);
+    expect(controls._positionStart).toEqual({ x: 1, y: 20, z: 3 });
+    // x is ours for as long as we hold the arrow: untouched on the mesh and on the baseline.
+    expect(mesh.position.x).toBe(50);
+    expect(controls._positionStart.x).toBe(1);
+  });
+
+  /**
+   * The gds instance follows the merged document on EVERY axis, including one the local
+   * pointer owns. That mismatch against the mesh is what makes the animator's
+   * coordinates pass republish our value and win the axis back; suppressing it here
+   * would leave the two peers silently disagreeing about x.
+   */
+  it("still folds a contested axis onto the gds instance, so the animator republishes it", () => {
+    const mesh = new THREE.Mesh();
+    Object.defineProperty(mesh, "uuid", { value: CI_UUID });
+    mesh.position.set(50, 2, 3);
+    threeScene.add(mesh);
+    (globalObjectInstance as unknown as { transformControls: unknown }).transformControls = {
+      object: mesh,
+      mode: "translate",
+      axis: "X",
+      dragging: true,
+      space: "world",
+      _positionStart: { x: 1, y: 2, z: 3 },
+    };
+
+    relayAndApply(ydoc, docB, "class_instances", applyTo);
+    applyLocalChangeToYDoc(ydoc, { type: "coordinates", classInstanceUuid: CI_UUID, x: 99 }, {});
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    const ci = sceneB.class_instances.find((c) => c.uuid === CI_UUID)!;
+    expect(ci.coordinates_2d.x).toBe(99);
+    expect(mesh.position.x).toBe(50);
   });
 
   it("mirrors a remote rotation change onto the gds instance and the THREE quaternion", () => {

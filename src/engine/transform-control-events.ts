@@ -5,6 +5,8 @@ import { globalSelectedObject } from "@/engine/global-selected-object";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { eventBus } from "@/resources/services/event-bus";
 import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
+import { locallyDraggedAxes, type Axis } from "@/resources/collaboration/drag-reconciler";
+import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
 
 /**
  * Reacts to the transform gizmo: `onTransformControlsPropertyChange` on every frame of
@@ -55,10 +57,16 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
 
     if (!controls || !object) return;
 
+    // READ SYNCHRONOUSLY, BEFORE THE FIRST AWAIT. three's `pointerUp` dispatches this
+    // event and then immediately clears `dragging` and `axis`, so by the time any
+    // continuation resumes the drag looks like it never happened.
+    const draggedAxes = locallyDraggedAxes(controls, object.uuid);
+
     if (mode == "translate") {
       const instance = await this.findOwningInstance(object);
       // Position variables (indices 0-2) of a moved label.
       this.lockCustomVariables(object, instance, 0, [object.position.x, object.position.y, object.position.z]);
+      this.reassertDraggedAxes(object, instance, draggedAxes);
     }
 
     // In scale mode the children must be counter-scaled to keep their absolute size.
@@ -110,6 +118,32 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
     const objectInstances: ObjectInstance[] = [...sceneInstance.class_instances, ...(await this.instanceUtility.getAllPortInstancesOfTabContext())];
     return objectInstances.find((candidate) => candidate.uuid == object.uuid) ?? objectInstances.find((candidate) => candidate.uuid == object.parent!.uuid);
+  }
+
+  /**
+   * Publish, once at mouse-up, the axes this drag owned.
+   *
+   * While the drag runs, a peer's write to an axis WE are authoring is folded onto the
+   * gds instance but deliberately not onto the mesh (see the coordinates branch in
+   * y-mapping), and the animator's coordinates pass republishes our value on the next
+   * frame the mesh moves. A drag held STILL produces no such frame, so a peer's value
+   * would otherwise survive on an axis the local user was holding — visible on screen
+   * as our position, but stored as theirs. One write at mouse-up closes that window.
+   *
+   * Only for the instance mesh itself: dragging a label writes custom variables, not
+   * coordinates.
+   */
+  private reassertDraggedAxes(object: THREE.Mesh, instance: ObjectInstance | undefined, draggedAxes: Set<Axis>): void {
+    if (!instance || object.uuid != instance.uuid || draggedAxes.size == 0) return;
+
+    const change: LocalChangeType = { type: "coordinates", classInstanceUuid: instance.uuid };
+    for (const axis of draggedAxes) {
+      instance.coordinates_2d[axis] = object.position[axis];
+      change[axis] = object.position[axis];
+    }
+    if (publishLocalChange(change)) {
+      this.globalObjectInstance.doSceneInstancePatchLocal = true;
+    }
   }
 
   /**

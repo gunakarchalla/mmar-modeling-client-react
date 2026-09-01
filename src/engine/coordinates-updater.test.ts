@@ -233,6 +233,22 @@ describe("Yjs propagation (shared scenes)", () => {
     expect(fakeGlobal.globalObject.doSceneInstancePatchLocal).toBe(true);
   });
 
+  /**
+   * The delta must name ONLY the axes that moved. Each axis is its own Y.Map key, so an
+   * omitted axis is one a peer's concurrent drag can still win; publishing our stale
+   * value for it makes every key concurrent and collapses the merge back into
+   * whole-position last-writer-wins. The fixture starts at the origin, so moving x
+   * alone must produce a delta with no y and no z.
+   */
+  it("names only the axes that actually moved, so a peer keeps the others", async () => {
+    await runShared(
+      () => coordinatesUpdater.updateCoordinates2DonClassAndPortInstance(),
+      (mesh) => mesh.position.set(1, 0, 0),
+    );
+
+    expect(utils.applyLocalChangeToYDoc).toHaveBeenCalledWith(session.ydoc, { type: "coordinates", classInstanceUuid: INSTANCE_UUID, x: 1 }, session.localOrigin);
+  });
+
   it("pushes a rotation change", async () => {
     await runShared(
       () => coordinatesUpdater.updateRotationOnClassAndPortInstance(),
