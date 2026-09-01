@@ -192,6 +192,71 @@ describe.skipIf(!isUp)("P10 sync server (live)", () => {
     }
   }, 60000);
 
+  it("closes a live connection with 4403 once the user's access is revoked", async () => {
+    // Admin holds access to every scene through `public.is_administrator`, so the
+    // revocation has to be aimed at an ordinary user: a throwaway one is created here
+    // and deleted again in the `finally`.
+    const username = `p10revoke_${Date.now()}`;
+    const password = "P10-Revoke-Pw-1!";
+
+    const signup = await fetch(`${API_URL}/login/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ uuid: uuidv4(), name: username, username, password, has_user_group: [] }),
+    });
+    expect(signup.ok).toBe(true);
+    const memberUuid = ((await signup.json()) as { uuid: string }).uuid;
+
+    const memberToken = JSON.parse(
+      await (
+        await fetch(`${API_URL}/login/signin`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        })
+      ).text(),
+    ) as string;
+
+    const doc = new Y.Doc();
+    let provider: WebsocketProvider | undefined;
+
+    try {
+      const granted = await fetch(`${API_URL}/instances/sceneInstances/${sceneInstanceUuid}/access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ uuid_user: memberUuid, access: "edit" }),
+      });
+      expect(granted.ok).toBe(true);
+
+      provider = connect(sceneInstanceUuid, memberToken, doc);
+      let closeCode = 0;
+      provider.on("connection-close", (event: { code: number }) => {
+        closeCode = event.code;
+      });
+      await waitFor(() => provider!.wsconnected);
+
+      const revoked = await fetch(
+        `${API_URL}/instances/sceneInstances/${sceneInstanceUuid}/access/${memberUuid}`,
+        { method: "DELETE", headers: { authorization: `Bearer ${token}` } },
+      );
+      expect(revoked.ok).toBe(true);
+
+      // The sync server re-reads the grant behind each open connection on an interval
+      // (ACCESS_REVALIDATE_INTERVAL_MS, 15 s by default), so the close arrives one tick
+      // after the revocation rather than instantly. 4403 is what shared-doc-service
+      // turns into the access-denied notice that closes the scene tab.
+      await waitFor(() => closeCode !== 0, 60000);
+      expect(closeCode).toBe(4403);
+    } finally {
+      provider?.destroy();
+      doc.destroy();
+      await fetch(`${API_URL}/users/${memberUuid}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      }).catch(() => undefined);
+    }
+  }, 120000);
+
   it("broadcasts awareness state between clients (the P11 legend's data source)", async () => {
     const docA = new Y.Doc();
     const docB = new Y.Doc();
