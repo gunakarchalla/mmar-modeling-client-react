@@ -8,17 +8,16 @@ import { useCollabStore } from "@/resources/store/collabStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
 
-// Owns the 5-second auto-save loop and its toggle. A shared scene forces auto-saving
-// on — collaborators must not diverge from the server — so the switch is disabled
-// there.
+// Owns the 5-second auto-save loop and its toggle. A shared scene forces auto-saving on,
+// because collaborators must not diverge from the server, so the switch is disabled there.
 //
 // The engine's `globalObject.autoSave` is authoritative; `uiStore.autoSave` is the
 // reactive mirror the switch reads, kept in lockstep by the toggle and the effect.
 //
-// Whether the ACTIVE tab is shared depends on two independent signals, and both have to
-// be subscribed explicitly: a session attaching or detaching (`collabStore.tabs`) and
-// the user moving to a different tab (`tabsStore.selectedTab`). Dropping either leaves
-// the switch showing the previous tab's state.
+// Whether the active tab is shared depends on two independent signals, and both must be
+// subscribed explicitly: a session attaching or detaching (`collabStore.tabs`) and the
+// user moving to a different tab (`tabsStore.selectedTab`). Dropping either leaves the
+// switch showing the previous tab's state.
 
 export default function AutoSave() {
   const autoSave = useUiStore((s) => s.autoSave);
@@ -26,8 +25,8 @@ export default function AutoSave() {
   const collabTabs = useCollabStore((s) => s.tabs);
   const selectedTab = useTabsStore((s) => s.selectedTab);
 
-  // The 5 s auto-save loop. In React we run it
-  // in an effect with cleanup so StrictMode's double-mount does not stack intervals.
+  // The 5 s auto-save loop, in an effect with cleanup so StrictMode's double-mount does
+  // not stack intervals.
   useEffect(() => {
     const interval = setInterval(() => {
       void (async () => {
@@ -62,13 +61,13 @@ export default function AutoSave() {
   }, [setAutoSave]);
 
   // collabStore holds an entry for exactly the shared tabs, keyed by tab index, so the
-  // rendered state derives from reactive data alone and updates on both triggers. The
-  // 5 s loop and toggle() below read the session directly instead — they run outside a
-  // component body, where the hook form is not available.
+  // rendered state derives from reactive data alone and updates on both triggers. The 5 s
+  // loop and toggle() below read the session directly instead, because they run outside a
+  // component body where the hook form is not available.
   const isShared = selectedTab in collabTabs;
 
   function toggle() {
-    // Locked in shared mode (no-op) — mirrors auto-save.toggle's guard.
+    // Locked in shared mode.
     if (sharedDocService.forTab(globalObject.selectedTab)) return;
     const next = !globalObject.autoSave;
     globalObject.autoSave = next;

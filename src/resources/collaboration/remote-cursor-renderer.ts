@@ -4,26 +4,24 @@ import { createNamedCursor, scaleLabel } from "./label-sprite";
 import type { CursorAnchorKind } from "@/engine/ray-helper";
 
 /**
- * Draws each *remote* collaborator's pointer as a named cursor in their own colour: a
+ * Draws each remote collaborator's pointer as a named cursor in their own colour: a
  * translucent shaft from their eye to the point their ray lands on, a solid arrow head
- * marking that point, an initials pill beside it, and — when they are pointing at an
- * object — a faint outline around it. Cursor rays travel over Yjs awareness (ephemeral
- * presence, never persisted) under the `cursor` field, broadcast by
- * `engine/ray-helper.broadcastCursor`, which also resolves what the ray landed on
- * (`kind` / `objectUuid`). Shared lifecycle lives in {@link AwarenessRenderer};
- * {@link RemoteSelectionRenderer} is the persistent-selection counterpart.
+ * marking that point, an initials pill beside it, and a faint outline around the object
+ * they are pointing at. Cursor rays travel over Yjs awareness (ephemeral presence, never
+ * persisted) under the `cursor` field, broadcast by `engine/ray-helper.broadcastCursor`,
+ * which also resolves what the ray landed on (`kind` / `objectUuid`).
  *
- * WHY THE ARROW IS ALWAYS DRAWN: whether it conveys anything depends on the angle
- * between the sender's ray and the RECEIVER's camera, not on either one's mode. It
- * collapses to a point only when a peer's ray runs parallel to your view axis (two
- * top-down 2D users, or two 3D users at the same orbit angle) — precisely when it has
- * nothing to tell you, and the named cursor carries the position on its own. In every
- * other pairing, including 2D↔3D sessions, it is how you read where a collaborator is
- * working from.
+ * Shared lifecycle lives in {@link AwarenessRenderer}; {@link RemoteSelectionRenderer} is
+ * the persistent-selection counterpart.
  *
- * The head is small and a FIXED world size, not the length-proportional one three's
- * `setLength` defaults to: it marks a point, so its size should say nothing about how
- * far the ray travelled to get there.
+ * The arrow is always drawn, in 2D as well as 3D: whether it conveys anything depends on
+ * the angle between the sender's ray and the receiver's camera, not on either one's mode.
+ * It collapses to a point only when a peer's ray runs parallel to your view axis, which
+ * is exactly when it has nothing to add and the named cursor carries the position alone.
+ *
+ * The head is a fixed world size rather than the length-proportional one three's
+ * `setLength` defaults to: it marks a point, so its size should say nothing about how far
+ * the ray travelled to get there.
  */
 
 interface CursorEntry extends RenderedEntry {
@@ -57,10 +55,10 @@ interface CursorState {
 
 export class RemoteCursorRenderer extends AwarenessRenderer<CursorEntry> {
   /**
-   * Keep every named cursor at a constant on-screen size as the LOCAL camera moves.
+   * Keep every named cursor at a constant on-screen size as the local camera moves.
    * Awareness only fires when a peer moves their pointer, so without this a label would
    * keep the size it had when it was last broadcast while you zoom past it. Called from
-   * the render loop (engine/animator), and a cheap no-op when nobody else is present.
+   * the render loop (engine/animator); a cheap no-op when nobody else is present.
    */
   refreshCursors(): void {
     if (this.entries.size === 0) return;
@@ -137,8 +135,8 @@ export class RemoteCursorRenderer extends AwarenessRenderer<CursorEntry> {
   // -----------------------------------------------------------------------
 
   /**
-   * Outline the object this collaborator is pointing at. Deliberately UNLABELLED: their
-   * named cursor is sitting on the object already, so a name tag here would repeat it a
+   * Outline the object this collaborator is pointing at. Deliberately unlabelled: their
+   * named cursor is already sitting on the object, so a name tag here would repeat it a
    * few pixels away. A selection box gets one because it outlives the pointer.
    */
   private updateHoverBox(

@@ -1,25 +1,26 @@
 import * as THREE from "three";
 import { globalObject } from "@/engine/global-definition";
-// TYPE-ONLY import: erased at build time, so the engine keeps its runtime distance from
-// the collaboration module (the sharedDocServiceRef indirection above is the point).
+// Type-only, so it is erased at build time and the engine keeps its runtime distance from
+// the collaboration module (the sharedDocServiceRef indirection below is the point).
 import type { SharedDocService } from "@/resources/collaboration/shared-doc-service";
 
 /**
- * Pointer raycasting for the modeling canvas: `shootRay` builds the picking ray for
- * every pointer event, and doubles as the emission site of the collaboration cursor
+ * Pointer raycasting for the modeling canvas. `shootRay` builds the picking ray for every
+ * pointer event and doubles as the emission site of the collaboration cursor
  * (`broadcastCursor` / `clearCursor`), publishing the `cursor` awareness field that
  * RemoteCursorRenderer draws on remote clients.
  *
- * The shared session is reached through `globalObject.sharedDocServiceRef` rather
- * than a direct import: the collaboration service sits downstream of the engine in
- * the import graph, and the back-reference keeps the engine free of that cycle. On a
- * non-shared tab `forTab()` returns null and both cursor methods are no-ops.
+ * The shared session is reached through `globalObject.sharedDocServiceRef` rather than a
+ * direct import: the collaboration service sits downstream of the engine in the import
+ * graph, and the back-reference keeps the engine free of that cycle. On a non-shared tab
+ * `forTab()` returns null and both cursor methods are no-ops.
  */
+
 /**
- * What a broadcast cursor ray terminated on. The SENDER resolves this because only it
+ * What a broadcast cursor ray terminated on. The sender resolves this because only it
  * can: a receiver sees coordinates and cannot tell a geometry hit from a far-plane
- * fallback, and `objectUuid` is what lets receivers outline the object a peer is
- * pointing at rather than float a marker on its surface.
+ * fallback. `objectUuid` is what lets receivers outline the object a peer is pointing at
+ * rather than float a marker on its surface.
  */
 export type CursorAnchorKind = "object" | "plane";
 
@@ -82,22 +83,20 @@ export class RayHelper {
   }
 
   /**
-   * Broadcast the local pointer as a world-space ray so remote clients can draw it as
-   * a named cursor: tail on the camera's near plane (≈ the sender's eye, which is what
-   * lets a peer read WHERE someone is looking from — a 2D user's ray drops vertically,
-   * a 3D user's rakes in at an angle), head on the point the ray lands on.
+   * Broadcast the local pointer as a world-space ray so remote clients can draw it as a
+   * named cursor: tail on the camera's near plane (roughly the sender's eye, which is
+   * what lets a peer read where someone is looking from — a 2D user's ray drops
+   * vertically, a 3D user's rakes in at an angle), head on the point the ray lands on.
    *
-   * ANCHOR, IN PRIORITY ORDER: the first object the ray hits, else the modelling
-   * plane. A ray that reaches neither (3D only: pointing away from the plane at empty
-   * space) has nothing to say, so the cursor goes inactive instead of being drawn
-   * somewhere wrong. Resolving the anchor HERE, on the sender, is deliberate: only the
-   * sender can tell a geometry hit from a miss — a receiver sees only coordinates —
-   * and naming the hit object (`objectUuid`) is what lets receivers outline the object
-   * a peer is pointing at.
+   * The anchor is the first object the ray hits, else the modelling plane. A ray that
+   * reaches neither (3D only, pointing away from the plane at empty space) has nothing to
+   * say, so the cursor goes inactive rather than being drawn somewhere wrong. The anchor
+   * is resolved on the sender because only the sender can tell a geometry hit from a
+   * miss, and naming the hit object lets receivers outline it.
    *
-   * Because the unprojection runs through the active camera's inverse projection
-   * matrix, this works for both the orthographic (2D) and perspective (3D) cameras
-   * without branching. Throttled to ~30 fps. No-op on a tab with no shared session.
+   * The unprojection runs through the active camera's inverse projection matrix, so this
+   * works for both the orthographic (2D) and perspective (3D) cameras without branching.
+   * Throttled to ~30 fps. No-op on a tab with no shared session.
    */
   private broadcastCursor(): void {
     const now = Date.now();
@@ -148,11 +147,10 @@ export class RayHelper {
    * no such point.
    *
    * Both call sites in the animator resolve their objects by walking the scene and cast
-   * the result to a Mesh, so either can be undefined — a relation whose endpoints were
-   * removed from the scene (a save rolled back, an element deleted) keeps being drawn
-   * for as long as its line is still in `updateLinesArray`. Answering undefined makes
-   * the animator skip that line's frame; dereferencing it threw
-   * "Cannot read properties of undefined (reading 'getWorldPosition')" once per frame.
+   * the result to a Mesh, so either can be undefined: a relation whose endpoints left the
+   * scene (a save rolled back, an element deleted) keeps being drawn for as long as its
+   * line is still in `updateLinesArray`. Returning undefined makes the animator skip that
+   * line's frame rather than dereferencing a missing object every frame.
    */
   shootRayFromObject(fromObject: THREE.Mesh | undefined, toObject: THREE.Mesh | undefined) {
     if (!fromObject || !toObject) return undefined;

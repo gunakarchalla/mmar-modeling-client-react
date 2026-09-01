@@ -6,23 +6,19 @@ import { globalObject } from "@/engine/global-definition";
 export type SelectedInstance = ClassInstance | RelationclassInstance | PortInstance;
 
 /**
- * THE SELECTION: what the user has picked, the red box helper drawn around it, and the
- * gds instance behind it.
+ * The selection: what the user has picked, the red box helper drawn around it, and the
+ * gds instance behind it. Selection state is set here and nowhere else, so there is one
+ * answer rather than several that drift apart.
  *
- * `getSelectedInstance()` is the authority on "what is selected", and commands that act
- * on the selection ask it — `deletionHandler.onPressDelete` above all. It used to ask
- * `globalObject.current_class_instance` instead, which is a DIFFERENT question:
- * that field is the vizRep pipeline's "which instance am I drawing right now" scratch
- * variable, written by every draw path and left pointing at whatever was drawn last. So
- * Delete fired on things nobody had selected — the box you just dropped in drawing mode,
- * the element a collaborator's change happened to redraw, the object you deselected by
- * clicking empty canvas. Selection state is set HERE and nowhere else, so there is one
- * answer rather than four that drift apart.
+ * `getSelectedInstance()` is the authority on what is selected, and commands that act on
+ * the selection ask it — `deletionHandler.onPressDelete` above all. Note that
+ * `globalObject.current_class_instance` answers a different question: it is the vizRep
+ * pipeline's "which instance am I drawing right now" scratch variable, written by every
+ * draw path and left pointing at whatever was drawn last.
  *
- * Selecting also publishes the selection over the active tab's awareness, so
- * collaborators can draw a presence box around the same object
- * (`RemoteSelectionRenderer` renders it). On a tab with no shared session the guard in
- * `publishSelection` makes that a no-op.
+ * Selecting also publishes the selection over the active tab's awareness so collaborators
+ * can draw a presence box around the same object (`RemoteSelectionRenderer` draws it). On
+ * a tab with no shared session the guard in `publishSelection` makes that a no-op.
  */
 export class GlobalSelectedObject {
   public object: THREE.Mesh = new THREE.Mesh();
@@ -51,11 +47,10 @@ export class GlobalSelectedObject {
   }
 
   getObject() {
-    // Only refresh the box helper when there is actually something selected. After
-    // `removeObject()` (e.g. clicking empty space) both `this.object` and the
-    // boxHelper are undefined, so an unconditional `updateSelectionBoxHelper`
-    // threw "Cannot read properties of undefined (reading 'setFromObject')" whenever a
-    // rebuild read the selection (the React selection store triggers exactly that).
+    // Only refresh the box helper when something is actually selected: after
+    // `removeObject()` (clicking empty space, say) both `this.object` and the boxHelper
+    // are undefined, and a rebuild that reads the selection would otherwise dereference
+    // them.
     if (this.object && this.globalObjectInstance.boxHelper) {
       this.updateSelectionBoxHelper(this.object);
     }
@@ -81,9 +76,8 @@ export class GlobalSelectedObject {
     this.object = undefined as unknown as THREE.Mesh;
     this.instance = null;
     // The engine's "instance in context" pointers describe the selection while one
-    // exists, so they must not outlive it — every caller of this method means "nothing
-    // is selected now", and a pointer left behind is what the attribute dialogs had to
-    // work around ("may still hold the last selected element").
+    // exists, so they must not outlive it: every caller of this method means nothing is
+    // selected now, and a pointer left behind would be read as a stale selection.
     this.globalObjectInstance.current_class_instance = undefined as unknown as ClassInstance;
     this.globalObjectInstance.current_port_instance = undefined as unknown as PortInstance;
     this.removeSelectionBoxHelper();

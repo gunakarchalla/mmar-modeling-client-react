@@ -1,10 +1,10 @@
 /**
- * Pure helpers shared by everything that paints a collaborator: shared-doc-service
- * builds the awareness user state from them, and the user legend + presence renderers
- * consume the same two functions, so every client paints a given user identically.
+ * Pure helpers shared by everything that paints a collaborator. shared-doc-service builds
+ * the awareness user state from them, and the user legend and presence renderers consume
+ * the same two functions, so every client paints a given user identically.
  */
 
-/** djb2 hash -> deterministic HSL colour per user UUID (stable across all clients). */
+/** djb2 hash to a deterministic HSL colour per user UUID, stable across all clients. */
 export function userColor(uuid: string): string {
   let hash = 5381;
   for (let i = 0; i < uuid.length; i++) {

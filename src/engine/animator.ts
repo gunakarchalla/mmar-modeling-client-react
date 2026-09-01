@@ -52,9 +52,9 @@ import { describeError } from "@/resources/util/describe-error";
 
     if (this.globalObjectInstance.render) {
       this.globalObjectInstance.render = false;
-      // Keep collaborators' selection boxes glued to objects they move, and their
-      // labels at a constant on-screen size as OUR camera moves (awareness only fires
-      // when a peer acts, so neither can be driven by awareness alone).
+      // Keep collaborators' selection boxes glued to the objects they move, and their
+      // labels at a constant on-screen size as the local camera moves. Awareness only
+      // fires when a peer acts, so neither can be driven by awareness alone.
       this.remoteSelectionRenderer.refreshBoxes();
       this.remoteCursorRenderer.refreshCursors();
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);

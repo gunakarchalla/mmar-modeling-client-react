@@ -4,16 +4,14 @@ import { sharedDocService } from "./shared-doc-service";
 import { disposeLabelSprite } from "./label-sprite";
 
 /**
- * Unlike the engine handlers (interaction / deletion / ray-helper), which reach the
- * service through `globalObject.sharedDocServiceRef` to stay out of an import cycle,
- * the renderers import `shared-doc-service` directly: they live in
- * `resources/collaboration/`, downstream of the service, so there is no cycle here.
+ * Shared lifecycle for renderers that draw one THREE helper per remote collaborator from
+ * Yjs awareness state: remote cursors ({@link RemoteCursorRenderer}) and remote selection
+ * boxes ({@link RemoteSelectionRenderer}). This base class owns awareness subscription,
+ * per-tab teardown and helper disposal; subclasses implement only `updateForTab`.
  *
- * Shared lifecycle for renderers that draw one THREE helper per remote collaborator
- * from Yjs awareness state — remote cursors ({@link RemoteCursorRenderer}) and remote
- * selection boxes ({@link RemoteSelectionRenderer}). The base class owns awareness
- * subscription, per-tab teardown and helper disposal; subclasses implement only
- * `updateForTab` to add / update / remove their helpers in response to a change.
+ * The renderers import `shared-doc-service` directly rather than going through
+ * `globalObject.sharedDocServiceRef` as the engine handlers do: they live downstream of
+ * the service in `resources/collaboration/`, so there is no import cycle to avoid.
  */
 
 /** One drawn helper per remote collaborator, tagged with the tab it belongs to. */

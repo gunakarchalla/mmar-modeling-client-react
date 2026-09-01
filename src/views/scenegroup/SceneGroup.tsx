@@ -84,9 +84,9 @@ let initInFlight: Promise<void> | null = null;
  * after, so remote presence starts drawing as soon as peers publish it.
  *
  * `tabIndex` defaults to the tab just opened, which is the open-scene case. The
- * `sceneAccessGranted` handler passes an explicit index instead, so a tab that is
- * ALREADY open can be promoted to shared the moment it crosses the two-user threshold,
- * without a reload; the early `isShared` return makes that idempotent.
+ * `sceneAccessGranted` handler passes an explicit index instead, so an already-open tab
+ * can be promoted to shared the moment it crosses the two-user threshold, without a
+ * reload; the early `isShared` return makes that idempotent.
  *
  * Failures are non-fatal: a user without delete access cannot read the access list, and
  * a scene that cannot be checked simply stays non-shared.
@@ -101,7 +101,6 @@ async function maybeAttachSharedSession(
     const accessList = await backendService.sceneAccessListGET(sceneInstance.uuid);
     if (!accessList || accessList.length < 2) return;
 
-    // Determine caller's own access level
     let access: AccessLevel = "edit";
     const me = await backendService.sceneAccessMeGET(sceneInstance.uuid);
     if (me && me.level) access = me.level;
@@ -346,7 +345,7 @@ export default function SceneGroup() {
       await sceneInitiator.sceneInit();
       const tabContext = await instanceUtility.createTabContextSceneInstance(sceneInstance);
 
-      // Check whether this scene instance has >=2 users with access -> shared mode
+      // Two or more users with access makes the scene collaborative.
       await maybeAttachSharedSession(sceneInstance, tabContext);
 
       await persistencyHandler.loadPersistedModel(sceneInstance);

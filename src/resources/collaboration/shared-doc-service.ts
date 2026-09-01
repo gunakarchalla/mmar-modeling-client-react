@@ -24,23 +24,20 @@ import { userColor, initials } from "./color-util";
 import { collectUsers } from "./awareness-users";
 
 /**
- * Owns one SharedSession per TAB INDEX: a Y.Doc + WebsocketProvider connected to the
+ * Owns one SharedSession per tab index: a Y.Doc and a WebsocketProvider connected to the
  * sync server, with deep observers that fold remote changes back into the tab's
- * in-memory gds SceneInstance and THREE.Scene. Room name = the SceneInstance uuid,
- * auth = `?token=<jwt>` (the contract mmar-sync-server/src/connection.ts verifies).
+ * in-memory gds SceneInstance and THREE.Scene. The room name is the SceneInstance uuid
+ * and auth is `?token=<jwt>`, matching mmar-sync-server/src/connection.ts.
  *
- * TWO SOURCES OF TRUTH, ON PURPOSE: the SharedSession object is authoritative for
- * engine/service code (`forTab()`), and `collabStore` is the one-way reactive mirror
- * React reads. Every mutation of `access` / `connectionStatus` / `disconnectBanner`
- * must patch the store too, which is why those writes go through `setSessionStatus` /
- * `setSessionAccess` / `setSessionBanner` rather than assigning the fields directly.
+ * The SharedSession object is authoritative for engine and service code (`forTab()`);
+ * `collabStore` is a one-way reactive mirror for React. Writes to `access`,
+ * `connectionStatus` and `disconnectBanner` therefore go through `setSessionStatus` /
+ * `setSessionAccess` / `setSessionBanner`, which update both.
  *
- * The constructor sets `globalObject.sharedDocServiceRef = this` — the back-reference
- * that lets the engine handlers (interaction / deletion / transform-control-events /
- * ray-helper) reach the service without importing it, keeping the engine out of a
- * circular import. That assignment only happens once this module is evaluated, so the
- * import in `engine/coordinates-updater.ts` is LOAD-BEARING: it is what guarantees
- * the ref is wired before any engine code looks for it.
+ * The constructor sets `globalObject.sharedDocServiceRef`, the back-reference the engine
+ * handlers use to reach the service without importing it (which would be a cycle). That
+ * happens on module evaluation, so the import in `engine/coordinates-updater.ts` is
+ * load-bearing: it wires the ref before any engine code looks for it.
  */
 
 // ---------------------------------------------------------------------------
@@ -146,8 +143,8 @@ export class SharedDocService {
   detach(tabIndex: number): void {
     const session = this.sessions.get(tabIndex);
     if (session) {
-      // provider.destroy() only unsubscribes y-websocket's OWN awareness handler, so
-      // ours has to come off explicitly (verified in y-websocket/src/y-websocket.js).
+      // provider.destroy() only unsubscribes y-websocket's own awareness handler, so
+      // ours has to be removed explicitly.
       if (session.usersHandler) session.awareness.off("change", session.usersHandler);
       session.provider.destroy();
       session.ydoc.destroy();
@@ -206,9 +203,8 @@ export class SharedDocService {
   }
 
   /**
-   * Keep `collabStore.tabs[tabIndex].users` in step with the session's awareness, so
-   * the user legend updates the instant a peer joins or leaves. The store is written
-   * ONLY from this service (the one-way mirror contract).
+   * Keep `collabStore.tabs[tabIndex].users` in step with the session's awareness so the
+   * user legend updates as peers join and leave.
    */
   private installAwarenessUsers(session: SharedSession, tabIndex: number): void {
     const handler = () => {
@@ -335,11 +331,10 @@ export class SharedDocService {
   }
 
   /**
-   * Name the instances a PEER just changed, for the undo history (which must hold local
-   * edits only — see history-service). The uuids come straight off the Y events rather
-   * than from the apply functions: the observed maps are keyed BY instance uuid, so a
-   * root-level event names them in `changes.keys` (add/remove) and a nested one has the
-   * uuid as the first path segment (a field of that instance changed).
+   * Name the instances a peer just changed, so the undo history can exclude them (it
+   * holds local edits only — see history-service). The uuids come off the Y events
+   * directly: the observed maps are keyed by instance uuid, so a root-level event names
+   * them in `changes.keys` and a nested one has the uuid as its first path segment.
    */
   private notifyRemoteInstances(tabIndex: number, events: Y.YEvent<Y.Map<unknown>>[]): void {
     const instanceUuids = new Set<string>();
@@ -359,10 +354,9 @@ export class SharedDocService {
   }
 
   /**
-   * A remote change mutates the gds instances in place, which React cannot observe on
-   * its own — the attribute window would keep rendering stale values. The selection
-   * store's contract is that anything mutating the selected instance's attributes in
-   * place must bump its revision.
+   * A remote change mutates the gds instances in place, which React cannot observe, so
+   * the attribute window would keep rendering stale values. The selection store's
+   * contract is that in-place mutation of the selected instance bumps its revision.
    */
   private notifyRemoteMutation(aggregate: YDocChangeResult): void {
     if (aggregate.changedAttributeInstances.length === 0) return;
@@ -370,22 +364,19 @@ export class SharedDocService {
   }
 
   /**
-   * Drop the local selection when a PEER deleted the very instance it points at.
+   * Drop the local selection when a peer deleted the instance it points at. Otherwise
+   * the object leaves the scene while the selection state still names it: the attribute
+   * window keeps rendering its attributes (it rebuilds only on a selection change or a
+   * `bump()`, and a deletion produces neither), the red box helper hangs in empty space,
+   * and the transform gizmo stays attached to a mesh that has left the scene graph.
    *
-   * Without this the object vanishes from the scene while every piece of selection
-   * state still names it: the attribute window keeps rendering the deleted element's
-   * attributes (it only rebuilds on a selection change or a `bump()`, and a deletion
-   * produces neither), the red box helper hangs in empty space, and the transform
-   * gizmo stays attached to a mesh that is no longer in the scene graph.
+   * Clearing follows the same path as a click on empty space — engine state first, then
+   * the reactive store — so the attribute window falls back to the scene instance's own
+   * attributes rather than blanking, and `removeObject()` publishes the empty selection
+   * so collaborators stop drawing their presence box around it.
    *
-   * Clearing goes through the same path a click on empty space takes — engine state
-   * first, then the reactive store — so the attribute window falls back to the open
-   * scene instance's own attributes rather than blanking. `removeObject()` also
-   * publishes the now-empty selection over awareness, so collaborators stop drawing
-   * their presence box around it too.
-   *
-   * The selection is global while sessions are per tab, so a deletion arriving on a
-   * BACKGROUND tab must leave it alone.
+   * The selection is global while sessions are per tab, so a deletion on a background
+   * tab must leave it alone.
    */
   private clearSelectionOfRemotelyDeleted(tabIndex: number, aggregate: YDocChangeResult): void {
     if (aggregate.deletedInstanceUuids.length === 0) return;
@@ -396,8 +387,8 @@ export class SharedDocService {
 
     // Detach the gizmo before the mesh it is attached to leaves the scene graph.
     this.globalObjectInstance.transformControls?.detach();
-    // Clears the selected instance and the engine's context pointers along with the mesh
-    // — one operation, so this path cannot drift from the others that deselect.
+    // Clears the selected instance and the engine's context pointers along with the
+    // mesh, so this path cannot drift from the others that deselect.
     globalSelectedObject.removeObject();
     // A relation instance's selected line is tracked separately from the mesh.
     globalStateObject.activeStateLine = undefined;
@@ -408,27 +399,26 @@ export class SharedDocService {
   }
 
   /**
-   * Every uuid the current selection is known by, so a remote delete can be matched
-   * against it whichever of them the peer named. They are normally the same instance
-   * seen from three places (the THREE mesh, the engine's `current_*`, the reactive
-   * store), but they drift apart mid-interaction, and a stale one left behind is
-   * exactly the state this guards against.
+   * Every uuid the current selection is known by, so a remote delete matches whichever
+   * one the peer named. They are normally the same instance seen from three places (the
+   * THREE mesh, the engine's `current_*` pointers, the reactive store), but they drift
+   * apart mid-interaction and a stale one is exactly what this guards against.
    *
-   * A PORT has no entry of its own in the Y.Doc — it is deleted as part of its class
-   * instance — so a selected port also answers to its owner's uuid.
+   * A port has no entry of its own in the Y.Doc — it is deleted with its class instance
+   * — so a selected port also answers to its owner's uuid.
    */
   private selectionUuids(): string[] {
     const uuids: string[] = [];
-    // Starts life as an empty THREE.Mesh whose uuid matches no instance, which is
-    // harmless here: it simply never matches a deleted uuid.
+    // Starts as an empty THREE.Mesh whose uuid matches no instance, which is harmless:
+    // it simply never matches a deleted uuid.
     const selectedMesh = globalSelectedObject.object;
     if (selectedMesh?.uuid) uuids.push(selectedMesh.uuid);
 
     const storeUuid = useSelectionStore.getState().selectedInstanceUuid;
     if (storeUuid) uuids.push(storeUuid);
 
-    // Holds the relationclass instance too, when one is selected (see the
-    // interaction handler's onSelectionMode).
+    // Holds the relationclass instance too when one is selected (see the interaction
+    // handler's onSelectionMode).
     const currentClass = this.globalObjectInstance.current_class_instance;
     if (currentClass?.uuid) uuids.push(currentClass.uuid);
 
@@ -532,6 +522,5 @@ export class SharedDocService {
   }
 }
 
-// Module singleton. Constructing it is what sets globalObject.sharedDocServiceRef —
-// see the class docstring.
+// Module singleton. Constructing it sets globalObject.sharedDocServiceRef (see above).
 export const sharedDocService = new SharedDocService();

@@ -271,10 +271,10 @@ export interface AttributeOwner {
  * below. The hybrid algorithms that draw use their own private GraphicContext precisely
  * so that overlap is safe (see engine/hybrid-algorithms/objectspace-algorithms.ts).
  *
- * SCENE-OWNED ATTRIBUTES take the same path: they broadcast as a `scene_attribute_value`
+ * Scene-owned attributes take the same path: they broadcast as a `scene_attribute_value`
  * change and refresh the vizrep like any other, since vizrep-update-checker resolves them
  * through `assigned_uuid_scene_instance` to the scene type's geometry. Only the hybrid
- * algorithms do not apply — they dispatch on a class or a port.
+ * algorithms do not apply, since they dispatch on a class or a port.
  */
 export async function applyFieldChange(attributeInstance: AttributeInstance, owner: AttributeOwner): Promise<void> {
   const session = sharedDocService.forTab(globalObject.selectedTab);

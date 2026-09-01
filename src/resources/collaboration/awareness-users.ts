@@ -2,11 +2,11 @@ import type { WebsocketProvider } from "y-websocket";
 import type { CollabUser } from "@/resources/store/collabStore";
 
 /**
- * The data half of the user legend: turns a session's awareness states into the rows
- * the legend renders (`views/user-legend/UserLegend.tsx` is the chips half).
+ * The data half of the user legend: turns a session's awareness states into the rows the
+ * legend renders (`views/user-legend/UserLegend.tsx` draws the chips).
  *
- * `shared-doc-service` subscribes awareness `change` once per session and pushes the
- * result into `collabStore`, so the list updates the instant a peer joins or leaves.
+ * `shared-doc-service` subscribes to awareness `change` once per session and pushes the
+ * result into `collabStore`, so the list updates as peers join and leave.
  */
 
 type AwarenessLike = Pick<WebsocketProvider["awareness"], "clientID" | "getStates">;
@@ -20,7 +20,7 @@ interface AwarenessUser {
 
 /**
  * Map a session's awareness states to the legend's rows, including the local client
- * (flagged `isLocal`). States without a `user.uuid` are skipped — a peer publishes its
+ * (flagged `isLocal`). States without a `user.uuid` are skipped: a peer publishes its
  * cursor and selection fields before its user field is decoded, and a chip with no
  * identity is meaningless.
  */

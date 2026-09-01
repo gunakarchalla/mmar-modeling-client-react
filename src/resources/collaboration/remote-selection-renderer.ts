@@ -3,18 +3,17 @@ import { AwarenessRenderer, type RenderedEntry } from "./awareness-renderer";
 import { createNameTag, scaleLabel } from "./label-sprite";
 
 /**
- * Draws a bounding box around the object each *remote* collaborator has selected, in
- * that collaborator's own colour, with their name above it. This is the shared-presence
- * counterpart to the local red selection box created in `engine/global-selected-object`.
+ * Draws a bounding box around the object each remote collaborator has selected, in that
+ * collaborator's own colour, with their name above it. The shared-presence counterpart to
+ * the local red selection box created in `engine/global-selected-object`.
  *
  * Selections travel over Yjs awareness (ephemeral presence, never persisted) under the
- * `selection` field — published by `globalSelectedObject.publishSelection`. Near-mirror
- * of {@link RemoteCursorRenderer}; shared lifecycle lives in {@link AwarenessRenderer}.
+ * `selection` field, published by `globalSelectedObject.publishSelection`. Near-mirror of
+ * {@link RemoteCursorRenderer}; shared lifecycle lives in {@link AwarenessRenderer}.
  *
- * WHY THIS BOX IS NAMED AND THE HOVER BOX IS NOT: a selection persists after its owner
- * moves their pointer away or stops hovering, so it has to identify itself. A hover
- * outline only exists while that peer's named cursor is sitting on the object, which
- * already says who it is.
+ * This box is named while the cursor's hover box is not, because a selection persists
+ * after its owner moves their pointer away and so has to identify itself. A hover outline
+ * only exists while that peer's named cursor is on the object, which already says who.
  */
 
 interface SelectionEntry extends RenderedEntry {
@@ -35,11 +34,11 @@ export class RemoteSelectionRenderer extends AwarenessRenderer<SelectionEntry> {
    * Re-fit every remote selection box and name tag to its (possibly moved) target mesh,
    * and drop boxes whose target no longer exists (e.g. deleted by another collaborator).
    *
-   * Awareness changes only fire when someone *changes* their selection, not when the
-   * already-selected object is dragged — so this is called from the render loop
-   * (engine/animator) to keep boxes glued to objects as collaborators move them, and to
-   * hold the name tags at a constant on-screen size as the local camera moves. It is
-   * a cheap no-op when there are no remote selections.
+   * Awareness changes only fire when someone changes their selection, not when the
+   * already-selected object is dragged, so this is called from the render loop
+   * (engine/animator) to keep boxes glued to objects as collaborators move them and to
+   * hold the name tags at a constant on-screen size as the local camera moves. A cheap
+   * no-op when there are no remote selections.
    */
   refreshBoxes(): void {
     if (this.entries.size === 0) return;

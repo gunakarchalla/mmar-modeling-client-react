@@ -4,7 +4,11 @@ import { globalObject } from "@/engine/global-definition";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { mathUtility } from "@/resources/services/math-utility";
 import { logger } from "@/resources/services/logger";
-import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
+// Side-effect import: constructing the SharedDocService singleton is what sets
+// `globalObject.sharedDocServiceRef`, the back-reference the engine handlers reach
+// collaboration through. This module is part of the engine's import graph, so the import
+// guarantees the reference is wired at engine load. Nothing here uses the service value.
+import "@/resources/collaboration/shared-doc-service";
 import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
 import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
 
@@ -15,18 +19,12 @@ import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
  * position / rotation / scale stops matching the previous frame's. Each pass compares
  * the mesh against the instance it is mapped to, copies the changed values over (which
  * is what auto-save then PATCHes) and pushes the delta to collaborators.
- *
- * Importing `sharedDocService` here is load-bearing beyond this file: constructing that
- * singleton is what sets `globalObject.sharedDocServiceRef`, the back-reference the
- * engine handlers reach collaboration through. This module is part of the engine's
- * import graph, so the import guarantees the reference is wired at engine load.
  */
 export class CoordinatesUpdater {
   private instanceUtility = instanceUtility;
   private mathUtility = mathUtility;
   private logger = logger;
   private globalObjectInstance = globalObject;
-  private sharedDocService = sharedDocService;
 
   /**
    * Every draggable object (and its children) paired with the class or port instance
@@ -64,11 +62,11 @@ export class CoordinatesUpdater {
   /**
    * Copy the 2D coordinates of every moved object onto its class / port instance.
    *
-   * The delta published to collaborators carries ONLY the axes that actually moved.
-   * That is what lets a peer dragging the same object along another axis keep their
-   * axis through the merge — see the position note in the y-mapping schema comment.
-   * The per-axis comparison against the instance is the same one that decides whether
-   * there is anything to do at all, so this costs nothing extra.
+   * The delta published to collaborators carries only the axes that actually moved,
+   * which is what lets a peer dragging the same object along another axis keep their axis
+   * through the merge (see the position note in the y-mapping schema comment). The
+   * per-axis comparison is the same one that decides whether there is anything to do at
+   * all, so it costs nothing extra.
    */
   async updateCoordinates2DonClassAndPortInstance() {
     for await (const { object3D, instance } of this.mappedObjects(true)) {

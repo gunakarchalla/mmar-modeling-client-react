@@ -172,10 +172,10 @@ export async function closeTab(index: number): Promise<void> {
   // Then tear the shared session down, so the websocket closes gracefully and the user
   // disappears from the other clients' awareness.
   //
-  // KNOWN LIMITATION: sessions are keyed by tab INDEX, and the splice below shifts every
+  // Known limitation: sessions are keyed by tab index, and the splice below shifts every
   // later tab down one while their sessions keep the old key. With two shared tabs open,
-  // closing the lower one therefore strands the survivor's session — `forTab()` misses
-  // it, and its observers still write to the old index.
+  // closing the lower one therefore strands the survivor's session: `forTab()` misses it,
+  // and its observers still write to the old index.
   sharedDocService.detach(index);
 
   // Remove the tab from the engine's tabContext (same position the store removes).

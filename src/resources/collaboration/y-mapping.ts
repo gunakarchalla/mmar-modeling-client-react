@@ -6,15 +6,14 @@ import { AXES, locallyDraggedAxes, rebaseDragBaseline } from "./drag-reconciler"
 
 /**
  * The bidirectional mapping between gds instances and the shared Y.Doc: the `*ToYMap`
- * builders seed and extend the document from local state, and the `applyYDoc*`
- * handlers fold remote events back onto the SceneInstance and THREE scene. Pure data
- * mapping: plain exported functions taking `GlobalDefinition` as a parameter, and the
- * import is type-only, which keeps this module out of the engine's runtime import
- * graph.
+ * builders seed and extend the document from local state, and the `applyYDoc*` handlers
+ * fold remote events back onto the SceneInstance and THREE scene.
  *
- * REVIVING: the `*FromYMap` helpers build gds instances with `new ClassInstance(...)`
- * etc. — a real constructor call produces a real prototype, so `instanceof
- * ClassInstance` holds for remotely-added instances.
+ * These are plain functions taking `GlobalDefinition` as a parameter, and the engine
+ * import is type-only, which keeps this module out of the engine's runtime import graph.
+ *
+ * The `*FromYMap` helpers revive instances with real constructor calls
+ * (`new ClassInstance(...)`), so `instanceof` holds for remotely-added instances.
  */
 
 // ---------------------------------------------------------------------------
@@ -29,7 +28,7 @@ import { AXES, locallyDraggedAxes, rebaseDragBaseline } from "./drag-reconciler"
 //     uuid, uuid_scene_type, name, description
 //
 //   attribute_instances         Y.Map<Y.Map>    keyed by AttributeInstance.uuid
-//     the SCENE INSTANCE's own attributes (the scene type's, shown in the attribute
+//     the scene instance's own attributes (the scene type's, shown in the attribute
 //     window while nothing is selected)
 //     <uuid> → { uuid, uuid_attribute, name, value } : string
 //
@@ -52,28 +51,24 @@ import { AXES, locallyDraggedAxes, rebaseDragBaseline } from "./drag-reconciler"
 //       role_instance_from,
 //       role_instance_to        string          JSON-encoded RoleInstance (for delete cascades)
 //
-// Encoding note: nested values without their own CRDT semantics (rotation,
-// custom_variables entries, line_points, role instances) are stored as JSON strings
-// rather than nested Y types — they are replaced wholesale on change, never merged
-// field-by-field.
+// Encoding: nested values without their own CRDT semantics (rotation, custom_variables
+// entries, line_points, role instances) are stored as JSON strings rather than nested Y
+// types. They are replaced wholesale on change, never merged field-by-field.
 //
-// POSITION IS DELIBERATELY DECOMPOSED, and each write must be MINIMAL. A Y.Map merges
-// per KEY, so x, y and z are resolved independently: two users dragging the same object
-// along different axes each keep their own axis, which is the intent-preserving merge —
-// but only while each peer writes JUST the axes it moved. A peer that also writes its
-// stale values for the other two makes every key concurrent, and per-key resolution
-// then hands all three to the same winner, which is indistinguishable from whole-
-// position last-writer-wins. Same-axis contention stays a single deterministic winner;
-// no CRDT can merge two absolute values for one scalar.
+// Position is decomposed into three keys, and each write must be minimal. A Y.Map merges
+// per key, so x, y and z resolve independently and two users dragging the same object
+// along different axes each keep their own axis. That only holds while each peer writes
+// just the axes it moved: a peer that also rewrites its stale values for the other two
+// makes every key concurrent, and per-key resolution then hands all three to one winner,
+// which is indistinguishable from whole-position last-writer-wins. Same-axis contention
+// still resolves to a single deterministic winner — no CRDT can merge two absolute
+// values for one scalar.
 //
-// ROTATION IS DELIBERATELY NOT DECOMPOSED. A Y.Map merges per KEY, so holding the
-// quaternion as { x, y, z, w } would let a merge take some components from one peer
-// and the rest from another. Positions survive that (every (x, y, z) triple is a
-// valid position); quaternions do not — a component-wise blend of two unit
-// quaternions is not itself unit-length, and THREE's `quaternion.set` does not
-// normalize, so the mixed value reaches the object's matrix and shears the mesh
-// instead of rotating it. Encoding the quaternion as ONE key makes the merge atomic:
-// whichever peer wins, it wins with the whole rotation it actually authored.
+// Rotation is NOT decomposed, for the opposite reason. Every (x, y, z) triple is a valid
+// position, but a component-wise blend of two unit quaternions is not itself unit-length,
+// and THREE's `quaternion.set` does not normalize, so a mixed value reaches the object's
+// matrix and shears the mesh instead of rotating it. One key makes the merge atomic:
+// whichever peer wins, it wins with the whole rotation it authored.
 //
 // ---------------------------------------------------------------------------
 // Types
@@ -81,16 +76,15 @@ import { AXES, locallyDraggedAxes, rebaseDragBaseline } from "./drag-reconciler"
 
 /**
  * A rotation, structurally identical to the gds `Quaternion` class. Declared locally
- * rather than imported: it is a decorated class over there, and this module only ever
- * needs the four numbers.
+ * because that one is a decorated class and this module only needs the four numbers.
  */
 type Quaternion = { x: number; y: number; z: number; w: number };
 
 export type LocalChangeType =
-  // PARTIAL ON PURPOSE: each axis is its own Y.Map key, so a delta carrying only the
-  // axes that actually moved lets a peer's concurrent drag along a DIFFERENT axis
-  // survive the merge. Publishing all three would author x, y and z on both sides and
-  // collapse the per-key merge back into whole-position last-writer-wins.
+  // The axes are optional on purpose: each is its own Y.Map key, so a delta carrying
+  // only the axes that moved lets a peer's concurrent drag along a different axis
+  // survive the merge. Publishing all three would collapse it into whole-position
+  // last-writer-wins.
   | { type: "coordinates"; classInstanceUuid: string; x?: number; y?: number; z?: number }
   | { type: "rotation"; classInstanceUuid: string; x: number; y: number; z: number; w: number }
   | { type: "scale"; classInstanceUuid: string; x: number; y: number; z: number }
@@ -101,7 +95,7 @@ export type LocalChangeType =
   | { type: "add_relation_class_instance"; relationClassInstance: RelationclassInstance }
   | { type: "remove_relation_class_instance"; relationClassInstanceUuid: string }
   | { type: "relation_attribute_value"; relationClassInstanceUuid: string; attributeUuid: string; value: string }
-  // The scene instance's OWN attributes: no owning instance uuid, because the scene is
+  // The scene instance's own attributes: no owning instance uuid, because the scene is
   // the owner and a Y.Doc holds exactly one scene.
   | { type: "scene_attribute_value"; attributeUuid: string; value: string }
   | { type: "add_scene_attribute_instances"; attributeInstances: AttributeInstance[] };
@@ -112,10 +106,10 @@ export interface YDocChangeResult {
   relationInstanceAdded: boolean;
   changedAttributeInstances: AttributeInstance[];
   /**
-   * UUIDs of the class / relationclass instances a PEER deleted. The observer needs
-   * them because the local selection may be one of them: nothing else in this module
-   * knows about the selection, and a deleted instance that stays selected leaves the
-   * attribute window showing an object that is no longer in the scene.
+   * UUIDs of the class / relationclass instances a peer deleted. The observer needs them
+   * because the local selection may point at one: nothing in this module knows about the
+   * selection, and a deleted instance that stays selected leaves the attribute window
+   * showing an object that is no longer in the scene.
    */
   deletedInstanceUuids: string[];
 }
@@ -167,8 +161,8 @@ export function applyLocalChangeToYDoc(ydoc: Y.Doc, change: LocalChangeType, ori
         if (!ciMap) break;
         const coordMap = ciMap.get("coordinates_2d") as Y.Map<number>;
         if (!coordMap) break;
-        // Only the axes the delta carries — an axis left out is an axis this peer did
-        // not move, and NOT writing it is what lets a concurrent drag along it survive.
+        // Only the axes the delta carries. An axis left out is one this peer did not
+        // move, and not writing it is what lets a concurrent drag along it survive.
         for (const axis of AXES) {
           const value = change[axis];
           if (value !== undefined) coordMap.set(axis, value);
@@ -178,8 +172,8 @@ export function applyLocalChangeToYDoc(ydoc: Y.Doc, change: LocalChangeType, ori
       case "rotation": {
         const ciMap = classInstances.get(change.classInstanceUuid);
         if (!ciMap) break;
-        // ONE key write, so a concurrent rotation merges as a whole quaternion rather
-        // than component-by-component (see the encoding note at the top).
+        // One key write, so a concurrent rotation merges as a whole quaternion rather
+        // than component-by-component (see the encoding note above).
         ciMap.set("rotation", rotationToJson(change));
         break;
       }
@@ -271,10 +265,9 @@ export function applyLocalChangeToYDoc(ydoc: Y.Doc, change: LocalChangeType, ori
 }
 
 // ---------------------------------------------------------------------------
-// Apply a class-instance Yjs deep event to the in-memory SceneInstance +
-// Three.js scene. Called ONLY for remote-origin events (local-origin events are
-// skipped by the SharedDocService observer because the in-memory model was
-// already updated).
+// Apply a class-instance Yjs deep event to the in-memory SceneInstance and Three.js
+// scene. Called only for remote-origin events; the SharedDocService observer skips
+// local-origin ones, whose in-memory model was already updated at the mutation site.
 // ---------------------------------------------------------------------------
 
 export function applyYDocClassChangeToSceneInstance(
@@ -290,22 +283,18 @@ export function applyYDocClassChangeToSceneInstance(
   if (path.length === 0) {
     (event as Y.YMapEvent<Y.Map<unknown>>).changes.keys.forEach((change, uuid) => {
       if (change.action === "delete") {
-        // Report it back so the observer can drop a selection that pointed here.
+        // Reported back so the observer can drop a selection that pointed here.
         result.deletedInstanceUuids.push(uuid);
-        // Remove from in-memory sceneInstance
         const idx = sceneInstance.class_instances.findIndex((c) => c.uuid === uuid);
         if (idx !== -1) sceneInstance.class_instances.splice(idx, 1);
-        // Remove Three.js object
         const obj = threeScene.getObjectByProperty("uuid", uuid);
         if (obj) threeScene.remove(obj);
-        // Remove from drag objects of the current tab
         const tabCtx = globalObjectInstance.tabContext[globalObjectInstance.selectedTab];
         if (tabCtx) {
           tabCtx.contextDragObjects = tabCtx.contextDragObjects.filter((o) => o.uuid !== uuid);
         }
         globalObjectInstance.dragObjects = globalObjectInstance.dragObjects.filter((o) => o.uuid !== uuid);
       } else if (change.action === "add") {
-        // Reconstruct the ClassInstance from the Y.Map and add to the in-memory model.
         const classInstancesMap = event.target as Y.Map<Y.Map<unknown>>;
         const newInstanceMap = classInstancesMap.get(uuid);
         if (newInstanceMap && !sceneInstance.class_instances.find((c) => c.uuid === uuid)) {
@@ -332,31 +321,30 @@ export function applyYDocClassChangeToSceneInstance(
     const coordMap = event.target as Y.Map<number>;
     const ci = sceneInstance.class_instances.find((c) => c.uuid === classInstanceUuid);
     if (ci && ci.coordinates_2d) {
-      // Mirror to Three.js object (getObjectByProperty stops at the first match,
-      // unlike traverse which would walk the whole scene on every drag frame).
+      // getObjectByProperty stops at the first match, unlike traverse, which would walk
+      // the whole scene on every drag frame.
       const obj = threeScene.getObjectByProperty("uuid", classInstanceUuid);
-      // Empty unless the local user is dragging THIS object right now.
+      // Empty unless the local user is dragging this object right now.
       const draggedAxes = locallyDraggedAxes(globalObjectInstance.transformControls, classInstanceUuid);
 
       for (const axis of AXES) {
         if (!coordMap.has(axis)) continue;
         const value = coordMap.get(axis)!;
-        // The gds instance always follows the merged document, even on an axis the
-        // local pointer owns: that mismatch against the mesh is precisely what makes
-        // the animator's coordinates pass republish OUR value and win the axis back.
+        // The gds instance always follows the merged document, even on an axis the local
+        // pointer owns: that mismatch against the mesh is what makes the animator's
+        // coordinates pass republish our value and win the axis back.
         ci.coordinates_2d[axis] = value;
         if (draggedAxes.has(axis)) continue;
         if (obj) obj.position[axis] = value;
-        // Without this the next pointer-move would restore the pre-drag value here.
+        // Without this the next pointer-move would restore the pre-drag value.
         rebaseDragBaseline(globalObjectInstance.transformControls, classInstanceUuid, axis, value);
       }
     }
     return result;
   }
 
-  // rotation changed. It is a single JSON-encoded key ON the class-instance map, not a
-  // nested Y.Map, so the event lands at path [uuid] with `rotation` among the changed
-  // keys — one write carrying the whole quaternion, never a partial one.
+  // Rotation is a single JSON-encoded key on the class-instance map, not a nested
+  // Y.Map, so the event lands at path [uuid] with `rotation` among the changed keys.
   if (path.length === 1) {
     if (!(event as Y.YMapEvent<unknown>).changes.keys.has("rotation")) return result;
     const ci = sceneInstance.class_instances.find((c) => c.uuid === classInstanceUuid);
@@ -405,7 +393,7 @@ export function applyYDocClassChangeToSceneInstance(
     const attrMap = event.target as Y.Map<unknown>;
     if (attrMap.has("value")) {
       attrInst.value = attrMap.get("value") as string;
-      // Signal the caller to trigger a VizRep update for this attribute
+      // Reported back so the caller can trigger a VizRep update for this attribute.
       result.changedAttributeInstances.push(attrInst);
     }
     return result;
@@ -416,7 +404,7 @@ export function applyYDocClassChangeToSceneInstance(
 
 // ---------------------------------------------------------------------------
 // Apply a Yjs deep event from 'relationclasses_instances' to the in-memory
-// SceneInstance. Called ONLY for remote-origin events.
+// SceneInstance. Called only for remote-origin events.
 // ---------------------------------------------------------------------------
 
 export function applyYDocRelationChangeToSceneInstance(
@@ -432,29 +420,26 @@ export function applyYDocRelationChangeToSceneInstance(
   if (path.length === 0) {
     (event as Y.YMapEvent<Y.Map<unknown>>).changes.keys.forEach((change, uuid) => {
       if (change.action === "delete") {
-        // Report it back so the observer can drop a selection that pointed here.
+        // Reported back so the observer can drop a selection that pointed here.
         result.deletedInstanceUuids.push(uuid);
         const idx = sceneInstance.relationclasses_instances.findIndex((r) => r.uuid === uuid);
         if (idx !== -1) sceneInstance.relationclasses_instances.splice(idx, 1);
         const obj = threeScene.getObjectByProperty("uuid", uuid);
         if (obj) threeScene.remove(obj);
         globalObjectInstance.dragObjects = globalObjectInstance.dragObjects.filter((o) => o.uuid !== uuid);
-        // Remove role instances that belong to this relation
         globalObjectInstance.role_instances = globalObjectInstance.role_instances.filter((r) => r.uuid_relationclass !== uuid);
       } else if (change.action === "add") {
-        // Reconstruct the RelationclassInstance from the Y.Map.
         const relMap = event.target as Y.Map<Y.Map<unknown>>;
         const newInstanceMap = relMap.get(uuid);
         if (newInstanceMap && !sceneInstance.relationclasses_instances.find((r) => r.uuid === uuid)) {
           const newRi = relationClassInstanceFromYMap(newInstanceMap);
           sceneInstance.relationclasses_instances.push(newRi);
-          // Register attribute instances in the global flat list
+          // Register attribute and role instances in the global flat lists.
           for (const ai of newRi.attribute_instance) {
             if (!globalObjectInstance.attribute_instances.find((a) => a.uuid === ai.uuid)) {
               globalObjectInstance.attribute_instances.push(ai);
             }
           }
-          // Register role instances in the global flat list
           if (newRi.role_instance_from && !globalObjectInstance.role_instances.find((r) => r.uuid === newRi.role_instance_from.uuid)) {
             globalObjectInstance.role_instances.push(newRi.role_instance_from);
           }
@@ -511,11 +496,11 @@ export function applyYDocRelationChangeToSceneInstance(
 }
 
 /**
- * Apply a Yjs deep event from the top-level 'attribute_instances' map — the SCENE
- * INSTANCE's own attributes — to the in-memory SceneInstance. Called ONLY for
+ * Apply a Yjs deep event from the top-level 'attribute_instances' map — the scene
+ * instance's own attributes — to the in-memory SceneInstance. Called only for
  * remote-origin events.
  *
- * Two shapes, mirroring the class/relation observers: a root-level add/delete of a
+ * Two shapes, mirroring the class and relation observers: a root-level add/delete of a
  * whole attribute entry (a peer instantiated the scene type's attributes for a scene
  * that had none — see instance-creation-handler.createMissingSceneAttributeInstances),
  * and a nested `value` change (a peer edited the field).
@@ -709,7 +694,7 @@ function relationClassInstanceToYMap(ri: RelationclassInstance): Y.Map<unknown> 
   }
   m.set("line_points", linePoints);
   m.set("attribute_instance", attrInstancesToYMap(ri.attribute_instance ?? []));
-  // Include role instances so remote clients can reconstruct deletion-dependency info
+  // Role instances travel along so remote clients can reconstruct deletion dependencies.
   if (ri.role_instance_from) {
     m.set("role_instance_from", JSON.stringify(ri.role_instance_from));
   }
@@ -720,9 +705,9 @@ function relationClassInstanceToYMap(ri: RelationclassInstance): Y.Map<unknown> 
 }
 
 function relationClassInstanceFromYMap(yMap: Y.Map<unknown>): RelationclassInstance {
-  // The gds constructor types role_from/role_to as required; `undefined` is passed
-  // here (they are restored from the JSON-encoded copies further down) — the cast
-  // keeps that behaviour under this repo's strict TS.
+  // The gds constructor types role_from/role_to as required, but they are restored from
+  // the JSON-encoded copies further down, so `undefined` is passed here and the cast
+  // satisfies strict TS.
   const ri = new RelationclassInstance(
     yMap.get("uuid") as string,
     yMap.get("uuid_class") as string,
@@ -740,7 +725,6 @@ function relationClassInstanceFromYMap(yMap: Y.Map<unknown>): RelationclassInsta
   const lpArray = yMap.get("line_points") as unknown as Y.Array<string>;
   ri.line_points = lpArray ? lpArray.toArray().map((s) => JSON.parse(s)) : [];
   ri.attribute_instance = attrInstancesFromYMap(yMap.get("attribute_instance") as Y.Map<Y.Map<unknown>>, ri.uuid);
-  // Reconstruct role instances (used for deletion cascading)
   const roleFromJson = yMap.get("role_instance_from") as string | undefined;
   if (roleFromJson) {
     try {
@@ -776,10 +760,10 @@ const IDENTITY_ROTATION: Quaternion = { x: 0, y: 0, z: 0, w: 1 };
  * composes `quaternion` straight into the object's matrix without normalizing, so a
  * non-unit one scales and shears the mesh rather than turning it.
  *
- * Callers pass `object3D.quaternion`, which THREE already keeps normalized, so this is
- * a no-op on the live path — it is here to stop a value that is not a rotation from
- * being written to the doc and handed to every peer. A zero-length quaternion has no
- * direction to preserve, so it degrades to identity.
+ * Callers pass `object3D.quaternion`, which THREE already keeps normalized, so this is a
+ * no-op on the live path; it exists to stop a value that is not a rotation from reaching
+ * the doc and every peer. A zero-length quaternion has no direction to preserve, so it
+ * degrades to identity.
  */
 function normalizeQuaternion(rot: Partial<Quaternion> | undefined): Quaternion {
   const x = rot?.x, y = rot?.y, z = rot?.z, w = rot?.w;
@@ -791,8 +775,8 @@ function normalizeQuaternion(rot: Partial<Quaternion> | undefined): Quaternion {
 
 /**
  * Encode a quaternion as the single atomic value the doc stores under `rotation`.
- * Normalizing here makes the doc's copy canonical: every rotation in the document is a
- * real rotation, whatever the caller passed.
+ * Normalizing here keeps the document canonical: every rotation in it is a real
+ * rotation, whatever the caller passed.
  */
 function rotationToJson(rot: Partial<Quaternion> | undefined): string {
   return JSON.stringify(normalizeQuaternion(rot));
@@ -840,8 +824,8 @@ function attrInstancesToYMap(attrs: AttributeInstance[]): Y.Map<Y.Map<unknown>> 
 }
 
 /**
- * Reconstruct ONE AttributeInstance owned by the scene instance itself: same encoding
- * as the class/relationclass entries, but the parent uuid goes in the SCENE slot, which
+ * Reconstruct one AttributeInstance owned by the scene instance itself: same encoding as
+ * the class and relationclass entries, but the parent uuid goes in the scene slot, which
  * is what the attribute window and the vizrep checker resolve it through.
  */
 function sceneAttrInstanceFromYMap(attrEntry: Y.Map<unknown>, sceneUuid: string): AttributeInstance {

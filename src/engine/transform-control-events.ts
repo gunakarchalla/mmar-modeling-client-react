@@ -123,12 +123,12 @@ import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
   /**
    * Publish, once at mouse-up, the axes this drag owned.
    *
-   * While the drag runs, a peer's write to an axis WE are authoring is folded onto the
-   * gds instance but deliberately not onto the mesh (see the coordinates branch in
-   * y-mapping), and the animator's coordinates pass republishes our value on the next
-   * frame the mesh moves. A drag held STILL produces no such frame, so a peer's value
-   * would otherwise survive on an axis the local user was holding — visible on screen
-   * as our position, but stored as theirs. One write at mouse-up closes that window.
+   * While the drag runs, a peer's write to an axis the local user is authoring is folded
+   * onto the gds instance but deliberately not onto the mesh (see the coordinates branch
+   * in y-mapping), and the animator's coordinates pass republishes our value on the next
+   * frame the mesh moves. A drag held still produces no such frame, so a peer's value
+   * would otherwise survive on an axis the local user was holding: our position on
+   * screen, theirs in storage. One write at mouse-up closes that window.
    *
    * Only for the instance mesh itself: dragging a label writes custom variables, not
    * coordinates.

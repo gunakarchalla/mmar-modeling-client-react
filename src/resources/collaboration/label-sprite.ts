@@ -5,27 +5,26 @@ import * as THREE from "three";
  * peer's ray lands on ({@link RemoteCursorRenderer}) and the name tag above a peer's
  * selection box ({@link RemoteSelectionRenderer}).
  *
- * Both are `THREE.Sprite`s carrying a canvas texture, rather than a mesh or the troika
- * `Text` the vizreps use, because they billboard for free: a label reads identically
- * from every collaborator's camera, whatever angle they are viewing the scene from.
+ * Both are `THREE.Sprite`s carrying a canvas texture rather than a mesh or the troika
+ * `Text` the vizreps use, because sprites billboard for free: a label reads identically
+ * from every collaborator's camera, whatever angle they view the scene from.
  *
- * SIZING: labels hold a constant fraction of the viewport height rather than a fixed
- * world size — a named cursor that becomes unreadable when you zoom out has stopped
- * doing its job. `scaleLabel` is what maintains that, and callers must re-run it when
- * the local camera moves (both renderers do, from the animator's per-frame tick).
+ * Sizing: labels hold a constant fraction of the viewport height rather than a fixed
+ * world size, since a named cursor that becomes unreadable when you zoom out has stopped
+ * doing its job. `scaleLabel` maintains that, and callers must re-run it when the local
+ * camera moves (both renderers do, from the animator's per-frame tick).
  *
- * DEPTH: the selection name tag is depth-tested like the rest of the presence helpers,
- * so it sits in the scene and geometry in front of it hides it. The cursor pill is not:
- * it tracks a moving pointer that is constantly passing behind things, and a name that
- * flickers as it grazes geometry is worse than one that stays legible.
+ * Depth: the selection name tag is depth-tested like the other presence helpers, so
+ * geometry in front of it hides it. The cursor pill is not, because it tracks a moving
+ * pointer that constantly passes behind things and a name that flickers as it grazes
+ * geometry is worse than one that stays legible.
  *
- * NO-CANVAS FALLBACK: the renderer suites run in vitest's node environment, where
- * `document` does not exist. Every canvas step is therefore optional — the sprite is
- * still built and positioned, just without a texture, so lifecycle and placement stay
- * testable without pulling in a DOM.
+ * Canvas is optional: the renderer suites run in vitest's node environment, where
+ * `document` does not exist. Every canvas step is guarded, so the sprite is still built
+ * and positioned — just without a texture — and placement stays testable without a DOM.
  */
 
-/** Label height as a fraction of the viewport height. ~4% ≈ 25 px on a 640 px canvas. */
+/** Label height as a fraction of the viewport height (~25 px on a 640 px canvas). */
 const LABEL_SCREEN_FRACTION = 0.04;
 /** World height used when the camera cannot supply one (degenerate test cameras). */
 const FALLBACK_WORLD_HEIGHT = 0.6;

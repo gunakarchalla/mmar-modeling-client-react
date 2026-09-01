@@ -4,9 +4,9 @@ import { create } from "zustand";
  * The reactive mirror of each tab's shared session: connection status, the local user's
  * access level, the disconnect banner and the list of connected users.
  *
- * ONE-WAY, service -> store: `shared-doc-service` owns the sessions and writes here
- * whenever one attaches or detaches, or its status, access or user list changes. React
- * components only read it.
+ * The flow is one-way, service to store: `shared-doc-service` owns the sessions and
+ * writes here whenever one attaches or detaches or its status, access or user list
+ * changes. React components only read it.
  */
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -42,11 +42,9 @@ interface CollabState {
   removeTab: (tabIndex: number) => void;
   /** Replace a tab's awareness-derived user list. No-op when the tab is not shared. */
   setUsers: (tabIndex: number, users: CollabUser[]) => void;
-  /** Read a tab's entry outside a component body. */
-  getTab: (tabIndex: number) => TabCollabState | undefined;
 }
 
-export const useCollabStore = create<CollabState>((set, get) => ({
+export const useCollabStore = create<CollabState>((set) => ({
   tabs: {},
 
   setTab: (tabIndex, state) => set((s) => ({ tabs: { ...s.tabs, [tabIndex]: state } })),
@@ -72,6 +70,4 @@ export const useCollabStore = create<CollabState>((set, get) => ({
       if (!current) return s;
       return { tabs: { ...s.tabs, [tabIndex]: { ...current, users } } };
     }),
-
-  getTab: (tabIndex) => get().tabs[tabIndex],
 }));
