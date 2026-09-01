@@ -6,6 +6,11 @@ import { rayHelper } from "@/engine/ray-helper";
  * Tracks the pointer in the 3D world: on every `pointermove` it raycasts against the
  * invisible modelling plane and parks `mousePointer3d` at the hit point. Relation
  * drawing uses that sphere as the line's floating end point.
+ *
+ * This is also the only pointer-motion path into `rayHelper.shootRay`, which is where
+ * the collaboration cursor is broadcast — so a peer's cursor moves exactly as often as
+ * this handler runs. `initiator.initEventListeners` registers it on the renderer's
+ * canvas for that reason; see the comment there.
  */
 export class MouseObject {
   private globalObjectInstance = globalObject;
@@ -13,7 +18,9 @@ export class MouseObject {
 
   updateMousePos(event: MouseEvent) {
     //get mouse pos
-    const mousePos2d: { x: number; y: number } | undefined = this.getMousePos2d(this.globalObjectInstance.elementContainer, event);
+    // Measured against the renderer's canvas, the same element `shootRay` unprojects
+    // from, so the guard below and the picking ray always agree on one rectangle.
+    const mousePos2d: { x: number; y: number } | undefined = this.getMousePos2d(this.globalObjectInstance.renderer.domElement, event);
 
     //set pos2D to textfield
     if (mousePos2d) this.globalObjectInstance.raycaster = this.rayHelper.shootRay(event);

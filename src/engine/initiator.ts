@@ -139,7 +139,20 @@ export class Initiator {
     // the transform controls must claim `pointerdown` first.
     this.globalObjectInstance.onDocumentMouseDownEventListener = this.interactionHandler.onDocumentMouseDown.bind(this.interactionHandler);
 
-    this.globalObjectInstance.elementContainer.addEventListener("pointermove", this.mouseObject.updateMousePos.bind(this.mouseObject), { passive: true });
+    // Pointer tracking binds to the renderer's canvas, NOT to `elementContainer`.
+    // This method runs exactly once per page life (engine.mount memoizes the init
+    // promise), whereas the container is a React-owned element that ThreeCanvas
+    // destroys and recreates on every remount — a logout/login round trip being the
+    // common one. A listener left on the container therefore ends up on a detached
+    // element after the first remount and never fires again, while `pointerdown`
+    // keeps working because it lives on the canvas. That asymmetry surfaced as a
+    // remote collaborator's cursor freezing until they clicked: `updateMousePos` is
+    // the only thing that drives `rayHelper.broadcastCursor` on pointer motion.
+    //
+    // The canvas is a page-lifetime singleton that `engine.mount` re-parents rather
+    // than recreates, so a listener on it outlives every remount. It also fills the
+    // container exactly (the renderer is sized to it), so the events seen are the same.
+    this.globalObjectInstance.renderer.domElement.addEventListener("pointermove", this.mouseObject.updateMousePos.bind(this.mouseObject), { passive: true });
 
     window.addEventListener("resize", this.resize.resize.bind(this.resize));
   }
