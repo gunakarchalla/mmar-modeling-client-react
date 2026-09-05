@@ -15,11 +15,11 @@
     "lint": "eslint src --ext .ts,.tsx"
   },
   "dependencies": {
-    "@emotion/react": "11.13.3",
-    "@emotion/styled": "11.13.0",
-    "@monaco-editor/react": "4.6.0",
-    "@mui/icons-material": "5.16.7",
-    "@mui/material": "5.16.7",
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@monaco-editor/react": "4.7.0",
+    "@mui/icons-material": "5.18.0",
+    "@mui/material": "5.18.0",
     "class-transformer": "0.5.1",
     "js-beautify": "1.15.4",
     "jwt-decode": "4.0.0",
@@ -32,29 +32,29 @@
     "troika-three-text": "0.47.2",
     "unzipit": "1.4.3",
     "urdf-loader": "0.12.6",
-    "uuid": "11.0.3",
+    "uuid": "11.1.1",
     "y-protocols": "1.0.7",
     "y-websocket": "1.5.4",
-    "yjs": "13.6.30",
-    "zustand": "4.5.5"
+    "yjs": "13.6.32",
+    "zustand": "4.5.7"
   },
   "devDependencies": {
-    "@testing-library/dom": "10.4.0",
-    "@testing-library/react": "16.0.1",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.3",
     "@types/js-beautify": "1.14.3",
-    "@types/react": "18.3.12",
-    "@types/react-dom": "18.3.1",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
     "@types/three": "0.169.0",
     "@types/uuid": "10.0.0",
     "@typescript-eslint/eslint-plugin": "7.18.0",
     "@typescript-eslint/parser": "7.18.0",
-    "@vitejs/plugin-react": "4.3.3",
+    "@vitejs/plugin-react": "4.7.0",
     "eslint": "8.57.1",
     "eslint-plugin-react-hooks": "4.6.2",
     "eslint-plugin-react-refresh": "0.4.14",
     "jsdom": "25.0.1",
-    "typescript": "5.4.5",
-    "vite": "5.4.11",
-    "vitest": "2.1.5"
+    "typescript": "5.9.3",
+    "vite": "5.4.21",
+    "vitest": "2.1.9"
   }
 }
