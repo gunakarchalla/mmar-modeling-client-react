@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Box } from "@mui/material";
 import { styled } from "@mui/material/styles";
-import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
+import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import TopNavBar from "@/views/top-nav-bar/TopNavBar";
 import Toolbar from "@/views/toolbar/Toolbar";
 import TabBar from "@/views/layout/TabBar";
@@ -30,14 +30,14 @@ import { eventBus } from "@/resources/services/event-bus";
 import { useKeyboardShortcuts } from "@/views/hooks/useKeyboardShortcuts";
 
 // Draggable divider between the three body columns. The library handles the drag
-// mechanics; `autoSaveId` on the PanelGroup persists the column widths.
-const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
+// mechanics; the `useDefaultLayout` hook below persists the column widths.
+const ResizeHandle = styled(Separator)(({ theme }) => ({
   width: 5,
   flex: "0 0 auto",
   backgroundColor: theme.palette.divider,
   cursor: "col-resize",
   transition: theme.transitions.create("background-color"),
-  '&:hover, &[data-resize-handle-state="drag"]': {
+  "&:hover, &:active": {
     backgroundColor: theme.palette.primary.main,
   },
 }));
@@ -56,6 +56,13 @@ export default function AppLayout() {
 
   // Mount the app-wide keyboard shortcuts once (Delete, arrows, Ctrl+S, undo/redo).
   useKeyboardShortcuts();
+
+  // Remembers the column widths across reloads. v4 removed `autoSaveId`; this hook
+  // is its replacement and still persists to localStorage under the same id. The
+  // body below is rendered conditionally, so the hook stays up here unconditionally.
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "mmar-modeling-panels",
+  });
 
   // Ctrl+S publishes `ctrlPlusSPressed` (from useKeyboardShortcuts); the old
   // top-nav-bar opened the Save dialog on that event. Wire it to the uiStore saveAs
@@ -87,16 +94,17 @@ export default function AppLayout() {
           </Box>
 
           {/* Main 3-column body */}
-          <PanelGroup
-            direction="horizontal"
-            autoSaveId="mmar-modeling-panels"
+          <Group
+            orientation="horizontal"
+            defaultLayout={defaultLayout}
+            onLayoutChanged={onLayoutChanged}
             style={{ flex: 1, minHeight: 0 }}
           >
-            <Panel defaultSize={20} minSize={0} maxSize={35}>
+            <Panel id="left-nav" defaultSize="20" minSize="0" maxSize="35">
               <LeftNav />
             </Panel>
             <ResizeHandle />
-            <Panel minSize={30}>
+            <Panel id="canvas" minSize="30">
               {/* The 3D canvas fills the panel; the AR/VR entry button is an
                   absolutely-positioned overlay on top of it. */}
               <Box sx={{ position: "relative", height: "100%", width: "100%", backgroundColor: "#ffffff" }}>
@@ -105,10 +113,10 @@ export default function AppLayout() {
               </Box>
             </Panel>
             <ResizeHandle />
-            <Panel defaultSize={22} minSize={0} maxSize={40}>
+            <Panel id="right-nav" defaultSize="22" minSize="0" maxSize="40">
               <RightNav />
             </Panel>
-          </PanelGroup>
+          </Group>
         </>
       ) : (
         <Box sx={{ flex: 1 }} />
