@@ -346,10 +346,10 @@ export class GraphicContext {
       textMesh.userData.custom_variables[pos_name_z] = { value: z_rel, instance_adaptable: true, user_locked: false };
     }
 
-    rx ? rx : (rx = 0);
-    ry ? ry : (ry = 0);
-    rz ? rz : (rz = 0);
-    rw ? rw : (rw = 1);
+    if (!rx) rx = 0;
+    if (!ry) ry = 0;
+    if (!rz) rz = 0;
+    if (!rw) rw = 1;
 
     // the name of the rotation variables should be taken from the method arguments
     // todo: must be extended

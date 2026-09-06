@@ -229,22 +229,13 @@ export class MetaUtility {
     const metaSceneType = await this.getSceneTypeByUUID(uuidAssignedConcept);
 
     let attribute: Attribute | undefined = undefined;
-    metaClass ? (attribute = metaClass.attributes.find((attribute) => attribute.uuid == uuid)) : undefined;
-    metaRelationClass
-      ? (attribute = attribute
-          ? attribute
-          : metaRelationClass.attributes.find((attribute) => attribute.uuid == uuid))
-      : undefined;
-    metaPort
-      ? (attribute = attribute
-          ? attribute
-          : metaPort.attributes.find((attribute) => attribute.uuid == uuid))
-      : undefined;
-    metaSceneType
-      ? (attribute = attribute
-          ? attribute
-          : metaSceneType.attributes.find((attribute) => attribute.uuid == uuid))
-      : undefined;
+    if (metaClass) attribute = metaClass.attributes.find((attribute) => attribute.uuid == uuid);
+    if (metaRelationClass && !attribute)
+      attribute = metaRelationClass.attributes.find((attribute) => attribute.uuid == uuid);
+    if (metaPort && !attribute)
+      attribute = metaPort.attributes.find((attribute) => attribute.uuid == uuid);
+    if (metaSceneType && !attribute)
+      attribute = metaSceneType.attributes.find((attribute) => attribute.uuid == uuid);
     return attribute;
   }
 }

@@ -239,7 +239,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
   //-------------------------------------------------
   // bendpoint_instance
   //-------------------------------------------------
-  // eslint-disable-next-line @typescript-eslint/ban-types -- the geometry param is a stored code string typed `Function`; only `.toString()` is called on it
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- the geometry param is a stored code string typed `Function`; only `.toString()` is called on it
   async createBendpointInstance(x: number, y: number, z: number, geometry: Function, bendPointClassUUID: string) {
     //we round the position
     x = Math.round(x * 10) / 10;
@@ -493,8 +493,8 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     const port_instance = new PortInstance(uuid, metaPortUUID, class_instance_uuid, scene_instance_uuid, []);
 
     this.globalObjectInstance.current_port_instance = port_instance;
-    class_instance ? class_instance.port_instance.push(port_instance) : undefined;
-    scene_instance ? scene_instance.port_instances.push(port_instance) : undefined;
+    if (class_instance) class_instance.port_instance.push(port_instance);
+    if (scene_instance) scene_instance.port_instances.push(port_instance);
 
     //push to log file
     this.logger.log("Port Instance " + port_instance.name + " created", "done");
