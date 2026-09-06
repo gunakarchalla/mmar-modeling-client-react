@@ -52,7 +52,7 @@ describe("CameraToggle", () => {
     });
 
     render(<CameraToggle />);
-    const toggle = screen.getByRole("checkbox");
+    const toggle = screen.getByRole("switch");
     fireEvent.click(toggle);
 
     expect(mocks.engine.setThreeDimensional).toHaveBeenCalledWith(true);

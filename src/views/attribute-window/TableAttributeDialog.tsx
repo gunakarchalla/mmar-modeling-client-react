@@ -402,7 +402,7 @@ function TableAttributeCell({
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onBlur={() => commit(value)}
-        inputProps={{ "aria-label": cell.name }}
+        slotProps={{ htmlInput: { "aria-label": cell.name } }}
       />
     );
   }

@@ -84,7 +84,7 @@ export default function SaveAsDialog() {
             <TextField
               label="UUID"
               value={sceneInstance.uuid}
-              InputProps={{ readOnly: true }}
+              slotProps={{ input: { readOnly: true } }}
               disabled
               fullWidth
             />
@@ -107,7 +107,7 @@ export default function SaveAsDialog() {
             <TextField
               label="Relative Coordinates 3D"
               value={JSON.stringify(sceneInstance.relative_coordinate_3d)}
-              InputProps={{ readOnly: true }}
+              slotProps={{ input: { readOnly: true } }}
               disabled
               helperText="String"
               fullWidth
@@ -115,7 +115,7 @@ export default function SaveAsDialog() {
             <TextField
               label="Absolute Coordinates 3D"
               value={JSON.stringify(sceneInstance.absolute_coordinate_3d)}
-              InputProps={{ readOnly: true }}
+              slotProps={{ input: { readOnly: true } }}
               disabled
               helperText="String"
               fullWidth
@@ -123,7 +123,7 @@ export default function SaveAsDialog() {
             <TextField
               label="Custom Variables"
               value={JSON.stringify(sceneInstance.custom_variables)}
-              InputProps={{ readOnly: true }}
+              slotProps={{ input: { readOnly: true } }}
               disabled
               helperText="String"
               fullWidth

@@ -50,8 +50,9 @@ export default function SignInDialog({ open, onClose }: Props) {
   }
 
   return (
-    // Non-dismissable until logged in: no backdrop or escape close.
-    <Dialog open={open} maxWidth="xs" fullWidth disableEscapeKeyDown>
+    // Non-dismissable until logged in: no `onClose` is passed, so neither a
+    // backdrop click nor Escape has anything to call.
+    <Dialog open={open} maxWidth="xs" fullWidth>
       <DialogTitle>User Management</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>

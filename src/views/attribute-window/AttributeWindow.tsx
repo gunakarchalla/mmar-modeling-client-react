@@ -220,7 +220,7 @@ export default function AttributeWindow() {
           {groups.reference.map((enhanced) => (
             <Box key={enhanced.attributeInstance.uuid} sx={{ mb: 1 }}>
               <TextField
-                InputProps={{ readOnly: true }}
+                slotProps={{ input: { readOnly: true } }}
                 size="small"
                 fullWidth
                 label={enhanced.attributeInstance.name}
@@ -272,7 +272,7 @@ function StaticAttributes({
         Static Attributes
       </Typography>
       <TextField
-        InputProps={{ readOnly: true }}
+        slotProps={{ input: { readOnly: true } }}
         size="small"
         label="UUID"
         value={uuid}
@@ -280,7 +280,7 @@ function StaticAttributes({
       />
       <Divider sx={{ borderColor: "silver", my: 1 }} />
       <TextField
-        InputProps={{ readOnly: true }}
+        slotProps={{ input: { readOnly: true } }}
         size="small"
         label={nameLabel}
         value={name ?? ""}

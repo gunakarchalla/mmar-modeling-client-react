@@ -142,7 +142,7 @@ export default function UploadFileDialog() {
                 onChange={(e) => setTargetWidth(e.target.value)}
                 error={!!targetWidthError}
                 helperText={targetWidthError}
-                inputProps={{ min: 1 }}
+                slotProps={{ htmlInput: { min: 1 } }}
               />
               <TextField
                 label="Quality"
@@ -152,7 +152,7 @@ export default function UploadFileDialog() {
                 onChange={(e) => setQuality(e.target.value)}
                 error={!!qualityError}
                 helperText={qualityError}
-                inputProps={{ min: 1, max: 100, step: 1 }}
+                slotProps={{ htmlInput: { min: 1, max: 100, step: 1 } }}
               />
             </Box>
           )}

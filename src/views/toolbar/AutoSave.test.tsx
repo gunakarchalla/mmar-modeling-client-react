@@ -49,7 +49,7 @@ beforeEach(() => {
   mocks.sharedDocService.forTab.mockReturnValue(null);
 });
 
-const toggle = () => screen.getByRole("checkbox");
+const toggle = () => screen.getByRole("switch");
 
 describe("AutoSave", () => {
   it("leaves the toggle enabled on a non-shared tab", () => {
