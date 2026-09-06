@@ -228,3 +228,12 @@ lives, and several are pinned by tests. Read the comment before "fixing" one:
   mechanism and procedure code strings stored in the DATABASE call them positionally.
   Methods there are kept even when nothing in this repository calls them, and must not be
   renamed or have parameters inserted.
+## License
+
+This repository is licensed under the GNU AFFERO GENERAL PUBLIC LICENSE Version 3. 
+
+The GNU Affero General Public License (GNU AGPL) is a free, copyleft license published by the Free Software Foundation in November 2007, and based on the GNU GPL version 3 and the Affero General Public License. It is intended for software designed to be run over a network, adding a provision requiring that the corresponding source code of modified versions of the software be prominently offered to all users who interact with the software over a network (https://en.wikipedia.org/wiki/GNU_Affero_General_Public_License).
+
+The GNU AGPL is specifically designed to ensure cooperation with the community in the case of network server software. The licenses for most software are designed to take away your freedom to share and change the works. By contrast, the GNU AGPL is intended to guarantee your freedom to share and change all versions of a program–to make sure it remains free software for all its users (https://www.gnu.org/licenses/agpl-3.0.en.html).
+
+This means that any kind of published change done to the repository must be published again under the same license. For more information have a look at the LICENSE file.
