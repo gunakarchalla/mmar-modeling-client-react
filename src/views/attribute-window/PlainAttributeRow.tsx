@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -66,8 +66,21 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
 
   // Re-sync when the window rebuilds with a different instance, or the value changed
   // underneath us (an upload dialog, or a remote edit from a collaborator).
+  //
+  // The mount run is skipped deliberately. `useState` above already seeded `value`
+  // from the very same source, so re-setting it on mount cannot change anything —
+  // except that React 19 flushes passive effects a tick later than React 18 did, so
+  // the field is painted and can be typed into BEFORE this effect runs, and the
+  // "harmless" reset then throws that first edit away. Remembering what was last
+  // synced keeps the resync for genuine outside changes and drops the no-op.
+  const syncedRef = useRef<{ instance: typeof attributeInstance; value: string } | null>(null);
   useEffect(() => {
-    setValue(attributeInstance.value ?? "");
+    const incoming = attributeInstance.value ?? "";
+    const synced = syncedRef.current;
+    syncedRef.current = { instance: attributeInstance, value: incoming };
+    if (synced === null) return;
+    if (synced.instance === attributeInstance && synced.value === incoming) return;
+    setValue(incoming);
   }, [attributeInstance, attributeInstance.value]);
 
   const isObject3d = attributeInstance.uuid_attribute === OBJECT_3D_ATTRIBUTE_UUID;

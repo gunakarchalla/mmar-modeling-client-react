@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -385,8 +385,17 @@ function TableAttributeCell({
 }) {
   const [value, setValue] = useState<string>(cell.value ?? "");
 
+  // Skips its mount run for the same reason as PlainAttributeRow's resync: `useState`
+  // already seeded `value`, and under React 19 this effect can land after the cell has
+  // been typed into, where the redundant reset would discard that edit.
+  const syncedRef = useRef<{ instance: typeof cell; value: string } | null>(null);
   useEffect(() => {
-    setValue(cell.value ?? "");
+    const incoming = cell.value ?? "";
+    const synced = syncedRef.current;
+    syncedRef.current = { instance: cell, value: incoming };
+    if (synced === null) return;
+    if (synced.instance === cell && synced.value === incoming) return;
+    setValue(incoming);
   }, [cell, cell.value]);
 
   // Put the field back to the stored value when a commit was refused. The cell was
