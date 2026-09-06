@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 //
 // P10 LIVE integration test (plan §9 P10): "a node integration test against the live
 // sync server: two Y.Docs + two WebsocketProviders (same room uuid, token param) — a
@@ -20,16 +19,29 @@
 //     even with the sync server switched off, so the test would prove nothing.
 //     Disabling it forces the round-trip through the real websocket. (Verified by
 //     negative control: pointed at a dead port, all three tests fail.)
-//  2. THE JSDOM DOCBLOCK IS LOAD-BEARING, not decoration. Node 20 has NO global
-//     WebSocket (`typeof globalThis.WebSocket` === "undefined"), so in vitest's default
-//     node env y-websocket has nothing to construct. jsdom supplies a real, connecting
-//     WebSocket — and it is the same native-WebSocket path the browser takes, so no
-//     `WebSocketPolyfill` option is needed here. Importing `ws` instead would be
-//     borrowing jsdom's own transitive copy (y-websocket lists ws only as an OPTIONAL
-//     dependency, and npm hoists jsdom's), which is not a dependency this repo declares.
+//  2. THIS FILE NEEDS A WebSocket AND MUST SAY WHERE IT COMES FROM. Node 20 has NO
+//     global WebSocket (`typeof globalThis.WebSocket` === "undefined"), so vitest's
+//     default node env leaves y-websocket nothing to construct. It used to carry a
+//     `@vitest-environment jsdom` docblock and lean on jsdom's WebSocket instead.
+//
+//     P7 REMOVED THAT. jsdom 29 stopped implementing WebSocket itself (it dropped its
+//     `ws` dependency) and now delegates to undici's. undici's WebSocket extends
+//     Node's EventTarget but builds its events from the AMBIENT global `Event`, and
+//     vitest's jsdom environment replaces `globalThis.Event` with jsdom's class — so
+//     the moment the socket opens, Node's `dispatchEvent` rejects its own event with
+//     `TypeError: The "event" argument must be an instance of Event. Received an
+//     instance of Event`. Bisected in-tree: jsdom 25 + vitest 4 passes, jsdom 29 +
+//     vitest 4 fails, so it is jsdom's change and not vitest's.
+//
+//     So the socket now comes from `ws`, declared as a devDependency here rather than
+//     borrowed transitively (jsdom no longer supplies it, and y-websocket lists it only
+//     as an OPTIONAL dependency). That also drops the jsdom env this file no longer
+//     needs: nothing below touches the DOM. `ws` is pinned to 8.21.3, the same version
+//     mmar-sync-server serves this protocol with.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
+import WebSocket from "ws";
 import { v4 as uuidv4 } from "uuid";
 
 const API_URL = "http://mmar-server:8000";
@@ -79,6 +91,12 @@ function connect(room: string, token: string, doc: Y.Doc): WebsocketProvider {
   return new WebsocketProvider(SYNC_URL, room, doc, {
     params: { token },
     disableBc: true, // trap 1 — see the header
+    // trap 2 — see the header. The cast is needed because y-websocket types this
+    // option as the DOM `WebSocket` constructor and `ws` does not implement the full
+    // EventTarget surface (it has addEventListener but no dispatchEvent). y-websocket
+    // only ever constructs it and uses binaryType/send/close/onopen/onmessage/onerror/
+    // onclose, all of which `ws` provides.
+    WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
   });
 }
 
