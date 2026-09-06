@@ -34,8 +34,10 @@
 //     vitest 4 fails, so it is jsdom's change and not vitest's.
 //
 //     So the socket now comes from `ws`, declared as a devDependency here rather than
-//     borrowed transitively (jsdom no longer supplies it, and y-websocket lists it only
-//     as an OPTIONAL dependency). That also drops the jsdom env this file no longer
+//     borrowed transitively. P11 made that declaration load-bearing rather than merely
+//     tidy: y-websocket 1 listed `ws` as an OPTIONAL dependency (it shipped a server
+//     binary), and y-websocket 3 dropped both, so NOTHING supplies `ws` transitively
+//     any more. That also drops the jsdom env this file no longer
 //     needs: nothing below touches the DOM. `ws` is pinned to 8.21.3, the same version
 //     mmar-sync-server serves this protocol with.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -195,8 +197,10 @@ describe.skipIf(!isUp)("P10 sync server (live)", () => {
     const doc = new Y.Doc();
     const provider = connect(sceneInstanceUuid, "not-a-jwt", doc);
     let closeCode = 0;
-    provider.on("connection-close", (event: { code: number }) => {
-      closeCode = event.code;
+    provider.on("connection-close", (event: CloseEvent | null) => {
+      // null = closed locally (destroy() in the finally, or the watchdog); only a close
+      // the server sent carries the code these tests assert on.
+      if (event) closeCode = event.code;
     });
 
     try {
@@ -248,8 +252,8 @@ describe.skipIf(!isUp)("P10 sync server (live)", () => {
 
       provider = connect(sceneInstanceUuid, memberToken, doc);
       let closeCode = 0;
-      provider.on("connection-close", (event: { code: number }) => {
-        closeCode = event.code;
+      provider.on("connection-close", (event: CloseEvent | null) => {
+        if (event) closeCode = event.code;
       });
       await waitFor(() => provider!.wsconnected);
 

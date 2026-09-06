@@ -459,7 +459,10 @@ export class SharedDocService {
     });
 
     // ---- WebSocket close codes -----------------------------------------
-    session.provider.on("connection-close", (event: CloseEvent) => {
+    // `event` is null when the close was initiated locally (provider.disconnect(), the
+    // no-message watchdog, or the re-entrant emit our own disconnect() below triggers).
+    // Only a close the SERVER sent carries a code, so the branches below key off it.
+    session.provider.on("connection-close", (event: CloseEvent | null) => {
       const code = event?.code;
 
       if (code === 4401) {
