@@ -532,14 +532,14 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
   // role_instance
   //-------------------------------------------------
   async createRoleInstance(role_instance_uuid: UUID, uuid_has_reference_class_instance: ClassInstance, uuid_has_reference_port_instance: PortInstance, from_or_to: string, uuid_relationclass: UUID, role_instance_name?: string, reference_attribute_role?: UUID) {
-    let selectedRelationClassUUID: string | null = null;
-    let selectedRelationClass: Relationclass | null | undefined = null;
     let role_from: any = null;
     let role_to: any = null;
     //only do that if assigned to classInstance or PortInstance
     if (from_or_to == "from" || from_or_to == "to") {
-      selectedRelationClassUUID = this.globalRelationclassObject.getSelectedRelationClassUUID();
-      selectedRelationClass = await this.metaUtility.getMetaRelationclass(selectedRelationClassUUID);
+      const selectedRelationClassUUID =
+        this.globalRelationclassObject.getSelectedRelationClassUUID();
+      const selectedRelationClass =
+        await this.metaUtility.getMetaRelationclass(selectedRelationClassUUID);
       //for relationclasses we need to get the role from the relationclass
       role_from = selectedRelationClass!.role_from;
       role_to = selectedRelationClass!.role_to;

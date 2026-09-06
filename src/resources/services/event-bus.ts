@@ -123,7 +123,6 @@ export interface Subscription {
   dispose(): void;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Callback = (payload: any) => void;
 
 class EventBus {

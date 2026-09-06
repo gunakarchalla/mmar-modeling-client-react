@@ -130,7 +130,7 @@ export async function buildAttributeGroups(): Promise<AttributeGroups> {
       ) ?? null;
   }
 
-  let attributeInstances: AttributeInstance[] = [];
+  let attributeInstances: AttributeInstance[];
   //if there is a classInstance
   if (groups.currentClassInstance) {
     attributeInstances = groups.currentClassInstance.attribute_instance;

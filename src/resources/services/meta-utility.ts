@@ -191,10 +191,11 @@ export class MetaUtility {
 
   //get metaAttribute by uuid
   async getMetaAttribute(uuid: UUID): Promise<Attribute | undefined> {
-    let metaAttribute: Attribute | undefined = undefined;
     //search in sceneType, classes, relationclasses
     const sceneType = await this.getTabContextSceneType();
-    metaAttribute = sceneType.attributes.find((attribute) => attribute.uuid == uuid);
+    let metaAttribute: Attribute | undefined = sceneType.attributes.find(
+      (attribute) => attribute.uuid == uuid,
+    );
     if (!metaAttribute) {
       for (const metaClass of sceneType.classes) {
         metaAttribute = metaClass.attributes.find((attribute) => attribute.uuid == uuid);

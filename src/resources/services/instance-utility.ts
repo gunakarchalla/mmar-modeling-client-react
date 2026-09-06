@@ -253,13 +253,12 @@ export class InstanceUtility {
     searchBy: "uuid" | "name",
   ) {
     let attributeInstance: AttributeInstance | undefined = undefined;
-    let allAttributeInstances = [];
 
     // Search in classInstances
     const classInstances = await this.getAllClassInstances();
     const classInstanceFound = classInstances.find((instance) => instance.uuid == classInstanceUUID);
     if (classInstanceFound) {
-      allAttributeInstances = classInstanceFound.attribute_instance;
+      const allAttributeInstances = classInstanceFound.attribute_instance;
       attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
@@ -273,7 +272,6 @@ export class InstanceUtility {
     searchBy: "uuid" | "name",
   ) {
     let attributeInstance: AttributeInstance | undefined = undefined;
-    let allAttributeInstances = [];
 
     // Search in relationclassInstances
     const relationclassInstances = await this.getAllRelationClassInstances();
@@ -281,7 +279,7 @@ export class InstanceUtility {
       (instance) => instance.uuid == relationclassInstanceUUID,
     );
     if (relationclassInstanceFound) {
-      allAttributeInstances = relationclassInstanceFound.attribute_instance;
+      const allAttributeInstances = relationclassInstanceFound.attribute_instance;
       attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
@@ -327,13 +325,12 @@ export class InstanceUtility {
     searchBy: "uuid" | "name",
   ) {
     let attributeInstance: AttributeInstance | undefined = undefined;
-    let allAttributeInstances = [];
 
     // Search in portInstances
     const portInstances: PortInstance[] = await this.getAllPortInstances();
     const portInstanceFound = portInstances.find((instance) => instance.uuid == portInstanceUUID);
     if (portInstanceFound) {
-      allAttributeInstances = portInstanceFound.attribute_instances;
+      const allAttributeInstances = portInstanceFound.attribute_instances;
       attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
@@ -347,13 +344,12 @@ export class InstanceUtility {
     searchBy: "uuid" | "name",
   ) {
     let attributeInstance: AttributeInstance | undefined = undefined;
-    let allAttributeInstances = [];
 
     // Search in classInstances
     const classInstances = await this.getAllClassInstances();
     const classInstanceFound = classInstances.find((instance) => instance.uuid == instanceUUID);
     if (classInstanceFound) {
-      allAttributeInstances = classInstanceFound.attribute_instance;
+      const allAttributeInstances = classInstanceFound.attribute_instance;
       attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
     }
 
@@ -364,7 +360,7 @@ export class InstanceUtility {
         (instance) => instance.uuid == instanceUUID,
       );
       if (relationclassInstanceFound) {
-        allAttributeInstances = relationclassInstanceFound.attribute_instance;
+        const allAttributeInstances = relationclassInstanceFound.attribute_instance;
         attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
       }
     }
@@ -374,7 +370,7 @@ export class InstanceUtility {
       const sceneInstances = await this.getAllSceneInstancesFromLocal();
       const sceneInstanceFound = sceneInstances.find((instance) => instance.uuid == instanceUUID);
       if (sceneInstanceFound) {
-        allAttributeInstances = sceneInstanceFound.attribute_instances;
+        const allAttributeInstances = sceneInstanceFound.attribute_instances;
         attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
       }
     }
@@ -384,7 +380,7 @@ export class InstanceUtility {
       const portInstances: PortInstance[] = await this.getAllPortInstances();
       const portInstanceFound = portInstances.find((instance) => instance.uuid == instanceUUID);
       if (portInstanceFound) {
-        allAttributeInstances = portInstanceFound.attribute_instances;
+        const allAttributeInstances = portInstanceFound.attribute_instances;
         attributeInstance = findAttributeInstance(allAttributeInstances, searchValue, searchBy);
       }
     }

@@ -15,12 +15,12 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@gds": path.resolve(__dirname, "../mmar-global-data-structure"),
-      "@": path.resolve(__dirname, "src"),
+      "@gds": path.resolve(import.meta.dirname, "../mmar-global-data-structure"),
+      "@": path.resolve(import.meta.dirname, "src"),
       // The shared gds `User` DTO statically imports the Node-only
       // `jsonwebtoken` (for server-side jwt.sign). Stub it out so it never
       // reaches the browser bundle, where it crashes on Node's Buffer.
-      jsonwebtoken: path.resolve(__dirname, "src/stubs/jsonwebtoken.ts"),
+      jsonwebtoken: path.resolve(import.meta.dirname, "src/stubs/jsonwebtoken.ts"),
     },
   },
   optimizeDeps: {

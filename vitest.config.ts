@@ -4,8 +4,8 @@ import path from "path";
 export default defineConfig({
   resolve: {
     alias: {
-      "@gds": path.resolve(__dirname, "../mmar-global-data-structure"),
-      "@": path.resolve(__dirname, "src"),
+      "@gds": path.resolve(import.meta.dirname, "../mmar-global-data-structure"),
+      "@": path.resolve(import.meta.dirname, "src"),
     },
   },
   test: {

@@ -60,7 +60,7 @@ export class GlobalClassObject {
   }
 
   async getIcon(wholeVizRep: string) {
-    let vizRep: string = wholeVizRep;
+    let vizRep: string;
     let map = "";
     let next = false;
 
