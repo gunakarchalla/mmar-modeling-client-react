@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   Box,
   Typography,
@@ -12,34 +12,47 @@ import {
   Button,
 } from "@mui/material";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
-import { useThrottledLogArray } from "@/resources/store/logStore";
+import { useThrottledLogArray, type LogEntry } from "@/resources/store/logStore";
+
+// One row. Memoised, and the sx objects are hoisted to module constants, so a row whose
+// entry has not changed is skipped entirely when a new entry arrives: a burst of log
+// calls (the engine emits them from the render loop) otherwise reconciled every row —
+// each a MUI <Tooltip>, which is not cheap — for every entry added.
+const rowSx = {
+  alignContent: "center",
+  fontSize: "8pt",
+  borderTop: "solid 1pt rgb(128,128,128)",
+  px: 0.5,
+  py: 0.25,
+} as const;
+const iconSx = { fontSize: "12pt", verticalAlign: "middle", mr: 0.5 } as const;
+
+const LogEntryRow = memo(function LogEntryRow({ entry, time }: { entry: LogEntry; time: string }) {
+  return (
+    <Tooltip title={entry.value} placement="left">
+      <Box sx={rowSx}>
+        {time}:
+        <br />
+        <Icon sx={iconSx}>{entry.status}</Icon>
+        <span>{entry.value}</span>
+      </Box>
+    </Tooltip>
+  );
+});
 
 // Renders the shared log entries, newest first. Each row prints the CURRENT time
 // rather than a per-entry timestamp — log entries carry no time of their own.
+//
+// Rows are keyed by `entry.id`, not by index: entries are PREPENDED, so every index
+// shifts on each new entry and an index key would defeat the memo above by making every
+// row look new.
 function LogEntries() {
   const logArray = useThrottledLogArray();
   const time = new Date().toLocaleTimeString();
   return (
     <>
-      {logArray.map((entry, i) => (
-        <Tooltip key={i} title={entry.value} placement="left">
-          <Box
-            sx={{
-              alignContent: "center",
-              fontSize: "8pt",
-              borderTop: "solid 1pt rgb(128,128,128)",
-              px: 0.5,
-              py: 0.25,
-            }}
-          >
-            {time}:
-            <br />
-            <Icon sx={{ fontSize: "12pt", verticalAlign: "middle", mr: 0.5 }}>
-              {entry.status}
-            </Icon>
-            <span>{entry.value}</span>
-          </Box>
-        </Tooltip>
+      {logArray.map((entry) => (
+        <LogEntryRow key={entry.id} entry={entry} time={time} />
       ))}
     </>
   );

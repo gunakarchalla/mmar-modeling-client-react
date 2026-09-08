@@ -33,7 +33,15 @@ import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
       this.globalSelectedObject.getObject();
       //set scale of y to scale of x -> proportional scale
       this.globalSelectedObject.object.scale.setY(this.globalSelectedObject.object.scale.x);
-      this.globalObjectInstance.objectScaled = true;
+      // `objectScaled` forces the animator to re-route EVERY relation line next frame,
+      // which is the right thing while the user is resizing or rotating (the line ends
+      // are trimmed to the object's surface, so they move even though its position does
+      // not) but is pure waste otherwise. three fires 'change' for far more than a drag
+      // — hovering an axis, switching mode, attaching to a new object all dispatch it —
+      // and each of those used to buy a full re-route of the whole scene's lines.
+      if (this.globalObjectInstance.transformControls?.dragging) {
+        this.globalObjectInstance.objectScaled = true;
+      }
     }
 
     this.globalObjectInstance.render = true;
@@ -96,6 +104,14 @@ import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
       this.lockCustomVariables(object, instance, 3, [object.quaternion.x, object.quaternion.y, object.quaternion.z, object.quaternion.w]);
     }
 
+    // Re-route the relation lines once more now the drag is finished. The scale branch
+    // above counter-scales the object's children, and a child can be a line's end point,
+    // so the route can still change after the last drag frame. This used to happen by
+    // accident: three sets `dragging` and `axis` right after this handler, both of which
+    // dispatch 'change', and the handler for that raised this flag unconditionally.
+    // `onTransformControlsPropertyChange` now only raises it for actual drag frames, so
+    // the end of the drag has to say so itself.
+    this.globalObjectInstance.objectScaled = true;
     this.globalObjectInstance.render = true;
 
     // One undo step per completed drag (mouse-up), not per frame. `afterTransformSync`

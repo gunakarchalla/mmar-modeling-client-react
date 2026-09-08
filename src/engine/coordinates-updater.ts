@@ -20,11 +20,40 @@ import type { LocalChangeType } from "@/resources/collaboration/y-mapping";
  * the mesh against the instance it is mapped to, copies the changed values over (which
  * is what auto-save then PATCHes) and pushes the delta to collaborators.
  */
+/**
+ * How long the same instance has to stay quiet before its transform is logged again.
+ *
+ * These three passes run on every frame of a drag, so logging each write-back
+ * unthrottled emitted ~60 lines per second per moved object. That is not just wasted
+ * string building: `logStore.log` copies the whole (500-entry) array and wakes the log
+ * panel, which re-renders a MUI <Tooltip> per row — so a two-second drag re-rendered
+ * hundreds of tooltips ~120 times AND flushed every other message out of the window.
+ * One line per instance per window keeps the panel readable and the cost off the frame.
+ */
+const TRANSFORM_LOG_INTERVAL_MS = 500;
+
 export class CoordinatesUpdater {
   private instanceUtility = instanceUtility;
   private mathUtility = mathUtility;
   private logger = logger;
   private globalObjectInstance = globalObject;
+
+  /** Last time each instance/kind pair was logged, for the throttle above. */
+  private lastTransformLog = new Map<string, number>();
+
+  /**
+   * Log a transform write-back at most once per `TRANSFORM_LOG_INTERVAL_MS` per
+   * instance and kind. The write-back itself, and the change published to
+   * collaborators, are never throttled — only the log line is.
+   */
+  private logTransform(kind: string, uuid: string, message: () => string): void {
+    const key = `${kind}:${uuid}`;
+    const now = Date.now();
+    const last = this.lastTransformLog.get(key);
+    if (last !== undefined && now - last < TRANSFORM_LOG_INTERVAL_MS) return;
+    this.lastTransformLog.set(key, now);
+    this.logger.log(message(), "done");
+  }
 
   /**
    * Every draggable object (and its children) paired with the class or port instance
@@ -39,14 +68,20 @@ export class CoordinatesUpdater {
     const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
     const allPortInstances = await this.instanceUtility.getAllPortInstancesOfTabContext();
 
-    const instanceFor = (object3D: THREE.Object3D): ObjectInstance | undefined =>
-      sceneInstance.class_instances.find((instance) => instance.uuid == object3D.uuid) ??
-      allPortInstances.find((instance) => instance.uuid == object3D.uuid);
+    // Index by uuid once instead of scanning both instance lists per object. All three
+    // passes run on every frame of a drag over every dragged object AND its children,
+    // so the linear scans made the write-back O(objects x instances) per pass — the
+    // cost grew with the square of the scene while the work actually done stayed the
+    // same. Class instances are indexed first and ports must not displace them, which
+    // is the precedence the `??` chain this replaces had.
+    const instancesByUuid = new Map<string, ObjectInstance>();
+    for (const instance of allPortInstances) instancesByUuid.set(instance.uuid, instance);
+    for (const instance of sceneInstance.class_instances) instancesByUuid.set(instance.uuid, instance);
 
     for (const object of this.globalObjectInstance.dragObjects) {
       const objects = includeChildren ? [object as THREE.Object3D, ...object.children] : [object as THREE.Object3D];
       for (const object3D of objects) {
-        const instance = instanceFor(object3D);
+        const instance = instancesByUuid.get(object3D.uuid);
         if (instance) yield { object3D, instance };
       }
     }
@@ -80,7 +115,7 @@ export class CoordinatesUpdater {
       instance.coordinates_2d.x = x;
       instance.coordinates_2d.y = y;
       instance.coordinates_2d.z = z;
-      this.logger.log(`update coordinates in instance ${instance.name} to ${x} ${y} ${z}`, "done");
+      this.logTransform("coordinates", instance.uuid, () => `update coordinates in instance ${instance.name} to ${x} ${y} ${z}`);
       this.syncToYDoc({
         type: "coordinates",
         classInstanceUuid: instance.uuid,
@@ -103,7 +138,7 @@ export class CoordinatesUpdater {
       instance.rotation.y = y;
       instance.rotation.z = z;
       instance.rotation.w = w;
-      this.logger.log(`update rotation in instance ${instance.name} to ${x} ${y} ${z} ${w}`, "done");
+      this.logTransform("rotation", instance.uuid, () => `update rotation in instance ${instance.name} to ${x} ${y} ${z} ${w}`);
       this.syncToYDoc({ type: "rotation", classInstanceUuid: instance.uuid, x, y, z, w });
     }
   }
@@ -130,7 +165,7 @@ export class CoordinatesUpdater {
       if (!instance.custom_variables) instance.custom_variables = {};
       // Store a plain copy, not the live THREE.Vector3, so the next comparison works.
       (instance.custom_variables as any)["scale"] = { x: scale.x, y: scale.y, z: scale.z };
-      this.logger.log(`update scale in instance ${instance.name} to ${scale.x} ${scale.y} ${scale.z}`, "done");
+      this.logTransform("scale", instance.uuid, () => `update scale in instance ${instance.name} to ${scale.x} ${scale.y} ${scale.z}`);
       this.syncToYDoc({ type: "scale", classInstanceUuid: instance.uuid, x: scale.x, y: scale.y, z: scale.z });
     }
   }

@@ -17,13 +17,20 @@ export class MouseObject {
   private rayHelper = rayHelper;
 
   updateMousePos(event: MouseEvent) {
-    //get mouse pos
-    // Measured against the renderer's canvas, the same element `shootRay` unprojects
-    // from, so the guard below and the picking ray always agree on one rectangle.
-    const mousePos2d: { x: number; y: number } | undefined = this.getMousePos2d(this.globalObjectInstance.renderer.domElement, event);
+    // Only fire the ray once there is a canvas to measure against — the same element
+    // `shootRay` unprojects from, so the guard and the picking ray always agree on one
+    // rectangle.
+    //
+    // This used to ask `getMousePos2d` for the canvas-relative point and then use it
+    // purely as a null check, throwing the coordinates away. That cost a second
+    // `getBoundingClientRect` on top of the one `shootRay` does — and this handler runs
+    // on EVERY pointermove, so it was two forced layout flushes per mouse move, each of
+    // which has to wait for pending style and layout work. The presence check is what
+    // the branch actually wanted.
+    const canvas: HTMLElement | null = this.globalObjectInstance.renderer.domElement;
 
     //set pos2D to textfield
-    if (mousePos2d) this.globalObjectInstance.raycaster = this.rayHelper.shootRay(event);
+    if (canvas != null) this.globalObjectInstance.raycaster = this.rayHelper.shootRay(event);
 
     const objects: THREE.Object3D[] = [this.globalObjectInstance.plane];
     //array with objects, that intersect with the ray (only plane)

@@ -104,8 +104,11 @@ export class GlobalSelectedObject {
     this.updateSelectionBoxHelper(object);
   }
   updateSelectionBoxHelper(object: THREE.Mesh) {
+    // `setFromObject` already calls `update()` internally, and `update()` is the
+    // expensive half: it walks the object and every child to rebuild the bounding box.
+    // Calling both did that walk twice — on every frame of a gizmo drag, since
+    // `onTransformControlsPropertyChange` refreshes the box on each 'change' event.
     this.globalObjectInstance.boxHelper.setFromObject(object);
-    this.globalObjectInstance.boxHelper.update();
   }
   removeSelectionBoxHelper() {
     this.globalObjectInstance.scene.remove(this.globalObjectInstance.boxHelper);

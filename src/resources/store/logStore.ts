@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 
-export type LogEntry = { value: string; status: string };
+/**
+ * `id` is a stable, monotonically increasing identity for the entry.
+ *
+ * Entries are prepended (newest first), so every existing row's ARRAY INDEX shifts by
+ * one on each new entry. Keying the rendered rows by index therefore told React that
+ * every row had changed and made it reconcile the whole (up to 500-row) list — each row
+ * a MUI <Tooltip> — on every single log call. Keyed by `id`, an unchanged row keeps its
+ * element and is skipped.
+ */
+export type LogEntry = { id: number; value: string; status: string };
 
 /**
  * Cap on retained log entries. Every `log()` allocates a fresh array and re-renders the
@@ -28,6 +37,9 @@ interface LogState {
   closeSnackbar: () => void;
 }
 
+/** Source of `LogEntry.id`; only ever incremented, never reset. */
+let nextLogEntryId = 0;
+
 export const useLogStore = create<LogState>((set) => ({
   logArray: [],
   snackbar: { open: false, message: "", severity: "info" },
@@ -39,7 +51,7 @@ export const useLogStore = create<LogState>((set) => ({
     }
     // Newest first. Slicing before spreading keeps the copy — and the LogWindow render
     // behind it — bounded to MAX_LOG_ENTRIES instead of growing with every call.
-    set((s) => ({ logArray: [{ value, status }, ...s.logArray.slice(0, MAX_LOG_ENTRIES - 1)] }));
+    set((s) => ({ logArray: [{ id: nextLogEntryId++, value, status }, ...s.logArray.slice(0, MAX_LOG_ENTRIES - 1)] }));
   },
 
   closeSnackbar: () => set((s) => ({ snackbar: { ...s.snackbar, open: false } })),

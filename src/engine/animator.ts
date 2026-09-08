@@ -39,6 +39,24 @@ import { describeError } from "@/resources/util/describe-error";
   private remoteCursorRenderer = remoteCursorRenderer;
   private logger = logger;
 
+  /**
+   * Per-frame lookup tables for the line-routing pass, built once in `animate()` and
+   * cleared again as soon as the pass is done.
+   *
+   * `setPos` needs, for every line, the meshes its end points and bend points name by
+   * uuid and the relation instance behind the line. Resolving those by walking the
+   * scene / scanning the instance list per line made the pass O(lines x scene nodes) —
+   * with 80 lines over a 700-node scene that is >100k node visits every frame of a
+   * drag, and it was the single largest cost in the loop. One traversal per frame,
+   * shared by every line, makes it O(lines + scene nodes).
+   *
+   * Rebuilt each frame rather than cached across frames because objects are added and
+   * removed by drawing, deletion and incoming peer updates, and a stale index would
+   * route a line to a mesh that is no longer in the scene.
+   */
+  private frameMeshIndex: Map<string, THREE.Mesh> | null = null;
+  private frameRelationIndex: Map<string, RelationclassInstance> | null = null;
+
   async animate() {
     if (this.globalObjectInstance.camera == this.globalObjectInstance.ARCamera) {
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);
@@ -114,12 +132,20 @@ import { describeError } from "@/resources/util/describe-error";
             this.globalObjectInstance.objectScaled) &&
           this.globalObjectInstance.camera == this.globalObjectInstance.normalCamera
         ) {
-          for (const element of this.globalObjectInstance.updateLinesArray) {
-            if (element.userData.relObj.length > 1) {
-              await this.setPos(element);
-              //activate rendering
-              this.globalObjectInstance.render = true;
+          // Resolve every uuid the pass will look up once, up front, instead of once per
+          // line (see frameMeshIndex). Cleared straight after so nothing outside the
+          // pass can read a stale index.
+          this.buildFrameIndexes();
+          try {
+            for (const element of this.globalObjectInstance.updateLinesArray) {
+              if (element.userData.relObj.length > 1) {
+                await this.setPos(element);
+                //activate rendering
+                this.globalObjectInstance.render = true;
+              }
             }
+          } finally {
+            this.clearFrameIndexes();
           }
           //update all positions for class_instances and port_instances
           await this.coordinatesUpdater.updateCoordinates2DonClassAndPortInstance();
@@ -150,6 +176,49 @@ import { describeError } from "@/resources/util/describe-error";
 
   }
 
+  /**
+   * Index every mesh in the scene by uuid, and every relation instance of the open tab
+   * by uuid, for the line pass about to run.
+   *
+   * Last-one-wins on a duplicate uuid, which is what the per-line `scene.traverse`
+   * this replaces did: it assigned into the same variable on every match and so kept
+   * the last node in traversal order. Duplicates are real here — a line and its end
+   * meshes deliberately share the relation's uuid (see persistency-handler).
+   */
+  private buildFrameIndexes() {
+    const meshes = new Map<string, THREE.Mesh>();
+    this.globalObjectInstance.scene.traverse((child) => {
+      if (child instanceof THREE.Mesh) meshes.set(child.uuid, child);
+    });
+    this.frameMeshIndex = meshes;
+
+    const relations = new Map<string, RelationclassInstance>();
+    const tabContext = this.globalObjectInstance.tabContext[this.globalObjectInstance.selectedTab];
+    for (const instance of (tabContext?.["sceneInstance"]?.relationclasses_instances ?? []) as RelationclassInstance[]) {
+      relations.set(instance.uuid, instance);
+    }
+    this.frameRelationIndex = relations;
+  }
+
+  private clearFrameIndexes() {
+    this.frameMeshIndex = null;
+    this.frameRelationIndex = null;
+  }
+
+  /**
+   * The scene mesh with this uuid. Falls back to a one-off traversal when `setPos` is
+   * called outside the animate() pass that builds the index (tests do this), so the
+   * method keeps working standalone.
+   */
+  private meshByUuid(uuid: string): THREE.Mesh | undefined {
+    if (this.frameMeshIndex) return this.frameMeshIndex.get(uuid);
+    let found: THREE.Mesh | undefined;
+    this.globalObjectInstance.scene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.uuid == uuid) found = child;
+    });
+    return found;
+  }
+
   //check if two arrays are the same
   //tolerance is the per-element delta below which two values are treated as equal
   //(default suits scene-unit positions; rotations/scales pass a tighter value)
@@ -167,7 +236,8 @@ import { describeError } from "@/resources/util/describe-error";
     //get class_instance of line
     const tabContext = this.globalObjectInstance.tabContext[this.globalObjectInstance.selectedTab];
     const relationclassInstances: RelationclassInstance[] = tabContext["sceneInstance"].relationclasses_instances;
-    const relationclass_instance: RelationclassInstance | undefined = relationclassInstances.find((element) => element.uuid == line.uuid);
+    const relationclass_instance: RelationclassInstance | undefined =
+      this.frameRelationIndex?.get(line.uuid) ?? relationclassInstances.find((element) => element.uuid == line.uuid);
     //get all objects in line. We take the objects, since we can then take the positions of this objects and we don't have to search for changes (we don't store positions)
     let relObjs: any;
     if (relationclass_instance && relationclass_instance.line_points) {
@@ -179,15 +249,13 @@ import { describeError } from "@/resources/util/describe-error";
 
       //get intersection ob line and the start and end Objects
       //we draw the lines just from this point and not from/to the position of the start/end objects
-      let obj1: THREE.Mesh | undefined;
-      let obj2: THREE.Mesh | undefined;
-      this.globalObjectInstance.scene.traverse((child) => {
-        if (child instanceof THREE.Mesh && child.uuid == relObjs[0].UUID) {
-          obj1 = child;
-        } else if (child instanceof THREE.Mesh && child.uuid == relObjs[1].UUID) {
-          obj2 = child;
-        }
-      });
+      // `obj2` stays undefined when both ends name the same uuid (a self-relation). The
+      // per-node if/else-if this replaces could only ever assign one of the two for a
+      // given node, so it never resolved the second end either — and the guard further
+      // down turns that into a skipped line rather than a ray cast from an object to
+      // itself. Keeping that shape here keeps self-relations behaving as before.
+      const obj1: THREE.Mesh | undefined = this.meshByUuid(relObjs[0].UUID);
+      const obj2: THREE.Mesh | undefined = relObjs[1].UUID == relObjs[0].UUID ? undefined : this.meshByUuid(relObjs[1].UUID);
 
       // No cast: either object is undefined when the line outlived the meshes it
       // connects, and shootRayFromObject answers undefined for that — which the guard
@@ -197,15 +265,10 @@ import { describeError } from "@/resources/util/describe-error";
 
       //todo sometimes error, thus try -> problem not visible for user
       try {
-        let fromObj: THREE.Mesh | undefined = undefined;
-        let toObj: THREE.Mesh | undefined = undefined;
-        this.globalObjectInstance.scene.traverse((child) => {
-          if (child instanceof THREE.Mesh && child.uuid == relObjs[relObjs.length - 2].UUID) {
-            fromObj = child;
-          } else if (child instanceof THREE.Mesh && child.uuid == relObjs[relObjs.length - 1].UUID) {
-            toObj = child;
-          }
-        });
+        const fromUuid = relObjs[relObjs.length - 2].UUID;
+        const toUuid = relObjs[relObjs.length - 1].UUID;
+        const fromObj: THREE.Mesh | undefined = this.meshByUuid(fromUuid);
+        const toObj: THREE.Mesh | undefined = toUuid == fromUuid ? undefined : this.meshByUuid(toUuid);
 
         endObjectNearestPoint = this.rayHelper.shootRayFromObject(fromObj, toObj);
       } catch (error) {
@@ -254,12 +317,6 @@ import { describeError } from "@/resources/util/describe-error";
           }
         }
 
-        const colors = [];
-        for (let i = 0; i < pos.length / 3; i++) {
-          colors.push(1, 1, 0);
-        }
-
-        const geometry = new LineGeometry();
         const direction = new THREE.Vector3();
         let to: THREE.Vector3;
         let from: THREE.Vector3;
@@ -343,19 +400,42 @@ import { describeError } from "@/resources/util/describe-error";
           this.logger.log("error in endpoint orientation: " + describeError(error), "close");
         }
 
-        //this is not super performant
-        //set the updated line
-        geometry.setPositions(pos);
-        geometry.setColors(colors);
-        const oldGeometry = line.geometry;
-        line.geometry = geometry;
-        oldGeometry.dispose();
-        line.computeLineDistances();
-        line.scale.set(1, 1, 1);
+        // Rebuilding the geometry means new buffers, a dispose of the old ones and a
+        // re-upload to the GPU, so it only happens when the route actually came out
+        // different from last frame's. The pass runs for EVERY line whenever anything
+        // in the scene moves, and dragging one object leaves all the other lines
+        // routed exactly where they were — those used to pay the full rebuild anyway.
+        // `pos` is the finished route (the end-point trimming above writes into it), so
+        // comparing it covers the end meshes as well as the bend points.
+        const previousPositions: number[] | undefined = line.userData.linePositions;
+        if (!previousPositions || !this.arraysMatch(pos, previousPositions, 0)) {
+          const colors = [];
+          for (let i = 0; i < pos.length / 3; i++) {
+            colors.push(1, 1, 0);
+          }
 
-        //calculate the middle point of the line at each update of the line.
-        //the function repositions the middle text of a line if there is any.
-        await this.calculateMiddlePoint(line, pos);
+          //this is not super performant
+          //set the updated line
+          const geometry = new LineGeometry();
+          geometry.setPositions(pos);
+          geometry.setColors(colors);
+          const oldGeometry = line.geometry;
+          line.geometry = geometry;
+          oldGeometry.dispose();
+          line.computeLineDistances();
+
+          line.userData.linePositions = pos.slice();
+
+          //calculate the middle point of the line at each update of the line.
+          //the function repositions the middle text of a line if there is any.
+          await this.calculateMiddlePoint(line, pos);
+        }
+
+        // Outside the guard above: the geometry already holds world-space points, so a
+        // scale on the line itself would distort it. The line is selectable like any
+        // other object and so can be handed to the scale gizmo, and that leaves a scale
+        // behind without changing the route — exactly the case the guard skips.
+        line.scale.set(1, 1, 1);
       } else {
         // One of the two end points could not be resolved, so there is no line to draw.
         this.logger.log("line not updated: an end point of the relation could not be resolved", "close");
