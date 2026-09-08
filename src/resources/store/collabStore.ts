@@ -42,6 +42,8 @@ interface CollabState {
   removeTab: (tabIndex: number) => void;
   /** Replace a tab's awareness-derived user list. No-op when the tab is not shared. */
   setUsers: (tabIndex: number, users: CollabUser[]) => void;
+  /** Drop every tab's entry (logout — see `services/session-reset`). */
+  reset: () => void;
 }
 
 export const useCollabStore = create<CollabState>((set) => ({
@@ -70,4 +72,6 @@ export const useCollabStore = create<CollabState>((set) => ({
       if (!current) return s;
       return { tabs: { ...s.tabs, [tabIndex]: { ...current, users } } };
     }),
+
+  reset: () => set({ tabs: {} }),
 }));

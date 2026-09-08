@@ -129,6 +129,17 @@ export class SnapshotService {
     return tabContext.sceneInstance;
   }
 
+  /**
+   * Drop every snapshot (logout — see `services/session-reset`). Both maps hold full
+   * deep clones of SceneInstances the previous user opened, which is exactly the data a
+   * new user must not be able to reach; `restoreSceneInstanceToCurrentTab` would
+   * otherwise still find one keyed by uuid.
+   */
+  clear() {
+    this.sceneOpenSnapshot = null;
+    this.sceneInstanceSnapshots.clear();
+  }
+
   private deepCloneSceneInstance(sceneInstance: SceneInstance): SceneInstance {
     const plain: object = JSON.parse(JSON.stringify(sceneInstance));
     // Use gds fromJS (gds's own class-transformer copy) so nested class/relation/

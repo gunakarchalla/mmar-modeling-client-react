@@ -33,6 +33,13 @@ interface TabsState {
   renameTab: (index: number, name: string) => void;
   /** Mark a tab shared or unshared (set when a collaboration session attaches). */
   setTabShared: (index: number, isShared: boolean) => void;
+  /**
+   * Drop every tab at once (logout). The engine half of the teardown lives in
+   * `services/session-reset`, which is the only caller — it empties
+   * `globalObject.tabContext` in the same synchronous step, so the two stay in lockstep
+   * exactly as the per-tab path does.
+   */
+  reset: () => void;
 }
 
 export const useTabsStore = create<TabsState>((set) => ({
@@ -81,4 +88,6 @@ export const useTabsStore = create<TabsState>((set) => ({
     set((s) => ({
       tabs: s.tabs.map((t, i) => (i === index ? { ...t, isShared } : t)),
     })),
+
+  reset: () => set({ tabs: [], selectedTab: -1 }),
 }));

@@ -59,6 +59,16 @@ export function resetSceneInstanceCache(): void {
   inFlight.clear();
 }
 
+/**
+ * The current generation. A caller that awaits across a possible reset — SceneGroup's
+ * `initTree`, whose SceneType fetch is issued with the token of whoever was logged in
+ * when it started — compares this before and after to tell that its response describes a
+ * session that has since ended.
+ */
+export function sceneInstanceCacheGeneration(): number {
+  return generation;
+}
+
 export function isSceneTypeLoaded(sceneTypeUuid: UUID): boolean {
   return loadedTypes.has(sceneTypeUuid);
 }

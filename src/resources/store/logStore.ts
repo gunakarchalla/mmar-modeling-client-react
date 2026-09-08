@@ -35,6 +35,11 @@ interface LogState {
   /** Prepend an entry; a status of "error" also raises the snackbar. */
   log: (value: string, status: string) => void;
   closeSnackbar: () => void;
+  /**
+   * Drop every entry and dismiss the snackbar (logout). The panel shows scene names and
+   * operations, so it is the previous user's data as much as the canvas is.
+   */
+  clear: () => void;
 }
 
 /** Source of `LogEntry.id`; only ever incremented, never reset. */
@@ -55,6 +60,8 @@ export const useLogStore = create<LogState>((set) => ({
   },
 
   closeSnackbar: () => set((s) => ({ snackbar: { ...s.snackbar, open: false } })),
+
+  clear: () => set({ logArray: [], snackbar: { open: false, message: "", severity: "info" } }),
 }));
 
 /**

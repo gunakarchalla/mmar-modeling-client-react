@@ -71,6 +71,23 @@ export abstract class AwarenessRenderer<TEntry extends RenderedEntry> {
     this.handlers.delete(tabIndex);
   }
 
+  /**
+   * Remove every helper on every tab and unsubscribe from every session (logout — see
+   * `services/session-reset`). Like `SharedDocService.detachAll`, this walks its own maps
+   * instead of the open tabs so entries filed under a stranded tab index are dropped too.
+   * Call it BEFORE the sessions are detached, for the same reason `clearForTab` is.
+   */
+  clearAll(): void {
+    for (const [clientId, entry] of Array.from(this.entries)) {
+      this.disposeEntry(entry, this.globalObjectInstance.tabContext[entry.tabIndex]?.threeScene);
+      this.entries.delete(clientId);
+    }
+    for (const [tabIndex, handler] of Array.from(this.handlers)) {
+      this.sharedDocService.forTab(tabIndex)?.awareness.off("change", handler);
+      this.handlers.delete(tabIndex);
+    }
+  }
+
   /** Remove an entry's helper (and its label, if any) and free their GPU resources. */
   protected disposeEntry(entry: TEntry, scene: THREE.Scene | undefined): void {
     if (!scene) return;

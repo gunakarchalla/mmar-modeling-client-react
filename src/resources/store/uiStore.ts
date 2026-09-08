@@ -67,6 +67,12 @@ interface UiState {
   getDialogPayload: <T = unknown>(name: DialogName) => T | undefined;
   setLoading: (value: boolean) => void;
   setAutoSave: (value: boolean) => void;
+  /**
+   * Back to the as-loaded state (logout — see `services/session-reset`). Dialog payloads
+   * matter most here: they hold the SceneInstance the dialog was opened against, so a
+   * dialog left open by the previous user would otherwise act on their scene.
+   */
+  reset: () => void;
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
@@ -91,4 +97,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   setLoading: (value) => set({ loading: value }),
   setAutoSave: (value) => set({ autoSave: value }),
+
+  reset: () =>
+    set({ dialogs: allClosed(), dialogPayloads: {}, loading: false, autoSave: true }),
 }));

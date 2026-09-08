@@ -153,6 +153,22 @@ export class SharedDocService {
     }
   }
 
+  /**
+   * Destroy EVERY session, whatever tab index it is filed under (logout — see
+   * `services/session-reset`). Each session holds a websocket opened with the logging-out
+   * user's JWT and broadcasts their identity over awareness, so none may outlive them.
+   *
+   * Iterating the map rather than the open tabs is deliberate: sessions are keyed by tab
+   * index and `detach(index)` can strand one when a lower tab is closed first (see the
+   * note in `tabActions.closeTab`). A stranded session is unreachable through `forTab`
+   * but its socket is still live, so the map is the only complete list.
+   */
+  detachAll(): void {
+    for (const tabIndex of Array.from(this.sessions.keys())) {
+      this.detach(tabIndex);
+    }
+  }
+
   /** Returns the active session for a tab, or null if the tab is not shared. */
   forTab(tabIndex: number): SharedSession | null {
     return this.sessions.get(tabIndex) ?? null;

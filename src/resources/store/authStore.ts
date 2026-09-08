@@ -43,7 +43,10 @@ interface AuthState {
 
   /** POST credentials, store the token, hydrate currentUser, publish `login`. */
   login: (username: string, password: string) => Promise<boolean>;
-  /** Drop the token and the current user, and publish `login` as false. */
+  /**
+   * Drop the token and the current user, and publish `login` as false — which is what
+   * `services/session-reset` tears the session down on.
+   */
   logout: () => void;
   /** A token with no `exp` claim counts as valid. */
   isJwtExpired: (token: string) => boolean;
@@ -62,7 +65,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       setToken(token);
       set({ currentUser: userFromToken(token) });
       useLogStore.getState().log(`User ${username} logged in`, "info");
-      // The scene tree builds itself on this channel.
+      // Announce the new session. The scene tree does not listen — SceneGroup builds it
+      // when it mounts, which the body rendering for the new `currentUser` is what does.
       eventBus.publish("login", true);
       return true;
     } catch (error) {
@@ -75,8 +79,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout(): void {
     clearToken();
     set({ currentUser: null });
-    useLogStore.getState().log("User logged out", "info");
+    // Publish BEFORE logging: `session-reset` subscribes to this channel and clears the
+    // log panel (it names the departing user's scenes), so a line written first would be
+    // wiped. Listeners run synchronously, so the teardown completes inside this call.
     eventBus.publish("login", false);
+    useLogStore.getState().log("User logged out", "info");
   },
 
   isJwtExpired(token: string): boolean {

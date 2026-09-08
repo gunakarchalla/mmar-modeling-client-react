@@ -31,6 +31,7 @@ import { snapshotService } from "@/resources/services/snapshot-service";
 import {
   loadSceneInstancesForType,
   resetSceneInstanceCache,
+  sceneInstanceCacheGeneration,
   isSceneTypeLoaded,
 } from "@/resources/services/scene-tree-service";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
@@ -76,6 +77,14 @@ type SceneTypeNode = SceneType & { children?: SceneInstance[] };
 // Dedupe concurrent initTree() calls (StrictMode double-mount) — resolves to the
 // same in-flight fetch; nulled on completion so a later login re-fetches.
 let initInFlight: Promise<void> | null = null;
+// Identity of the in-flight init, so only that init's own completion clears the slot
+// above (a retired one must not clear its successor's).
+let initToken: object | null = null;
+// The scene-tree-service generation the in-flight init was started under. A logout bumps
+// it (session-reset calls resetSceneInstanceCache), which retires that init: its
+// SceneTypes were fetched with the previous user's token, so the next user's mount must
+// neither join it nor inherit its answer.
+let initGeneration = -1;
 
 /**
  * Attach a shared session to a tab when its scene is collaborative — which it is as soon
@@ -178,12 +187,23 @@ export default function SceneGroup() {
   );
 
   const initTree = useCallback(async () => {
-    if (initInFlight) return initInFlight;
+    const startedAt = sceneInstanceCacheGeneration();
+    if (initInFlight && initGeneration === startedAt) return initInFlight;
+
+    const token = {};
+    initToken = token;
+    initGeneration = startedAt;
+
     initInFlight = (async () => {
       setLoading(true);
       try {
         await metaUtility.getFiles();
         const sceneTypes = (await metaUtility.getAllSceneTypesFromDB()) as SceneTypeNode[];
+        // A logout landed while this was in flight. Both requests above went out with
+        // the previous user's token, and what the next user may read is decided by
+        // theirs, so this answer must not become their tree. Their own mount starts a
+        // fresh init.
+        if (sceneInstanceCacheGeneration() !== startedAt) return;
         globalObject.sceneTypes = sceneTypes;
 
         // Only the SceneType skeleton is fetched here — each type's SceneInstances are
@@ -200,7 +220,7 @@ export default function SceneGroup() {
         for (const uuid of expandedRef.current) ensureTypeLoaded(uuid);
       } finally {
         setLoading(false);
-        initInFlight = null;
+        if (initToken === token) initInFlight = null;
       }
     })();
     return initInFlight;

@@ -4,6 +4,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 import App from "./App";
+// Load-bearing side-effect import: this module subscribes to the `login` channel and
+// tears the whole session down on logout, so the next user cannot inherit the previous
+// one's open scene tabs. It is imported for that subscription alone — nothing here
+// references it, and dropping the import silently disables the teardown.
+import "@/resources/services/session-reset";
 
 // Palette matching the MMAR brand colours
 // ($primary #9ec8e1, $primary-light #BDD9EB, $secondary #ff8a65, $error #ff4747,
