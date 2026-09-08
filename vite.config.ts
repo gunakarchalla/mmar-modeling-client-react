@@ -17,16 +17,6 @@ export default defineConfig({
     alias: {
       "@gds": path.resolve(import.meta.dirname, "../mmar-global-data-structure"),
       "@": path.resolve(import.meta.dirname, "src"),
-      // The shared gds `User` DTO statically imports the Node-only
-      // `jsonwebtoken` (for server-side jwt.sign). Stub it out so it never
-      // reaches the browser bundle, where it crashes on Node's Buffer.
-      jsonwebtoken: path.resolve(import.meta.dirname, "src/stubs/jsonwebtoken.ts"),
     },
-  },
-  optimizeDeps: {
-    // Keep jsonwebtoken out of the esbuild dep pre-bundle, otherwise the
-    // optimizer grabs the real (Node-only) package before resolve.alias can
-    // redirect it. Excluded => the import flows through resolve.alias -> stub.
-    exclude: ["jsonwebtoken"],
   },
 });
