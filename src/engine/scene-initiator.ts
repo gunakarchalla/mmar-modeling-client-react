@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { globalObject } from "@/engine/global-definition";
+import { globalSelectedObject } from "@/engine/global-selected-object";
 import { transformControlsEvents } from "@/engine/transform-control-events";
 
 /**
@@ -17,6 +18,14 @@ export class SceneInitiator {
 
   async sceneInit() {
     if (this.globalObjectInstance.elementContainer) {
+      // Clear any live selection BEFORE swapping in the new scene, while
+      // `globalObject.scene` still points at the outgoing one. Otherwise the red
+      // selection box (and its refs) are stranded in the old scene and can never
+      // be removed. `switchToTab` already does this for tab switches; opening a
+      // brand-new scene/tab goes straight through here instead.
+      globalSelectedObject.removeObject();
+      this.globalObjectInstance.transformControls?.detach();
+
       this.globalObjectInstance.scene = new THREE.Scene();
 
       //-------------------------------
