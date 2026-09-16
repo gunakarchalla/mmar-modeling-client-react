@@ -229,26 +229,31 @@ import { runExclusive } from "@/resources/services/draw-lock";
    * has to happen before the new object is set), then runs the same `selectObject`
    * routine a canvas pick does, and optionally pans the camera to the object.
    *
+   * Runs in the same lane as a click (see `onDocumentMouseDown`): it writes the selection
+   * pointers a click or a peer's draw pass may be writing at the same time.
+   *
    * A no-op (logged) when nothing in the active tab is drawn for that UUID.
    */
   async selectInstanceByUuid(uuid: string, opts?: { focusCamera?: boolean }): Promise<void> {
-    const object = this.globalObjectInstance.dragObjects.find((candidate) => candidate.uuid === uuid);
-    if (!object) {
-      this.logger.log(`selectInstanceByUuid: no drawn object for instance ${uuid}`, "info");
-      return;
-    }
+    await runExclusive(async () => {
+      // Looked up inside the lane, so a draw or delete queued ahead of this has landed.
+      const object = this.globalObjectInstance.dragObjects.find((candidate) => candidate.uuid === uuid);
+      if (!object) {
+        this.logger.log(`selectInstanceByUuid: no drawn object for instance ${uuid}`, "info");
+        return;
+      }
 
-    if (this.globalStateObject.getState() !== this.globalStateObject.stateNames[0]) {
-      this.globalStateObject.setState(0);
-    }
-    this.clickedButton = 0;
-    this.globalObjectInstance.transformControls.setMode("translate");
+      if (this.globalStateObject.getState() !== this.globalStateObject.stateNames[0]) {
+        this.globalStateObject.setState(0);
+      }
+      this.globalObjectInstance.transformControls.setMode("translate");
 
-    await this.selectObject(object);
+      await this.selectObject(object);
 
-    if (opts?.focusCamera) this.focusCameraOnObject(object);
+      if (opts?.focusCamera) this.focusCameraOnObject(object);
 
-    this.globalObjectInstance.render = true;
+      this.globalObjectInstance.render = true;
+    });
   }
 
   /**

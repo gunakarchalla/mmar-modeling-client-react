@@ -301,4 +301,65 @@ describe("roboticsystem-algorithms", () => {
       expect(mocks.logger.log).toHaveBeenCalledWith("No scene type in current tab context", "error");
     });
   });
+  describe("table attributes", () => {
+    // URDF tables used to be imported without row numbers, so every row of a multi-row
+    // Visual or Collision table shared one; the table rules of gds number them 0..n-1.
+    it("imports each entry as a numbered row, numbering a nested table's row as well", async () => {
+      const table = {
+        uuid: "table-1",
+        uuid_attribute: "visual-attr",
+        table_attributes: [{ uuid: "stale", uuid_attribute: "col-name", table_row: 0, table_attribute_reference: "table-1" }],
+      };
+      mocks.instanceUtility.getAttributeInstanceFromClassInstance.mockResolvedValue(table);
+      mocks.metaUtility.getMetaClass.mockResolvedValue({
+        attributes: [
+          {
+            uuid: "visual-attr",
+            name: "Visual",
+            attribute_type: {
+              has_table_attribute: [
+                {
+                  sequence: 2,
+                  attribute: {
+                    uuid: "col-origin",
+                    name: "Origin",
+                    default_value: "",
+                    attribute_type: {
+                      has_table_attribute: [
+                        { sequence: 1, attribute: { uuid: "col-x", name: "Position x", default_value: "0", attribute_type: { has_table_attribute: [] } } },
+                      ],
+                    },
+                  },
+                },
+                { sequence: 1, attribute: { uuid: "col-name", name: "Name", default_value: "", attribute_type: { has_table_attribute: [] } } },
+              ],
+            },
+          },
+        ],
+      });
+
+      await (algorithms as unknown as { setTableAttribute: (...args: unknown[]) => Promise<void> }).setTableAttribute(
+        { uuid: "link-1", uuid_class: LINK_META_UUID },
+        "Visual",
+        [
+          { Name: "first", Origin: { "Position x": "1" } },
+          { Name: "second", Origin: { "Position x": "2" } },
+        ],
+      );
+
+      type Cell = { uuid: string; uuid_attribute: string; table_row: number; value: string; table_attribute_reference: string; table_attributes: Cell[] };
+      const cells = table.table_attributes as unknown as Cell[];
+      // The previous rows are replaced, and the cells come in column order within each row.
+      expect(cells.map((c) => [c.uuid_attribute, c.table_row, c.value])).toEqual([
+        ["col-name", 0, "first"],
+        ["col-origin", 0, ""],
+        ["col-name", 1, "second"],
+        ["col-origin", 1, ""],
+      ]);
+      expect(cells.every((c) => c.table_attribute_reference === "table-1")).toBe(true);
+      expect(cells[3].table_attributes.map((c) => [c.uuid_attribute, c.table_row, c.value, c.table_attribute_reference])).toEqual([
+        ["col-x", 0, "2", cells[3].uuid],
+      ]);
+    });
+  });
 });

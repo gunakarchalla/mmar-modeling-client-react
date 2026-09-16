@@ -88,6 +88,33 @@ describe("RayHelper.shootRayFromObject", () => {
     expect(shell.material.side).toBe(THREE.BackSide);
   });
 
+  it("restores a material the target uses more than once to its own side", () => {
+    // mergeOjects() hands a merged vizRep a material ARRAY, which repeats any material its
+    // sub-shapes share. Restoring per occurrence put the second visit's DoubleSide back.
+    const shared = new THREE.MeshBasicMaterial({ side: THREE.BackSide });
+    const target = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), [shared, shared, shared, shared, shared, shared]);
+    target.position.set(10, 0, 0);
+    target.updateMatrixWorld(true);
+
+    const point = rayHelper.shootRayFromObject(cubeAt(0, 0, 0), target);
+
+    expect(point!.x).toBeCloseTo(9.5, 3);
+    expect(shared.side).toBe(THREE.BackSide);
+  });
+
+  it("returns a point that a later cast does not overwrite", () => {
+    // The animator keeps the start point while it casts for the end point.
+    const start = rayHelper.shootRayFromObject(cubeAt(0, 0, 0), cubeAt(10, 0, 0));
+    const empty = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+    empty.position.set(0, 4, 0);
+    empty.updateMatrixWorld(true);
+    const end = rayHelper.shootRayFromObject(cubeAt(0, 0, 0), empty);
+
+    expect(start!.x).toBeCloseTo(9.5, 3);
+    expect(start!.y).toBeCloseTo(0, 3);
+    expect(end!.y).toBeCloseTo(4, 3);
+  });
+
   it("falls back to the silhouette point rather than undefined when nothing is hit", () => {
     const empty = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
     empty.position.set(4, 2, 0);

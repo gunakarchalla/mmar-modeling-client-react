@@ -5,7 +5,7 @@
 // actual record -> diff -> apply -> broadcast path. gds objects are revived through
 // `X.fromJS` (the P3 class-transformer rule) so `instanceof` survives an in-place undo.
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { AttributeInstance, ClassInstance, SceneInstance } from "@gds";
+import { AttributeInstance, ClassInstance, SceneInstance, remove_table_row } from "@gds";
 
 const mocks = vi.hoisted(() => ({
   globalObject: {
@@ -284,6 +284,40 @@ describe("undo and redo", () => {
 
     await historyService.redo();
     expect(sceneAttribute.value).toBe("after");
+  });
+
+  it("restores the rows of a table among the scene instance's own attributes", async () => {
+    const scene = openScene();
+    const table = AttributeInstance.fromJS({
+      uuid: "scene-table",
+      uuid_attribute: "meta-attr-table",
+      name: "Variables",
+      value: "",
+      assigned_uuid_scene_instance: SCENE_UUID,
+      table_attributes: [
+        { uuid: "c0", uuid_attribute: "col", table_row: 0, table_attribute_reference: "scene-table", value: "first" },
+        { uuid: "c1", uuid_attribute: "col", table_row: 1, table_attribute_reference: "scene-table", value: "second" },
+      ],
+    }) as AttributeInstance;
+    scene.attribute_instances.push(table);
+    historyService.initScene(scene);
+    const cells = table.table_attributes;
+
+    // A row removed, the way the table dialog does it.
+    remove_table_row(table, 0);
+    historyService.record("remove table row");
+    expect(table.table_attributes.map((cell) => cell.uuid)).toEqual(["c1"]);
+
+    await historyService.undo();
+    expect(table.table_attributes.map((cell) => [cell.uuid, cell.table_row, cell.value])).toEqual([
+      ["c0", 0, "first"],
+      ["c1", 1, "second"],
+    ]);
+    // in place, so the dialog and the attribute window keep the array they were handed
+    expect(table.table_attributes).toBe(cells);
+
+    await historyService.redo();
+    expect(table.table_attributes.map((cell) => [cell.uuid, cell.table_row])).toEqual([["c1", 0]]);
   });
 
   it("broadcasts an undone scene attribute value to collaborators", async () => {

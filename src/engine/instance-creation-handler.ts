@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
-import { ClassInstance, Attribute, AttributeInstance, UUID, Class, Relationclass, RelationclassInstance, SceneInstance, PortInstance, RoleInstance } from "@gds";
+import { ClassInstance, Attribute, AttributeInstance, UUID, Class, Relationclass, RelationclassInstance, SceneInstance, PortInstance, RoleInstance, add_table_row, table_columns_in_order } from "@gds";
+// ColumnStructure is not re-exported from the gds barrel, so it is deep-imported.
+import type { ColumnStructure } from "@gds/models/meta/Metamodel_columns.structure";
 import { globalObject } from "@/engine/global-definition";
 import { globalClassObject } from "@/engine/global-class-object";
 import { globalRelationclassObject } from "@/engine/global-relationclass-object";
@@ -68,52 +70,9 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     //push to log file
     this.logger.log("Attribute Instance " + attribute_instance.value + " created", "done");
 
-    //if instance is a instance for a table, create the first row of tabel attribute instances
-    if (attribute.attribute_type.has_table_attribute != null) {
-      const attribute_type = attribute.attribute_type;
-      const has_table_attribute = attribute_type.has_table_attribute;
-
-      for (const column of has_table_attribute) {
-        let newAttributeInstance: AttributeInstance;
-        if (column.attribute.attribute_type.has_table_attribute.length > 0) {
-          newAttributeInstance = await this.createAttributeInstance(
-            column.attribute,
-            null as any,
-            null as any,
-            "",
-            null as any,
-            null as any,
-            null as any,
-            null as any, // No nested table_attributes yet
-            column.attribute.uuid, // Reference to the parent table attribute
-            role_from,
-          );
-        } else {
-          newAttributeInstance = new AttributeInstance(
-            this.create_UUID(),
-            column.attribute.uuid,
-            null as any,
-            null as any,
-            //get attribute type default value
-            attribute.default_value ? attribute.default_value : "not defined",
-            null as any,
-            null as any,
-            null as any,
-            null as any,
-            column.attribute.uuid,
-            role_from,
-          );
-
-          newAttributeInstance.name = column.attribute.name;
-        }
-        newAttributeInstance.table_row = 0;
-        attribute_instance.table_attributes.push(newAttributeInstance);
-      }
-    }
-
-    // if instance is a cell in the table
-    if (table_attribute_reference != null) {
-      // no default value for a nested table column
+    // A table starts with one row. The table rules live in gds (Instance_tables).
+    if ((attribute.attribute_type.has_table_attribute ?? []).length > 0) {
+      add_table_row(attribute_instance, await this.createTableRowCells(attribute));
     }
 
     //if attached to class_instance
@@ -140,6 +99,31 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     attribute_instance.name = attribute.name;
 
     return attribute_instance;
+  }
+
+  /**
+   * A new cell for a table column: an instance of the column's attribute holding the
+   * attribute's default value — or, for a column whose attribute is itself a table, a
+   * nested table with its first row. It is returned unattached; gds's `add_table_row` /
+   * `add_table_cell` number it and hang it on its table.
+   */
+  async createTableCell(column: ColumnStructure): Promise<AttributeInstance> {
+    const isNestedTable = (column.attribute.attribute_type.has_table_attribute ?? []).length > 0;
+    return await this.createAttributeInstance(
+      column.attribute,
+      null as unknown as string,
+      null as unknown as string,
+      isNestedTable ? "" : (column.attribute.default_value ?? "not defined"),
+    );
+  }
+
+  /** The cells of a new row of `tableAttribute`'s table: one per column, in column order. */
+  async createTableRowCells(tableAttribute: Attribute): Promise<AttributeInstance[]> {
+    const cells: AttributeInstance[] = [];
+    for (const column of table_columns_in_order(tableAttribute.attribute_type.has_table_attribute ?? [])) {
+      cells.push(await this.createTableCell(column));
+    }
+    return cells;
   }
 
   /**

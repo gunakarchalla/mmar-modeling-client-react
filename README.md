@@ -73,7 +73,7 @@ src/
     layout/                   # AppLayout (page skeleton) + TabBar + tabActions
     top-nav-bar/ toolbar/ left-nav/ right-nav/ state-window/ log-window/ footer/
     three-canvas/             # ThreeCanvas (engine.mount host) + XrButton overlay
-    scenegroup/ palette/ attribute-window/ simulation-window/ user-legend/
+    scenegroup/ model-tree/ palette/ attribute-window/ simulation-window/ user-legend/
     dialogs/                  # every modal (create/save-as/copy/delete/import/share/algorithm/upload/...)
     auth/ common/ hooks/
   stubs/jsonwebtoken.ts       # browser stub for the Node-only jsonwebtoken (gds User imports it)

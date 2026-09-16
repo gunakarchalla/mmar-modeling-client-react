@@ -27,11 +27,13 @@ import { globalObject, instanceCreationHandler } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
+import { expressionUtility } from "@/resources/services/expression-utility";
 import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { eventBus, type OpenReferenceDialogPayload } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
+import { NAME_ATTRIBUTE_UUID } from "@/constants";
 
 /**
  * Lets the user point a reference attribute at another instance — a scene, class,
@@ -356,14 +358,38 @@ function AllowedGroup({
 }
 
 // dialog-reference-attribute.ts:299 — the display name of a referenced class instance.
-//
-// Matched by the meta attribute's NAME ("Name"), not by a fixed uuid: every attribute
-// instance carries its meta attribute's name (instanceCreationHandler.
-// createAttributeInstance sets `attribute_instance.name = attribute.name`), but the
-// "Name" attribute's uuid is minted fresh per class by whoever authors the metamodel —
-// there is no single uuid that identifies it across metamodels.
 function getClassInstanceName(classInstance: ClassInstance): string {
-  return classInstance.attribute_instance.find((attribute) => attribute.name === "Name")?.value || "Unknown";
+  return standardNameAttribute(classInstance)?.value || "Unknown";
+}
+
+/** The instance's standard Name attribute (`NAME_ATTRIBUTE_UUID`), if its class uses it. */
+function standardNameAttribute(classInstance: ClassInstance): AttributeInstance | undefined {
+  return classInstance.attribute_instance.find((attribute) => attribute.uuid_attribute === NAME_ATTRIBUTE_UUID);
+}
+
+/**
+ * Every metamodel names its elements through the standard Name attribute
+ * (`NAME_ATTRIBUTE_UUID`), so an element without it has no name to show a reference by.
+ * That is a fault of the metamodel, reported to the user rather than papered over.
+ * `metaName` is the element's class, relationclass or port (its instance's `name`).
+ */
+function reportMissingStandardName(kind: "class" | "relationclass" | "port", metaName: string | undefined): void {
+  logger.log(
+    `The ${kind} "${metaName ?? "?"}" does not use the standard Name attribute, so its instances have no name to show.`,
+    "error",
+  );
+}
+
+/** The referenced instance's standard Name, or "" — reported — when its class lacks the attribute. */
+async function referencedName(
+  instanceUuid: string,
+  kind: "class" | "relationclass" | "port",
+  metaName: string | undefined,
+): Promise<string> {
+  const name = await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, instanceUuid);
+  if (name !== undefined) return name;
+  reportMissingStandardName(kind, metaName);
+  return "";
 }
 
 /**
@@ -396,10 +422,8 @@ async function resolveAttributeRole(attributeInstance: AttributeInstance): Promi
 
 /**
  * The naming half of `setMetaInformation()`: resolve the referenced instance's display
- * name through the "Name" meta attribute, or the scene instance's own name.
- *
- * Looked up by the meta attribute's NAME ("Name"), not by a fixed uuid — see the note
- * on `getClassInstanceName`, which the same constraint applies to.
+ * name through the standard Name attribute, or the scene instance's own name. A
+ * reference whose target is no longer loaded keeps the name it was saved with.
  */
 async function resolveReferenceName(roleInstance: RoleInstance): Promise<string> {
   // If the reference role instance has a reference class instance, then get the name of
@@ -407,19 +431,19 @@ async function resolveReferenceName(roleInstance: RoleInstance): Promise<string>
   if (roleInstance.uuid_has_reference_class_instance != undefined) {
     const referenced = await instanceUtility.getClassInstance(roleInstance.uuid_has_reference_class_instance);
     if (referenced) {
-      return (await nameAttributeValue(referenced.uuid)) ?? roleInstance.name;
+      return await referencedName(referenced.uuid, "class", referenced.name);
     }
   } else if (roleInstance.uuid_has_reference_relationclass_instance != undefined) {
     const referenced = await instanceUtility.getClassInstance(
       roleInstance.uuid_has_reference_relationclass_instance,
     );
     if (referenced) {
-      return (await nameAttributeValue(referenced.uuid)) ?? roleInstance.name;
+      return await referencedName(referenced.uuid, "relationclass", referenced.name);
     }
   } else if (roleInstance.uuid_has_reference_port_instance != undefined) {
     const referenced = await instanceUtility.getPortInstance(roleInstance.uuid_has_reference_port_instance);
     if (referenced) {
-      return (await nameAttributeValue(referenced.uuid)) ?? roleInstance.name;
+      return await referencedName(referenced.uuid, "port", referenced.name);
     }
   } else if (roleInstance.uuid_has_reference_scene_instance != undefined) {
     const referenced = await instanceUtility.getSceneInstance(roleInstance.uuid_has_reference_scene_instance);
@@ -430,13 +454,6 @@ async function resolveReferenceName(roleInstance: RoleInstance): Promise<string>
     return "Reference to: ?";
   }
   return roleInstance.name;
-}
-
-/** The value of an instance's "Name" attribute, found by the meta attribute's name
- * rather than its uuid (see `getClassInstanceName`). Works across class, relationclass
- * and port instances — whichever kind `instanceUuid` turns out to be. */
-async function nameAttributeValue(instanceUuid: string): Promise<string | undefined> {
-  return (await instanceUtility.getAttributeInstanceFromAnyInstance("Name", instanceUuid, "name"))?.value;
 }
 
 // The four setAllowed*Instances methods: keep only the instances whose meta concept is
@@ -466,6 +483,11 @@ async function collectAllowedClassInstances(role: Role): Promise<AllowedClass[]>
       }
     }
   }
+  // The picker labels them by their standard Name: report each class that lacks it, once.
+  const unnamedClasses = new Set(
+    allowed.filter((entry) => !standardNameAttribute(entry.classInstance)).map((entry) => entry.classInstance.name),
+  );
+  for (const className of unnamedClasses) reportMissingStandardName("class", className);
   return allowed;
 }
 

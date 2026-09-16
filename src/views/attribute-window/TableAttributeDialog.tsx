@@ -7,6 +7,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  IconButton,
   InputLabel,
   MenuItem,
   Select,
@@ -19,7 +20,23 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import type { Attribute, AttributeInstance, Class, ClassInstance, PortInstance } from "@gds";
+import AddIcon from "@mui/icons-material/Add";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import DeleteIcon from "@mui/icons-material/Delete";
+import {
+  add_table_cell,
+  add_table_row,
+  move_table_row,
+  remove_table_row,
+  table_columns_in_order,
+  table_rows,
+  type Attribute,
+  type AttributeInstance,
+  type Class,
+  type ClassInstance,
+  type PortInstance,
+} from "@gds";
 // ColumnStructure is not re-exported from the gds barrel, so it is deep-imported.
 import type { ColumnStructure } from "@gds/models/meta/Metamodel_columns.structure";
 import { globalObject, instanceCreationHandler } from "@/engine";
@@ -42,7 +59,10 @@ import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
 
 /**
  * Renders an attribute whose type declares `has_table_attribute` columns as an editable
- * grid, with "Create Row" appending one cell per column.
+ * grid. "Create Row" appends a row with a cell per column; each row can be moved up or
+ * down and removed; a position without a cell (a column added to the type after the row
+ * was created) offers to create it. The grid and every change to it go through the
+ * table helpers of gds (Instance_tables), which hold the rules the server enforces.
  *
  * RECURSION: a column with `ui_component: 'button'` holds a nested table attribute and
  * opens another table dialog. uiStore can only express ONE open `tableAttribute` dialog,
@@ -94,7 +114,8 @@ function TableAttributeDialogView({
   onClose,
 }: TableAttributeDialogViewProps) {
   const [columns, setColumns] = useState<ColumnStructure[]>([]);
-  const [rows, setRows] = useState<AttributeInstance[][]>([]);
+  // A cell is undefined where a row has no cell for that column.
+  const [rows, setRows] = useState<(AttributeInstance | undefined)[][]>([]);
   const [facetsAll, setFacetsAll] = useState<string[][]>([]);
   const [currentAttribute, setCurrentAttribute] = useState<Attribute | null>(null);
   // The robotic-system hybrid algorithm dispatches on the meta CLASS and meta ATTRIBUTE
@@ -122,24 +143,8 @@ function TableAttributeDialogView({
     setCurrentAttribute(metaAttribute ?? null);
     setCurrentClass(currentClass ?? null);
 
-    //get the table cells
-    const tableAttributes = attributeInstance.table_attributes ?? [];
-    //if there are no table attributes, there is no table
-    if (!tableAttributes.length || !metaAttribute) {
-      setColumns([]);
-      setRows([]);
-      setFacetsAll([]);
-      return;
-    }
-
-    const hasTableAttribute = metaAttribute.attribute_type.has_table_attribute ?? [];
-
-    //for each entry in column structure, in sequence order
-    const nextColumns: ColumnStructure[] = [];
-    for (let i = 0; i < hasTableAttribute.length; i++) {
-      const rightIndexAttribute = hasTableAttribute.find((column) => column.sequence === i + 1);
-      if (rightIndexAttribute) nextColumns.push(rightIndexAttribute);
-    }
+    // The columns come from the type, so a table without rows still shows them.
+    const nextColumns = table_columns_in_order(metaAttribute?.attribute_type.has_table_attribute ?? []);
 
     const nextFacets: string[][] = nextColumns.map((column) => {
       const uiComponent = (column.ui_component ?? "").toLowerCase();
@@ -149,39 +154,9 @@ function TableAttributeDialogView({
       return [];
     });
 
-    // Group the flat cell list by table_row, then place each row's cells under the
-    // column whose meta attribute they belong to (cell.uuid_attribute) rather than
-    // trusting raw array position. The server orders cells by table_row only, so two
-    // cells that share a row (e.g. the "Variable Name" and "Variable Value" columns)
-    // come back in no particular order — chunking by position silently swapped them
-    // whenever the server happened to hand that pair back column-reversed.
-    const cellsByRow = new Map<number, AttributeInstance[]>();
-    for (const cell of tableAttributes) {
-      const bucket = cellsByRow.get(cell.table_row);
-      if (bucket) bucket.push(cell);
-      else cellsByRow.set(cell.table_row, [cell]);
-    }
-    const nextRows: AttributeInstance[][] = [];
-    if (nextColumns.length > 0) {
-      for (const rowIndex of [...cellsByRow.keys()].sort((a, b) => a - b)) {
-        const cellsInRow = cellsByRow.get(rowIndex)!;
-        const row = nextColumns.map((column) => {
-          const match = cellsInRow.find((cell) => cell.uuid_attribute === column.attribute.uuid);
-          if (!match) {
-            logger.log(
-              `table attribute row ${rowIndex}: no cell for column "${column.attribute.name}"`,
-              "error",
-            );
-          }
-          return match as AttributeInstance;
-        });
-        nextRows.push(row);
-      }
-    }
-
     setColumns(nextColumns);
     setFacetsAll(nextFacets);
-    setRows(nextRows);
+    setRows(table_rows(attributeInstance, nextColumns));
   }, [attributeInstance, attribute]);
 
   useEffect(() => {
@@ -259,56 +234,44 @@ function TableAttributeDialogView({
     return true;
   }
 
-  // dialog-table-attribute.ts:166 — createRow / createCell
-  async function createRow() {
-    if (!currentAttribute) return;
-    const hasTableAttribute = currentAttribute.attribute_type.has_table_attribute ?? [];
-    //Count the number of rows in the table
-    const numRows = rows.length;
-
-    //Create a new row: a cell per column
-    for (const column of hasTableAttribute) {
-      await createCell(numRows + 1, column.sequence, hasTableAttribute);
-    }
-
-    //Reload the table
+  /**
+   * What every change to the table's rows or cells is followed by: the grid is re-read,
+   * a vizRep drawn from the table is brought up to date, the scene is saved, the
+   * attribute window re-renders, and the change is one step of the undo history.
+   */
+  async function afterTableChanged(label: string) {
     await load();
+    eventBus.publish("checkForVizRepUpdateByAttributeInstance", attributeInstance);
     globalObject.doSceneInstancePatch = true;
     bump();
-
-    // One step for the whole row: createCell() ran once per column above, but adding a
-    // row is a single user action and undoes as one.
-    historyService.record("add table row");
+    historyService.record(label);
   }
 
-  async function createCell(row: number, columnIndex: number, hasTableAttribute: ColumnStructure[]) {
-    // The column where the cell is created
-    const parentAttributeColumn = hasTableAttribute.find((column) => column.sequence === columnIndex);
-    if (!parentAttributeColumn || !currentAttribute) return;
+  // dialog-table-attribute.ts:166 — createRow
+  async function createRow() {
+    if (!currentAttribute) return;
+    add_table_row(attributeInstance, await instanceCreationHandler.createTableRowCells(currentAttribute));
+    await afterTableChanged("add table row");
+  }
 
-    const metaAttribute = parentAttributeColumn.attribute;
-    // Create a new instance of the attribute that is in the column. A column whose own
-    // attribute is a table gets an empty value; otherwise the meta default.
-    const isNestedTable = metaAttribute.attribute_type.has_table_attribute.length > 0;
-    const newAttributeInstance = await instanceCreationHandler.createAttributeInstance(
-      parentAttributeColumn.attribute,
-      null as unknown as string,
-      null as unknown as string,
-      isNestedTable ? "" : (parentAttributeColumn.attribute.default_value ?? "not defined"),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      currentAttribute.uuid,
-      undefined,
-    );
+  async function removeRow(row: number) {
+    remove_table_row(attributeInstance, row);
+    await afterTableChanged("remove table row");
+  }
 
-    // Set the row of the new attribute instance
-    newAttributeInstance.table_row = row;
+  async function moveRow(from: number, to: number) {
+    if (!move_table_row(attributeInstance, from, to)) return;
+    await afterTableChanged("move table row");
+  }
 
-    // Add the new attribute instance to the list of attribute instances in the current
-    // attribute
-    attributeInstance.table_attributes.push(newAttributeInstance);
+  async function createMissingCell(row: number, column: ColumnStructure) {
+    add_table_cell(attributeInstance, row, await instanceCreationHandler.createTableCell(column));
+    await afterTableChanged("create table cell");
+  }
+
+  /** Runs a row operation from a click, logging rather than dropping a failure. */
+  function run(operation: Promise<void>, what: string) {
+    void operation.catch((err) => logger.log(`${what} failed: ` + describeError(err), "error"));
   }
 
   const nestedAttributeInstance =
@@ -330,6 +293,7 @@ function TableAttributeDialogView({
                   {column.attribute?.name}
                 </TableCell>
               ))}
+              <TableCell sx={{ border: "0.75px solid", width: 112, textAlign: "center" }}>Row</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -342,7 +306,7 @@ function TableAttributeDialogView({
                       key={cell?.uuid ?? `${i}-${j}`}
                       sx={{ border: "0.75px solid", width: 120, textAlign: "center" }}
                     >
-                      {cell && (
+                      {cell ? (
                         <TableAttributeCell
                           cell={cell}
                           uiComponent={uiComponent}
@@ -350,10 +314,43 @@ function TableAttributeDialogView({
                           onCommit={(next) => commitCell(cell, next, columns[j]?.attribute)}
                           onOpenNested={() => setNestedCell({ row: i, col: j })}
                         />
+                      ) : (
+                        <IconButton
+                          size="small"
+                          aria-label={`create the ${columns[j]?.attribute?.name} cell of row ${i + 1}`}
+                          onClick={() => run(createMissingCell(i, columns[j]), "create table cell")}
+                        >
+                          <AddIcon fontSize="small" />
+                        </IconButton>
                       )}
                     </TableCell>
                   );
                 })}
+                <TableCell sx={{ border: "0.75px solid", width: 112, textAlign: "center", whiteSpace: "nowrap" }}>
+                  <IconButton
+                    size="small"
+                    aria-label={`move row ${i + 1} up`}
+                    disabled={i === 0}
+                    onClick={() => run(moveRow(i, i - 1), "move table row")}
+                  >
+                    <ArrowUpwardIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    aria-label={`move row ${i + 1} down`}
+                    disabled={i === rows.length - 1}
+                    onClick={() => run(moveRow(i, i + 1), "move table row")}
+                  >
+                    <ArrowDownwardIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    aria-label={`remove row ${i + 1}`}
+                    onClick={() => run(removeRow(i), "remove table row")}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -363,9 +360,7 @@ function TableAttributeDialogView({
         <Button onClick={onClose}>Ok</Button>
         <Button onClick={onClose}>Close</Button>
         <Button
-          onClick={() =>
-            void createRow().catch((err) => logger.log("create row failed: " + describeError(err), "error"))
-          }
+          onClick={() => run(createRow(), "create row")}
         >
           Create Row
         </Button>

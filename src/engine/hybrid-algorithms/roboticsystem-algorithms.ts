@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import URDFLoader, { URDFRobot, URDFLink, URDFJoint } from "urdf-loader";
-import { Attribute, ClassInstance, RoleInstance, PortInstance, UUID } from "@gds";
+import { Attribute, AttributeInstance, ClassInstance, RoleInstance, PortInstance, UUID, add_table_row, table_columns_in_order } from "@gds";
 import { instanceCreationHandler } from "@/engine/instance-creation-handler";
 import { urdfPoseService, type UrdfTaggedClassInstance } from "@/engine/hybrid-algorithms/urdf-pose-service";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
@@ -569,61 +569,55 @@ export class RoboticsystemAlgorithms {
     const columns = parentAttrDef.attribute_type.has_table_attribute;
     if (!columns || columns.length === 0) return;
 
-    // Clear existing rows if any (optional, but safer for clean import)
+    // The import replaces the table; saving it deletes the rows it had (see Instance_tables in gds).
     parentAttrInst.table_attributes = [];
 
+    // One row per entry, numbered by add_table_row, with its cells in column order.
     for (const rowData of rows) {
-      for (const col of columns) {
+      const rowCells: AttributeInstance[] = [];
+      for (const col of table_columns_in_order(columns)) {
         const colAttr = col.attribute;
         const colName = colAttr.name;
         const val = rowData[colName];
 
         // If value is object, it's a nested table (e.g. Origin inside Visual)
         if (typeof val === "object" && val !== null) {
-          const cellInst = await this.createCell(colAttr, "", parentAttrDef.uuid);
+          const cellInst = await this.createCell(colAttr, "");
 
-          const cellAttrDef = colAttr;
-          const cellColumns = cellAttrDef.attribute_type.has_table_attribute;
-
+          const cellColumns = colAttr.attribute_type.has_table_attribute;
           if (cellColumns && cellColumns.length > 0) {
+            // A single nested row, replacing the default row a new table starts with.
             cellInst.table_attributes = [];
-            const nestedRowData = val;
-
-            for (const nestedCol of cellColumns) {
+            const nestedCells: AttributeInstance[] = [];
+            for (const nestedCol of table_columns_in_order(cellColumns)) {
               const nestedColAttr = nestedCol.attribute;
-              const nestedVal = nestedRowData[nestedColAttr.name] || nestedColAttr.default_value || "";
-
-              const nestedCellInst = await this.createCell(nestedColAttr, nestedVal, colAttr.uuid);
-              cellInst.table_attributes.push(nestedCellInst);
+              const nestedVal = val[nestedColAttr.name] || nestedColAttr.default_value || "";
+              nestedCells.push(await this.createCell(nestedColAttr, nestedVal));
             }
+            add_table_row(cellInst, nestedCells);
           }
-          parentAttrInst.table_attributes.push(cellInst);
+          rowCells.push(cellInst);
         } else {
           // Simple value
-          const cellInst = await this.createCell(colAttr, val || colAttr.default_value || "", parentAttrDef.uuid);
-          parentAttrInst.table_attributes.push(cellInst);
+          rowCells.push(await this.createCell(colAttr, val || colAttr.default_value || ""));
         }
       }
+      add_table_row(parentAttrInst, rowCells);
     }
   }
 
   /**
-   * One cell of a table attribute. Only three of `createAttributeInstance`'s ten
-   * parameters vary here; the rest are null, cast because the signature types them as
-   * required — passing a placeholder instead would change what is stored.
+   * One cell of a table attribute, not yet in a table: `add_table_row` numbers it and
+   * points it at its table. Only three of `createAttributeInstance`'s ten parameters vary
+   * here; the rest are null, cast because the signature types them as required — passing
+   * a placeholder instead would change what is stored.
    */
-  private async createCell(attribute: Attribute, value: string, tableAttributeReference: UUID) {
+  private async createCell(attribute: Attribute, value: string) {
     return await this.instanceCreationHandler.createAttributeInstance(
       attribute,
       null as unknown as string,
       null as unknown as string,
       value,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      tableAttributeReference,
-      undefined,
     );
   }
 

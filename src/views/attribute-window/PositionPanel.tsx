@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Button, Divider, TextField, Typography } from "@mui/material";
 import { globalObject, globalSelectedObject } from "@/engine";
 import { eventBus } from "@/resources/services/event-bus";
@@ -14,6 +14,11 @@ import { eventBus } from "@/resources/services/event-bus";
  * `historyRecord` publish mirrors `transform-control-events` (one undo step per commit,
  * flushed after the transform sync).
  *
+ * Only a field the user has typed into is ever committed. The mesh also moves under the
+ * panel — a gizmo drag, an undo, a collaborator — so an untouched field can be stale,
+ * and committing it on blur would move the object back. The fields are re-read from the
+ * mesh whenever one of those announces itself, leaving any field being typed into alone.
+ *
  * `coordinates_2d` is passed in only as the fallback display value for the frame before
  * the mesh is reachable (or in a non-engine test render); once the mesh is found its
  * `position` wins.
@@ -28,72 +33,84 @@ interface PositionPanelProps {
   instanceName: string;
   /** The instance's stored `coordinates_2d`, used until the live mesh is resolved. */
   fallbackCoordinates: { x: number; y: number; z: number };
-  /** True while the Position tab is the visible one — re-reads the mesh on each show. */
-  active: boolean;
 }
 
 /** The selected mesh, but only when it is the one this panel is editing. */
-function selectedMeshFor(instanceUuid: string): { position: { x: number; y: number; z: number } } | null {
-  const mesh = globalSelectedObject.getObject() as
-    | { uuid?: string; position?: { x: number; y: number; z: number } }
-    | undefined;
-  if (!mesh || mesh.uuid !== instanceUuid || !mesh.position) return null;
-  return mesh as { position: { x: number; y: number; z: number } };
+function selectedMeshFor(instanceUuid: string) {
+  // The field rather than getObject(), which also rebuilds the selection box.
+  const mesh = globalSelectedObject.object;
+  return mesh && mesh.uuid === instanceUuid ? mesh : null;
 }
 
-export default function PositionPanel({
-  instanceUuid,
-  instanceName,
-  fallbackCoordinates,
-  active,
-}: PositionPanelProps) {
+export default function PositionPanel({ instanceUuid, instanceName, fallbackCoordinates }: PositionPanelProps) {
   const readPosition = useCallback((): Record<Axis, number> => {
-    const mesh = selectedMeshFor(instanceUuid);
-    const source = mesh ? mesh.position : fallbackCoordinates;
+    const source = selectedMeshFor(instanceUuid)?.position ?? fallbackCoordinates;
     return { x: Number(source.x) || 0, y: Number(source.y) || 0, z: Number(source.z) || 0 };
   }, [instanceUuid, fallbackCoordinates]);
 
   // One draft string per axis so the field stays controlled while typing; the commit
   // parses it back to a number.
   const [draft, setDraft] = useState<Record<Axis, string>>(() => stringifyAll(readPosition()));
+  // The axes typed into since they were last read from or written to the mesh.
+  const editedRef = useRef(new Set<Axis>());
 
-  // Re-sync from the mesh whenever this becomes the visible tab or the selection changes
-  // (a gizmo drag between visits, a different instance behind the same panel).
+  /** Re-read the fields from the mesh. `discardEdits` also drops what is being typed. */
+  const refresh = useCallback(
+    (discardEdits: boolean) => {
+      if (discardEdits) editedRef.current.clear();
+      const position = stringifyAll(readPosition());
+      const edited = new Set(editedRef.current);
+      setDraft((previous) => ({
+        x: edited.has("x") ? previous.x : position.x,
+        y: edited.has("y") ? previous.y : position.y,
+        z: edited.has("z") ? previous.z : position.z,
+      }));
+    },
+    [readPosition],
+  );
+
+  // The channels that follow a move of the mesh from elsewhere: a finished gizmo drag or
+  // nudge (and this panel's own commits) record a history step, undo / redo re-apply one,
+  // and a collaborator's edit arrives as a remote change.
   useEffect(() => {
-    if (active) setDraft(stringifyAll(readPosition()));
-  }, [active, readPosition]);
+    const onMoved = () => refresh(false);
+    const subs = [
+      eventBus.subscribe("historyRecord", onMoved),
+      eventBus.subscribe("sceneInstanceMutated", onMoved),
+      eventBus.subscribe("remoteSceneInstanceChanged", onMoved),
+    ];
+    return () => subs.forEach((sub) => sub.dispose());
+  }, [refresh]);
 
-  function commit(axis: Axis, raw: string) {
-    const next = Number(raw.trim());
-    if (raw.trim() === "" || !Number.isFinite(next)) {
-      // Not a number — snap the field back to the current value.
-      setDraft((d) => ({ ...d, [axis]: stringifyAxis(readPosition()[axis]) }));
-      return;
-    }
+  function commit(axis: Axis) {
+    if (!editedRef.current.has(axis)) return;
+    editedRef.current.delete(axis);
 
+    const raw = draft[axis].trim();
+    const next = Number(raw);
     const mesh = selectedMeshFor(instanceUuid);
-    if (!mesh) {
-      setDraft((d) => ({ ...d, [axis]: stringifyAxis(readPosition()[axis]) }));
-      return;
+    if (raw !== "" && Number.isFinite(next) && mesh && mesh.position[axis] !== next) {
+      mesh.position[axis] = next;
+      // A port keeps itself inside its parent (the animator runs this every frame); apply
+      // it now so the field shows where the port actually ends up.
+      mesh.userData.update?.();
+
+      // Keep the red selection box on the moved object, then let the render loop pick up
+      // the delta: the animator writes it back onto the gds instance, syncs it to
+      // collaborators and flags the scene dirty (see coordinates-updater).
+      globalSelectedObject.getObject();
+      globalObject.render = true;
+
+      // One undo step per commit, flushed after the three.js -> gds transform sync so the
+      // snapshot holds the new position rather than the old one.
+      eventBus.publish("historyRecord", {
+        label: "position",
+        afterTransformSync: true,
+        coalesceKey: `position:${instanceUuid}`,
+      });
     }
-    if (mesh.position[axis] === next) return;
-
-    mesh.position[axis] = next;
-    setDraft((d) => ({ ...d, [axis]: stringifyAxis(next) }));
-
-    // Keep the red selection box on the moved object, then let the render loop pick up
-    // the delta: the animator writes it back onto the gds instance, syncs it to
-    // collaborators and flags the scene dirty (see coordinates-updater).
-    globalSelectedObject.getObject();
-    globalObject.render = true;
-
-    // One undo step per commit, flushed after the three.js -> gds transform sync so the
-    // snapshot holds the new position rather than the old one.
-    eventBus.publish("historyRecord", {
-      label: "position",
-      afterTransformSync: true,
-      coalesceKey: `position:${instanceUuid}`,
-    });
+    // Not a number, nothing selected, or no change: show the mesh's value again.
+    setDraft((d) => ({ ...d, [axis]: stringifyAxis(readPosition()[axis]) }));
   }
 
   return (
@@ -113,19 +130,22 @@ export default function PositionPanel({
           type="number"
           label={axis.toUpperCase()}
           value={draft[axis]}
-          onChange={(e) => setDraft((d) => ({ ...d, [axis]: e.target.value }))}
+          onChange={(e) => {
+            editedRef.current.add(axis);
+            setDraft((d) => ({ ...d, [axis]: e.target.value }));
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              commit(axis, (e.target as HTMLInputElement).value);
+              commit(axis);
             }
           }}
-          onBlur={() => commit(axis, draft[axis])}
+          onBlur={() => commit(axis)}
           sx={{ mb: 1 }}
         />
       ))}
 
-      <Button variant="outlined" size="small" onClick={() => setDraft(stringifyAll(readPosition()))} sx={{ mt: 0.5 }}>
+      <Button variant="outlined" size="small" onClick={() => refresh(true)} sx={{ mt: 0.5 }}>
         Refresh from canvas
       </Button>
       <Divider sx={{ borderColor: "silver", mt: 1 }} />

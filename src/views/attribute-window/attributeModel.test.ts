@@ -209,7 +209,7 @@ describe("buildAttributeGroups", () => {
       attributeInstanceJson({
         uuid: "ai-table",
         uuid_attribute: "attr-table",
-        table_attributes: [attributeInstanceJson({ uuid: "cell-1", table_row: 1 })],
+        table_attributes: [attributeInstanceJson({ uuid: "cell-1", table_row: 0 })],
       }),
       attributeInstanceJson({ uuid: "ai-ref", uuid_attribute: "attr-ref" }),
     ]);
@@ -220,8 +220,12 @@ describe("buildAttributeGroups", () => {
     const withRole = metaAttribute({
       attribute_type: { uuid: "at-ref", regex_value: "^.*$", role: { uuid: "role-1" }, has_table_attribute: [] },
     });
+    // A table attribute is one whose attribute_type has columns.
+    const withColumns = metaAttribute({
+      attribute_type: { uuid: "at-table", regex_value: null, role: null, has_table_attribute: [{ sequence: 1, attribute: { uuid: "attr-col" } }] },
+    });
     mocks.metaUtility.getMetaAttribute.mockImplementation(async (uuid: string) =>
-      uuid === "attr-ref" ? withRole : metaAttribute(),
+      uuid === "attr-ref" ? withRole : uuid === "attr-table" ? withColumns : metaAttribute(),
     );
 
     const groups = await buildAttributeGroups();
@@ -229,6 +233,25 @@ describe("buildAttributeGroups", () => {
     expect(groups.plain.map((e) => e.attributeInstance.uuid)).toEqual(["ai-plain"]);
     expect(groups.table.map((e) => e.attributeInstance.uuid)).toEqual(["ai-table"]);
     expect(groups.reference.map((e) => e.attributeInstance.uuid)).toEqual(["ai-ref"]);
+  });
+
+  it("keeps a table whose rows were all removed in the table group", async () => {
+    const { sceneInstance, classInstance } = makeSceneWithClassInstance([
+      attributeInstanceJson({ uuid: "ai-table", uuid_attribute: "attr-table", table_attributes: [] }),
+    ]);
+    mocks.globalSelectedObject.getObject.mockReturnValue({ uuid: CLASS_INSTANCE_UUID });
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(sceneInstance);
+    mocks.instanceUtility.getClassInstance.mockResolvedValue(classInstance);
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(
+      metaAttribute({
+        attribute_type: { uuid: "at-table", regex_value: null, role: null, has_table_attribute: [{ sequence: 1, attribute: { uuid: "attr-col" } }] },
+      }),
+    );
+
+    const groups = await buildAttributeGroups();
+
+    expect(groups.table.map((e) => e.attributeInstance.uuid)).toEqual(["ai-table"]);
+    expect(groups.plain).toEqual([]);
   });
 
   it("parses facets from the meta attribute only when the attribute type has a regex", async () => {

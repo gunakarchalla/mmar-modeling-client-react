@@ -67,6 +67,7 @@ vi.mock("@/resources/collaboration/local-change-publisher", () => ({ publishLoca
 const { interactionHandler } = await import("@/engine/interaction-handler");
 const { useSelectionStore } = await import("@/resources/store/selectionStore");
 const { eventBus } = await import("@/resources/services/event-bus");
+const { runExclusive, resetDrawLock } = await import("@/resources/services/draw-lock");
 
 const UUID = "22222222-2222-4222-8222-222222222222";
 
@@ -81,6 +82,7 @@ function instanceMesh(uuid: string, at = new THREE.Vector3(5, 7, 0)) {
 describe("interaction-handler — selectInstanceByUuid", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDrawLock();
     fakeGlobal.globalObject.dragObjects = [];
     fakeGlobal.globalObject.orbitControls = { target: new THREE.Vector3(0, 0, 0), update: vi.fn() };
     const camera = new THREE.PerspectiveCamera();
@@ -129,6 +131,20 @@ describe("interaction-handler — selectInstanceByUuid", () => {
     // camera keeps its offset from the target (was (0,0,10) with target (0,0,0)).
     expect(fakeGlobal.globalObject.camera.position.z).toBeCloseTo(10);
     expect(fakeGlobal.globalObject.orbitControls.update).toHaveBeenCalled();
+  });
+
+  it("waits for a click or draw pass already in the lane", async () => {
+    fakeGlobal.globalObject.dragObjects = [instanceMesh(UUID)];
+    let finishDraw!: () => void;
+    const draw = runExclusive(() => new Promise<void>((resolve) => (finishDraw = resolve)));
+
+    const selecting = interactionHandler.selectInstanceByUuid(UUID);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.globalSelectedObject.setObject).not.toHaveBeenCalled();
+
+    finishDraw();
+    await Promise.all([draw, selecting]);
+    expect(mocks.globalSelectedObject.setObject).toHaveBeenCalledTimes(1);
   });
 
   it("is a logged no-op for a UUID that is not drawn", async () => {

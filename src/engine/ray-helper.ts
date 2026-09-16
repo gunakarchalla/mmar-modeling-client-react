@@ -27,6 +27,30 @@ export type CursorAnchorKind = "object" | "plane";
 /** The modelling plane (z = globalObject.localZPlane) — reused, never allocated per ray. */
 const modellingPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1));
 
+// Scratch objects for `shootRayFromObject`, which the animator calls twice per relation
+// line on every frame something moves — reused, never allocated per ray.
+const rayFrom = new THREE.Vector3();
+const rayOrigin = new THREE.Vector3();
+const rayDirection = new THREE.Vector3();
+const targetSphere = new THREE.Sphere();
+const rayHits: THREE.Intersection[] = [];
+/** The materials the running cast forced double-sided, mapped to the side each had. */
+const forcedSides = new Map<THREE.Material, THREE.Side>();
+
+function forceDoubleSided(material: THREE.Material) {
+  // Recorded once per material: one the target uses twice must be restored to its own
+  // side, not to the DoubleSide the first visit left on it.
+  if (material.side === THREE.DoubleSide || forcedSides.has(material)) return;
+  forcedSides.set(material, material.side);
+  material.side = THREE.DoubleSide;
+}
+
+function forceDoubleSidedMaterials(object: THREE.Object3D) {
+  const material = (object as THREE.Mesh).material;
+  if (Array.isArray(material)) material.forEach(forceDoubleSided);
+  else if (material) forceDoubleSided(material);
+}
+
 export class RayHelper {
   private lastCursorBroadcast = 0;
 
@@ -167,67 +191,59 @@ export class RayHelper {
    * on the far wall or, with nothing hit at all, at the centre — the line then reads as
    * coming out of the middle of the object instead of off its edge. When the cast still
    * finds nothing the near point of the bounding sphere (facing `fromObject`) is used, so
-   * the line meets the object's silhouette rather than its centre.
+   * the line meets the object's silhouette rather than its centre. A material the target
+   * uses more than once (a merged vizRep's material array repeats shared ones) is forced
+   * and restored exactly once, so the cast cannot leave it double-sided.
    */
   shootRayFromObject(fromObject: THREE.Mesh | undefined, toObject: THREE.Mesh | undefined) {
     if (!fromObject || !toObject) return undefined;
 
-    const fromPosition: THREE.Vector3 = new THREE.Vector3();
-    const toPosition: THREE.Vector3 = new THREE.Vector3();
-
-    //we get the world position of the two (also refreshes their world matrices)
-    fromObject.getWorldPosition(fromPosition);
-    toObject.getWorldPosition(toPosition);
+    //we get the world position of fromObject (also refreshes its world matrix) and
+    //refresh toObject's world matrix, which positions its bounding sphere below
+    fromObject.getWorldPosition(rayFrom);
+    toObject.updateWorldMatrix(true, false);
 
     // Centre and radius of the target's geometry in world space: the centre is what the
     // ray aims at (robust to geometry that sits off the object origin), the radius is
     // how far outside the target to start so an overlapping / enclosing fromObject can
     // never leave the ray origin inside the mesh.
     const geometry = toObject.geometry;
-    let worldSphere: THREE.Sphere;
     if (geometry?.getAttribute("position")) {
       if (!geometry.boundingSphere) geometry.computeBoundingSphere();
-      worldSphere = geometry.boundingSphere!.clone().applyMatrix4(toObject.matrixWorld);
+      targetSphere.copy(geometry.boundingSphere!).applyMatrix4(toObject.matrixWorld);
     } else {
-      worldSphere = new THREE.Sphere(toPosition.clone(), 0);
+      targetSphere.center.setFromMatrixPosition(toObject.matrixWorld);
+      targetSphere.radius = 0;
     }
-    const targetCentre = worldSphere.center;
+    const targetCentre = targetSphere.center;
 
-    const direction = new THREE.Vector3().subVectors(targetCentre, fromPosition);
+    rayDirection.subVectors(targetCentre, rayFrom);
     // fromObject sitting exactly on the target centre: no meaningful direction to cast.
-    if (direction.lengthSq() === 0) return targetCentre.clone();
-    direction.normalize();
+    if (rayDirection.lengthSq() === 0) return targetCentre.clone();
+    rayDirection.normalize();
 
-    // Point where the line would meet the object's silhouette — the fallback whenever the
-    // mesh itself yields no intersection.
-    const silhouettePoint = targetCentre.clone().addScaledVector(direction, -worldSphere.radius);
-
-    const origin = targetCentre.clone().addScaledVector(direction, -(worldSphere.radius + 1));
+    rayOrigin.copy(targetCentre).addScaledVector(rayDirection, -(targetSphere.radius + 1));
     const raycaster = this.globalObjectInstance.raycasterBetweenObjects;
     // Line2 / LineSegments2 children (relation end markers, nested vizReps) read the
     // camera off the raycaster and throw when it is unset.
     raycaster.camera = this.globalObjectInstance.camera;
-    raycaster.set(origin, direction);
+    raycaster.set(rayOrigin, rayDirection);
 
-    const restoreSides: Array<() => void> = [];
-    toObject.traverse((child) => {
-      const material = (child as THREE.Mesh).material;
-      const materials = Array.isArray(material) ? material : material ? [material] : [];
-      for (const singleMaterial of materials) {
-        const previousSide = singleMaterial.side;
-        restoreSides.push(() => (singleMaterial.side = previousSide));
-        singleMaterial.side = THREE.DoubleSide;
-      }
-    });
-
-    let intersects: THREE.Intersection[];
+    toObject.traverse(forceDoubleSidedMaterials);
     try {
-      intersects = raycaster.intersectObject(toObject, true);
+      // Emptied first as well as after: a cast that threw may have left hits behind.
+      rayHits.length = 0;
+      raycaster.intersectObject(toObject, true, rayHits);
     } finally {
-      for (const restore of restoreSides) restore();
+      forcedSides.forEach((side, material) => (material.side = side));
+      forcedSides.clear();
     }
 
-    return intersects[0]?.point ?? silhouettePoint;
+    // No intersection: the point where the line meets the object's silhouette. Either way
+    // a fresh vector — the caller holds on to it past the next cast.
+    const point = rayHits[0]?.point ?? targetCentre.clone().addScaledVector(rayDirection, -targetSphere.radius);
+    rayHits.length = 0;
+    return point;
   }
 }
 

@@ -13,7 +13,8 @@ import RelationclassButtonGroup from "@/views/palette/RelationclassButtonGroup";
 //    metaclass; clicking a row selects that object on the canvas.
 //
 // Both panels stay mounted (the inactive one hidden) so SceneGroup's init effect and
-// bus subscriptions are not torn down every time the user switches tabs.
+// bus subscriptions are not torn down every time the user switches tabs. The model tree
+// is told when it is hidden, and defers its rebuilds until it is shown again.
 export default function LeftNav() {
   const openTab = useTabsStore((s) => s.selectedTab >= 0 && s.tabs.length > 0);
   const [active, setActive] = useState<"scenes" | "modelTree">("scenes");
@@ -44,7 +45,7 @@ export default function LeftNav() {
       </Box>
 
       <Box sx={{ flex: 1, overflowY: "auto", minHeight: 0 }} hidden={active !== "modelTree"}>
-        <ModelTree />
+        <ModelTree active={active === "modelTree"} />
       </Box>
     </Box>
   );

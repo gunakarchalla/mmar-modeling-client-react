@@ -291,3 +291,78 @@ describe("InstanceCreationHandler.createMissingSceneAttributeInstances", () => {
     expect(otherScene.attribute_instances).toEqual([]);
   });
 });
+
+describe("InstanceCreationHandler — tables", () => {
+  /** A table attribute with columns B (sequence 2) and A (sequence 1); A itself holds a table. */
+  function makeTableAttribute() {
+    return (Class.fromJS({
+      uuid: "class-with-table",
+      name: "WithTable",
+      attributes: [
+        {
+          uuid: "table-attr",
+          name: "Table",
+          default_value: "the table's own default, never a cell's",
+          attribute_type: {
+            uuid: "at-table",
+            name: "Table",
+            has_table_attribute: [
+              {
+                sequence: 2,
+                attribute: { uuid: "col-b", name: "B", default_value: "b default", attribute_type: { uuid: "at-b", has_table_attribute: [] } },
+              },
+              {
+                sequence: 1,
+                attribute: {
+                  uuid: "col-a",
+                  name: "A",
+                  default_value: "a default",
+                  attribute_type: {
+                    uuid: "at-a",
+                    has_table_attribute: [
+                      { sequence: 1, attribute: { uuid: "col-deep", name: "Deep", attribute_type: { uuid: "at-deep", has_table_attribute: [] } } },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    }) as Class).attributes[0];
+  }
+
+  beforeEach(() => {
+    mocks.globalObject.attribute_instances = [];
+  });
+
+  it("starts a table with one row: a cell per column, in column order, pointing at the table", async () => {
+    const table = await instanceCreationHandler.createAttributeInstance(makeTableAttribute(), null as never, null as never, "");
+
+    expect(table.table_attributes.map((cell) => [cell.uuid_attribute, cell.table_row, cell.table_attribute_reference])).toEqual([
+      ["col-a", 0, table.uuid],
+      ["col-b", 0, table.uuid],
+    ]);
+  });
+
+  it("gives a cell its column's default, and a nested-table cell an empty value and a first row of its own", async () => {
+    const table = await instanceCreationHandler.createAttributeInstance(makeTableAttribute(), null as never, null as never, "");
+    const [nested, plain] = table.table_attributes;
+
+    expect(plain.value).toBe("b default");
+    expect(plain.name).toBe("B");
+    expect(nested.value).toBe("");
+    expect(nested.table_attributes.map((cell) => [cell.uuid_attribute, cell.table_row, cell.table_attribute_reference])).toEqual([
+      ["col-deep", 0, nested.uuid],
+    ]);
+    // A column without a default gets the placeholder every attribute without one gets.
+    expect(nested.table_attributes[0].value).toBe("not defined");
+  });
+
+  it("creates the cells of a further row without numbering or attaching them", async () => {
+    const cells = await instanceCreationHandler.createTableRowCells(makeTableAttribute());
+
+    expect(cells.map((cell) => cell.uuid_attribute)).toEqual(["col-a", "col-b"]);
+    expect(cells.every((cell) => cell.table_row === undefined && cell.table_attribute_reference === undefined)).toBe(true);
+  });
+});
