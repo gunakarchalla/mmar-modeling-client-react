@@ -175,6 +175,19 @@ describe("diffScene", () => {
     expect(isEmptyDelta(delta)).toBe(false);
   });
 
+  it("reports a scene attribute's table under sceneFields when its rows or cells differ", () => {
+    const cell = (uuid: string, row: number, value: string) => ({ uuid, table_row: row, value });
+    const table = (cells: object[]) => ({ uuid: "scene-table", value: "", table_attributes: cells });
+    const from = scene({ attribute_instances: [table([cell("c1", 0, "a"), cell("c2", 1, "b")])] });
+    const to = scene({ attribute_instances: [table([cell("c2", 0, "b"), cell("c1", 1, "a")])] });
+
+    expect(touchedUuids(from, to)).toEqual([SCENE_FIELDS_KEY]);
+    expect(diffScene(from, to).sceneFields).toEqual({
+      attributes: [{ uuid: "scene-table", value: "", table_attributes: [cell("c2", 0, "b"), cell("c1", 1, "a")] }],
+    });
+    expect(isEmptyDelta(diffScene(from, from))).toBe(true);
+  });
+
   it("keeps a scene attribute change out of a restricted diff that does not name the scene", () => {
     const from = scene({ attribute_instances: [sceneAttribute("before")], class_instances: [classInstance("a")] });
     const to = scene({ attribute_instances: [sceneAttribute("after")], class_instances: [classInstance("a")] });

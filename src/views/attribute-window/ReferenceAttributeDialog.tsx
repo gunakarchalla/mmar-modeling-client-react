@@ -359,11 +359,37 @@ function AllowedGroup({
 
 // dialog-reference-attribute.ts:299 — the display name of a referenced class instance.
 function getClassInstanceName(classInstance: ClassInstance): string {
-  //anonymous async function
-  return (
-    classInstance.attribute_instance.find((attribute) => attribute.uuid_attribute === NAME_ATTRIBUTE_UUID)
-      ?.value || "Unknown"
+  return standardNameAttribute(classInstance)?.value || "Unknown";
+}
+
+/** The instance's standard Name attribute (`NAME_ATTRIBUTE_UUID`), if its class uses it. */
+function standardNameAttribute(classInstance: ClassInstance): AttributeInstance | undefined {
+  return classInstance.attribute_instance.find((attribute) => attribute.uuid_attribute === NAME_ATTRIBUTE_UUID);
+}
+
+/**
+ * Every metamodel names its elements through the standard Name attribute
+ * (`NAME_ATTRIBUTE_UUID`), so an element without it has no name to show a reference by.
+ * That is a fault of the metamodel, reported to the user rather than papered over.
+ * `metaName` is the element's class, relationclass or port (its instance's `name`).
+ */
+function reportMissingStandardName(kind: "class" | "relationclass" | "port", metaName: string | undefined): void {
+  logger.log(
+    `The ${kind} "${metaName ?? "?"}" does not use the standard Name attribute, so its instances have no name to show.`,
+    "error",
   );
+}
+
+/** The referenced instance's standard Name, or "" — reported — when its class lacks the attribute. */
+async function referencedName(
+  instanceUuid: string,
+  kind: "class" | "relationclass" | "port",
+  metaName: string | undefined,
+): Promise<string> {
+  const name = await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, instanceUuid);
+  if (name !== undefined) return name;
+  reportMissingStandardName(kind, metaName);
+  return "";
 }
 
 /**
@@ -396,7 +422,8 @@ async function resolveAttributeRole(attributeInstance: AttributeInstance): Promi
 
 /**
  * The naming half of `setMetaInformation()`: resolve the referenced instance's display
- * name through the "Name" meta attribute, or the scene instance's own name.
+ * name through the standard Name attribute, or the scene instance's own name. A
+ * reference whose target is no longer loaded keeps the name it was saved with.
  */
 async function resolveReferenceName(roleInstance: RoleInstance): Promise<string> {
   // If the reference role instance has a reference class instance, then get the name of
@@ -404,19 +431,19 @@ async function resolveReferenceName(roleInstance: RoleInstance): Promise<string>
   if (roleInstance.uuid_has_reference_class_instance != undefined) {
     const referenced = await instanceUtility.getClassInstance(roleInstance.uuid_has_reference_class_instance);
     if (referenced) {
-      return (await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, referenced.uuid)) ?? roleInstance.name;
+      return await referencedName(referenced.uuid, "class", referenced.name);
     }
   } else if (roleInstance.uuid_has_reference_relationclass_instance != undefined) {
     const referenced = await instanceUtility.getClassInstance(
       roleInstance.uuid_has_reference_relationclass_instance,
     );
     if (referenced) {
-      return (await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, referenced.uuid)) ?? roleInstance.name;
+      return await referencedName(referenced.uuid, "relationclass", referenced.name);
     }
   } else if (roleInstance.uuid_has_reference_port_instance != undefined) {
     const referenced = await instanceUtility.getPortInstance(roleInstance.uuid_has_reference_port_instance);
     if (referenced) {
-      return (await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, referenced.uuid)) ?? roleInstance.name;
+      return await referencedName(referenced.uuid, "port", referenced.name);
     }
   } else if (roleInstance.uuid_has_reference_scene_instance != undefined) {
     const referenced = await instanceUtility.getSceneInstance(roleInstance.uuid_has_reference_scene_instance);
@@ -456,6 +483,11 @@ async function collectAllowedClassInstances(role: Role): Promise<AllowedClass[]>
       }
     }
   }
+  // The picker labels them by their standard Name: report each class that lacks it, once.
+  const unnamedClasses = new Set(
+    allowed.filter((entry) => !standardNameAttribute(entry.classInstance)).map((entry) => entry.classInstance.name),
+  );
+  for (const className of unnamedClasses) reportMissingStandardName("class", className);
   return allowed;
 }
 

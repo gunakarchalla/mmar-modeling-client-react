@@ -379,6 +379,11 @@ export default function SceneGroup() {
       // Run the hybrid algorithms for the freshly loaded scene — for a Statechange
       // scene this is what makes its Reference instances adopt their targets' meshes.
       await hybridAlgorithmsService.checkHybridAlgorithms(null, sceneInstance.class_instances);
+
+      // The scene is now drawn and its hybrid algorithms have run. `tabChanged` went out
+      // back in createTabContextSceneInstance, before any of that, so announce the
+      // finished scene for the views that list its contents (the model tree).
+      eventBus.publish("sceneInstanceMutated", { sceneInstanceUuid: sceneInstance.uuid });
     }
   }
 

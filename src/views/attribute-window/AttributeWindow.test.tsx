@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
     current_class_instance: undefined as any,
     current_port_instance: undefined as any,
   } as any,
-  globalSelectedObject: { getObject: vi.fn() },
+  globalSelectedObject: { getObject: vi.fn(), object: undefined as any },
   instanceCreationHandler: { createAttributeInstance: vi.fn(), createRoleInstance: vi.fn() },
   instanceUtility: {
     getTabContextSceneInstance: vi.fn(),
@@ -187,6 +187,7 @@ function selectClassInstanceWith(attributeInstances: Record<string, unknown>[]):
 beforeEach(() => {
   vi.clearAllMocks();
   cleanup();
+  mocks.globalSelectedObject.object = undefined;
   Object.assign(mocks.globalObject, {
     selectedTab: 0,
     doSceneInstancePatch: false,
@@ -451,9 +452,15 @@ describe("AttributeWindow", () => {
       attributeInstanceJson({
         uuid: "ai-table",
         name: "BPMN Table",
-        table_attributes: [attributeInstanceJson({ uuid: "cell-1", table_row: 1 })],
+        table_attributes: [attributeInstanceJson({ uuid: "cell-1", table_row: 0 })],
       }),
     ]);
+    // A table is an attribute whose type has columns.
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(
+      metaAttribute({
+        attribute_type: { uuid: "at-table", name: "Table", regex_value: null, role: null, has_table_attribute: [{ sequence: 1, attribute: { uuid: "attr-col" } }] },
+      }),
+    );
 
     render(<AttributeWindow />);
     eventBus.publish("updateAttributeGui");
@@ -468,6 +475,81 @@ describe("AttributeWindow", () => {
     }>("tableAttribute");
     expect(payload?.attributeInstance.uuid).toBe("ai-table");
     expect(payload?.currentClassInstance).toBe(classInstance);
+  });
+
+  // --- the Position tab -------------------------------------------------------------
+
+  /** Select the class instance with a mesh at (1, 2, 0) and open the Position tab. */
+  async function openPositionTab() {
+    selectClassInstanceWith([attributeInstanceJson()]);
+    const mesh = { uuid: CLASS_INSTANCE_UUID, position: { x: 1, y: 2, z: 0 }, userData: {} };
+    mocks.globalSelectedObject.getObject.mockReturnValue(mesh);
+    mocks.globalSelectedObject.object = mesh;
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    fireEvent.click(await screen.findByRole("tab", { name: "Position" }));
+    return mesh;
+  }
+
+  it("edits the selected object's position through the Position tab", async () => {
+    const mesh = await openPositionTab();
+    const recorded: unknown[] = [];
+    const sub = eventBus.subscribe("historyRecord", (p) => recorded.push(p));
+
+    const xField = await screen.findByLabelText("X");
+    expect((xField as HTMLInputElement).value).toBe("1");
+
+    fireEvent.change(xField, { target: { value: "5.5" } });
+    fireEvent.blur(xField);
+    sub.dispose();
+
+    expect(mesh.position.x).toBe(5.5);
+    expect(mocks.globalObject.render).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect((recorded[0] as { afterTransformSync?: boolean }).afterTransformSync).toBe(true);
+  });
+
+  it("does not move the object back when an untouched Position field loses focus", async () => {
+    const mesh = await openPositionTab();
+    const yField = (await screen.findByLabelText("Y")) as HTMLInputElement;
+    const recorded: unknown[] = [];
+    const sub = eventBus.subscribe("historyRecord", (p) => recorded.push(p));
+
+    // The object moves while the tab is open (a gizmo drag, an undo, a collaborator)...
+    mesh.position.y = 9;
+    // ...and the user merely tabs through the field.
+    fireEvent.focus(yField);
+    fireEvent.blur(yField);
+    sub.dispose();
+
+    expect(mesh.position.y).toBe(9);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("re-reads the Position fields when the object is moved elsewhere, sparing a field being typed into", async () => {
+    const mesh = await openPositionTab();
+    const xField = (await screen.findByLabelText("X")) as HTMLInputElement;
+    fireEvent.change(xField, { target: { value: "4" } });
+
+    mesh.position.x = 7;
+    mesh.position.y = 8;
+    eventBus.publish("historyRecord", { label: "translate" });
+
+    await waitFor(() => expect(((screen.getByLabelText("Y")) as HTMLInputElement).value).toBe("8"));
+    expect(xField.value).toBe("4");
+  });
+
+  it("returns to the Attributes panel when another object is selected", async () => {
+    await openPositionTab();
+    expect(await screen.findByLabelText("X")).toBeTruthy();
+
+    // Nothing selected any more: the window falls back to the scene's attributes.
+    mocks.globalSelectedObject.getObject.mockReturnValue(undefined);
+    mocks.globalSelectedObject.object = undefined;
+    eventBus.publish("updateAttributeGui");
+
+    await waitFor(() => expect(screen.queryByLabelText("X")).toBeNull());
   });
 
   it("shows the GLTF upload button for the Object 3D attribute and opens its dialog", async () => {

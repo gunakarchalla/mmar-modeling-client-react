@@ -61,8 +61,20 @@ export interface SceneDelta {
 export interface SceneFieldsChange {
   name?: string;
   description?: string;
-  /** Scene-owned attribute instances whose `value` differs. */
-  attributes?: { uuid: string; value: string }[];
+  /** Scene-owned attribute instances whose `value` or table differs. */
+  attributes?: SceneAttributeChange[];
+}
+
+/**
+ * A scene-owned attribute instance to move back. `table_attributes` is present when the
+ * attribute is a table whose cells differ — rows added, removed or moved, or a cell
+ * edited — and holds the cells wanted. A class's tables need no such field: an instance
+ * change assigns the instance's whole JSON.
+ */
+export interface SceneAttributeChange {
+  uuid: string;
+  value: string;
+  table_attributes?: Json[];
 }
 
 /** Sentinel `touched` entry standing for the scene's own scalar fields. */
@@ -134,15 +146,22 @@ export function touchedUuids(from: SceneSnapshot, to: SceneSnapshot): string[] {
 }
 
 /**
- * The scene instance's own attribute instances whose value differs — the fields the
- * attribute window edits while nothing is selected. They ride along with the scene's
+ * The scene instance's own attribute instances whose value or table differs — the fields
+ * the attribute window edits while nothing is selected. They ride along with the scene's
  * scalar fields under `SCENE_FIELDS_KEY`, since the scene itself is what changed.
  */
-function sceneAttributeChanges(from: SceneSnapshot, to: SceneSnapshot): { uuid: string; value: string }[] {
-  const before = attributeValues({ attribute_instance: from.attribute_instances });
-  const changes: { uuid: string; value: string }[] = [];
-  for (const [uuid, value] of attributeValues({ attribute_instance: to.attribute_instances })) {
-    if (before.get(uuid) !== value) changes.push({ uuid, value });
+function sceneAttributeChanges(from: SceneSnapshot, to: SceneSnapshot): SceneAttributeChange[] {
+  const before = byUuid(from.attribute_instances);
+  const changes: SceneAttributeChange[] = [];
+  for (const [uuid, target] of byUuid(to.attribute_instances)) {
+    const current = before.get(uuid);
+    const value = String(target["value"] ?? "");
+    const valueChanged = current === undefined || String(current["value"] ?? "") !== value;
+    const tableChanged = stable(current?.["table_attributes"] ?? []) !== stable(target["table_attributes"] ?? []);
+    if (!valueChanged && !tableChanged) continue;
+    changes.push(
+      tableChanged ? { uuid, value, table_attributes: (target["table_attributes"] as Json[]) ?? [] } : { uuid, value },
+    );
   }
   return changes;
 }

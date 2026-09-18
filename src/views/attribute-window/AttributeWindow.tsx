@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Button, Divider, TextField, Typography } from "@mui/material";
+import { Box, Button, Divider, Tab, Tabs, TextField, Typography } from "@mui/material";
 import type { AttributeInstance } from "@gds";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { eventBus, type UploadEventPayload } from "@/resources/services/event-bus";
@@ -14,6 +14,7 @@ import {
   type EnhancedAttributeInstance,
 } from "./attributeModel";
 import PlainAttributeRow from "./PlainAttributeRow";
+import PositionPanel from "./PositionPanel";
 import ReferenceAttributeDialog from "./ReferenceAttributeDialog";
 import TableAttributeDialog from "./TableAttributeDialog";
 import UploadFileDialog from "@/views/dialogs/UploadFileDialog";
@@ -124,6 +125,18 @@ export default function AttributeWindow() {
     groups;
   const hasDynamic = groups.plain.length !== 0 || groups.table.length !== 0 || groups.reference.length !== 0;
 
+  // Position editing applies to a class or port instance — the things with a draggable
+  // mesh behind them. A relation (a line) and the scene fallback have no single position.
+  const positionInstance = currentClassInstance ?? currentPortInstance ?? null;
+
+  // The instance the Position tab is open for. A new selection starts back on the
+  // attributes panel — the position panel left open belonged to the previous object. It is
+  // reset during render (React's pattern for adjusting state to changed props) rather than
+  // in an effect, which would first render the new object with the old object's tab.
+  const [positionTabFor, setPositionTabFor] = useState<string | null>(null);
+  if (positionTabFor !== null && positionTabFor !== positionInstance?.uuid) setPositionTabFor(null);
+  const showPosition = positionInstance !== null && positionTabFor === positionInstance.uuid;
+
   // `buildAttributeGroups` resolves the selected THREE object back to its class / port /
   // relationclass instance, and falls back to the open scene instance when nothing is
   // selected. All four are null only when no scene is open at all — then there is
@@ -176,69 +189,93 @@ export default function AttributeWindow() {
         />
       )}
 
-      {hasDynamic && (
-        <Typography variant="h6" sx={{ mt: 0, mb: 1.5, p: 0, fontSize: "1rem", fontWeight: 600 }}>
-          Dynamic Attributes
-        </Typography>
+      {/* Attributes vs. Position. The Position tab is only offered for a class or port
+          instance — the things with a draggable mesh whose transform this can edit. */}
+      {positionInstance && (
+        <Tabs
+          value={showPosition ? "position" : "attributes"}
+          onChange={(_e, value: string) => setPositionTabFor(value === "position" ? positionInstance.uuid : null)}
+          variant="fullWidth"
+          sx={{ minHeight: 36, mb: 1 }}
+        >
+          <Tab value="attributes" label="Attributes" sx={{ minHeight: 36, textTransform: "none" }} />
+          <Tab value="position" label="Position" sx={{ minHeight: 36, textTransform: "none" }} />
+        </Tabs>
       )}
 
-      {/* for each attributeInstance that is not a tableattribute */}
-      {groups.plain.map((enhanced) => (
-        <PlainAttributeRow
-          key={enhanced.attributeInstance.uuid}
-          enhanced={enhanced}
-          isFileAttribute={groups.fileTypeUuids.includes(enhanced.attributeInstance.uuid)}
-          owner={groups}
-          onChanged={rebuild}
+      {showPosition ? (
+        <PositionPanel
+          instanceUuid={positionInstance.uuid}
+          instanceName={positionInstance.name}
+          fallbackCoordinates={positionInstance.coordinates_2d}
         />
-      ))}
+      ) : (
+        <>
+          {hasDynamic && (
+            <Typography variant="h6" sx={{ mt: 0, mb: 1.5, p: 0, fontSize: "1rem", fontWeight: 600 }}>
+              Dynamic Attributes
+            </Typography>
+          )}
 
-      {groups.table.length !== 0 && (
-        <Box>
-          <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
-            Table Attributes
-          </Typography>
-          {groups.table.map((enhanced) => (
-            <Button
+          {/* for each attributeInstance that is not a tableattribute */}
+          {groups.plain.map((enhanced) => (
+            <PlainAttributeRow
               key={enhanced.attributeInstance.uuid}
-              variant="outlined"
-              onClick={() => openTableDialog(enhanced)}
-              sx={{ width: "100%", mb: 0.5 }}
-            >
-              {enhanced.attributeInstance.name}
-            </Button>
+              enhanced={enhanced}
+              isFileAttribute={groups.fileTypeUuids.includes(enhanced.attributeInstance.uuid)}
+              owner={groups}
+              onChanged={rebuild}
+            />
           ))}
-          <Divider sx={{ borderColor: "silver" }} />
-        </Box>
-      )}
 
-      {groups.reference.length !== 0 && (
-        <Box>
-          <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
-            Reference Attributes
-          </Typography>
-          {groups.reference.map((enhanced) => (
-            <Box key={enhanced.attributeInstance.uuid} sx={{ mb: 1 }}>
-              <TextField
-                slotProps={{ input: { readOnly: true } }}
-                size="small"
-                fullWidth
-                label={enhanced.attributeInstance.name}
-                value={enhanced.attributeInstance.role_instance_from?.name ?? ""}
-              />
-              {/* This button opens a dialog. All reference buttons share one dialog
-                  view, so the context is passed when opening (see openReferenceDialog). */}
-              <Button
-                variant="outlined"
-                onClick={() => openReferenceDialog(enhanced)}
-                sx={{ width: "100%", wordBreak: "break-word", fontSize: ".7em" }}
-              >
-                {enhanced.attributeInstance.name}
-              </Button>
+          {groups.table.length !== 0 && (
+            <Box>
+              <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
+                Table Attributes
+              </Typography>
+              {groups.table.map((enhanced) => (
+                <Button
+                  key={enhanced.attributeInstance.uuid}
+                  variant="outlined"
+                  onClick={() => openTableDialog(enhanced)}
+                  sx={{ width: "100%", mb: 0.5 }}
+                >
+                  {enhanced.attributeInstance.name}
+                </Button>
+              ))}
+              <Divider sx={{ borderColor: "silver" }} />
             </Box>
-          ))}
-          <Divider sx={{ borderColor: "silver" }} />
-        </Box>
+          )}
+
+          {groups.reference.length !== 0 && (
+            <Box>
+              <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
+                Reference Attributes
+              </Typography>
+              {groups.reference.map((enhanced) => (
+                <Box key={enhanced.attributeInstance.uuid} sx={{ mb: 1 }}>
+                  <TextField
+                    slotProps={{ input: { readOnly: true } }}
+                    size="small"
+                    fullWidth
+                    label={enhanced.attributeInstance.name}
+                    value={enhanced.attributeInstance.role_instance_from?.name ?? ""}
+                  />
+                  {/* This button opens a dialog. All reference buttons share one dialog
+                      view, so the context is passed when opening (see openReferenceDialog). */}
+                  <Button
+                    variant="outlined"
+                    onClick={() => openReferenceDialog(enhanced)}
+                    sx={{ width: "100%", wordBreak: "break-word", fontSize: ".7em" }}
+                  >
+                    {enhanced.attributeInstance.name}
+                  </Button>
+                </Box>
+              ))}
+              <Divider sx={{ borderColor: "silver" }} />
+            </Box>
+          )}
+        </>
       )}
 
       {/* The dialogs below are rendered once and driven by uiStore, replacing the old

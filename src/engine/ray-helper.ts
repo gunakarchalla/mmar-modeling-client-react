@@ -27,6 +27,30 @@ export type CursorAnchorKind = "object" | "plane";
 /** The modelling plane (z = globalObject.localZPlane) — reused, never allocated per ray. */
 const modellingPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1));
 
+// Scratch objects for `shootRayFromObject`, which the animator calls twice per relation
+// line on every frame something moves — reused, never allocated per ray.
+const rayFrom = new THREE.Vector3();
+const rayOrigin = new THREE.Vector3();
+const rayDirection = new THREE.Vector3();
+const targetSphere = new THREE.Sphere();
+const rayHits: THREE.Intersection[] = [];
+/** The materials the running cast forced double-sided, mapped to the side each had. */
+const forcedSides = new Map<THREE.Material, THREE.Side>();
+
+function forceDoubleSided(material: THREE.Material) {
+  // Recorded once per material: one the target uses twice must be restored to its own
+  // side, not to the DoubleSide the first visit left on it.
+  if (material.side === THREE.DoubleSide || forcedSides.has(material)) return;
+  forcedSides.set(material, material.side);
+  material.side = THREE.DoubleSide;
+}
+
+function forceDoubleSidedMaterials(object: THREE.Object3D) {
+  const material = (object as THREE.Mesh).material;
+  if (Array.isArray(material)) material.forEach(forceDoubleSided);
+  else if (material) forceDoubleSided(material);
+}
+
 export class RayHelper {
   private lastCursorBroadcast = 0;
 
@@ -143,31 +167,83 @@ export class RayHelper {
   }
 
   /**
-   * The nearest point on `toObject` seen from `fromObject`, or undefined when there is
-   * no such point.
+   * The point on `toObject`'s surface that faces `fromObject`, or undefined when one of
+   * the two objects is missing.
    *
    * Both call sites in the animator resolve their objects by walking the scene and cast
-   * the result to a Mesh, so either can be undefined: a relation whose endpoints left the
-   * scene (a save rolled back, an element deleted) keeps being drawn for as long as its
-   * line is still in `updateLinesArray`. Returning undefined makes the animator skip that
-   * line's frame rather than dereferencing a missing object every frame.
+   * the result to a Mesh, so either can be undefined — a relation whose endpoints were
+   * removed from the scene (a save rolled back, an element deleted) keeps being drawn
+   * for as long as its line is still in `updateLinesArray`. Answering undefined makes
+   * the animator skip that line's frame; dereferencing it threw
+   * "Cannot read properties of undefined (reading 'getWorldPosition')" once per frame.
+   *
+   * The ray is started just OUTSIDE `toObject` on the `fromObject` side and aimed at the
+   * centre of its geometry rather than fired from `fromObject`'s origin. Firing from the
+   * origin lost the relation ("line not updated: an end point ... could not be resolved")
+   * whenever the two objects overlapped during a drag — the ray then started inside the
+   * target and a single-sided material reports no hit on the way out — and whenever a
+   * vizRep's merged geometry sat off its object origin, so a ray at the origin grazed
+   * past it.
+   *
+   * The cast forces every material on the target double-sided for its duration: a vizRep
+   * that renders BACK-SIDE only (the hollow-shell / flat-disc look) is invisible to the
+   * raycaster on the wall nearest the incoming ray, so the endpoint would otherwise land
+   * on the far wall or, with nothing hit at all, at the centre — the line then reads as
+   * coming out of the middle of the object instead of off its edge. When the cast still
+   * finds nothing the near point of the bounding sphere (facing `fromObject`) is used, so
+   * the line meets the object's silhouette rather than its centre. A material the target
+   * uses more than once (a merged vizRep's material array repeats shared ones) is forced
+   * and restored exactly once, so the cast cannot leave it double-sided.
    */
   shootRayFromObject(fromObject: THREE.Mesh | undefined, toObject: THREE.Mesh | undefined) {
     if (!fromObject || !toObject) return undefined;
 
-    const direction = new THREE.Vector3();
-    const fromPosition: THREE.Vector3 = new THREE.Vector3();
-    const toPosition: THREE.Vector3 = new THREE.Vector3();
+    //we get the world position of fromObject (also refreshes its world matrix) and
+    //refresh toObject's world matrix, which positions its bounding sphere below
+    fromObject.getWorldPosition(rayFrom);
+    toObject.updateWorldMatrix(true, false);
 
-    //we get the world position of the two
-    fromObject.getWorldPosition(fromPosition);
-    toObject.getWorldPosition(toPosition);
+    // Centre and radius of the target's geometry in world space: the centre is what the
+    // ray aims at (robust to geometry that sits off the object origin), the radius is
+    // how far outside the target to start so an overlapping / enclosing fromObject can
+    // never leave the ray origin inside the mesh.
+    const geometry = toObject.geometry;
+    if (geometry?.getAttribute("position")) {
+      if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+      targetSphere.copy(geometry.boundingSphere!).applyMatrix4(toObject.matrixWorld);
+    } else {
+      targetSphere.center.setFromMatrixPosition(toObject.matrixWorld);
+      targetSphere.radius = 0;
+    }
+    const targetCentre = targetSphere.center;
 
-    const adaptedFromPosition = fromPosition;
-    direction.subVectors(toPosition, adaptedFromPosition);
-    this.globalObjectInstance.raycasterBetweenObjects.set(adaptedFromPosition, direction.normalize());
-    const intersects = this.globalObjectInstance.raycasterBetweenObjects.intersectObject(toObject);
-    if (intersects[0]) return intersects[0].point;
+    rayDirection.subVectors(targetCentre, rayFrom);
+    // fromObject sitting exactly on the target centre: no meaningful direction to cast.
+    if (rayDirection.lengthSq() === 0) return targetCentre.clone();
+    rayDirection.normalize();
+
+    rayOrigin.copy(targetCentre).addScaledVector(rayDirection, -(targetSphere.radius + 1));
+    const raycaster = this.globalObjectInstance.raycasterBetweenObjects;
+    // Line2 / LineSegments2 children (relation end markers, nested vizReps) read the
+    // camera off the raycaster and throw when it is unset.
+    raycaster.camera = this.globalObjectInstance.camera;
+    raycaster.set(rayOrigin, rayDirection);
+
+    toObject.traverse(forceDoubleSidedMaterials);
+    try {
+      // Emptied first as well as after: a cast that threw may have left hits behind.
+      rayHits.length = 0;
+      raycaster.intersectObject(toObject, true, rayHits);
+    } finally {
+      forcedSides.forEach((side, material) => (material.side = side));
+      forcedSides.clear();
+    }
+
+    // No intersection: the point where the line meets the object's silhouette. Either way
+    // a fresh vector — the caller holds on to it past the next cast.
+    const point = rayHits[0]?.point ?? targetCentre.clone().addScaledVector(rayDirection, -targetSphere.radius);
+    rayHits.length = 0;
+    return point;
   }
 }
 

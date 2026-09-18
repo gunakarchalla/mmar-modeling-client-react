@@ -53,6 +53,7 @@ vi.mock("@/resources/services/expression-utility", () => ({ expressionUtility: m
 import ReferenceAttributeDialog from "./ReferenceAttributeDialog";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
+import { useLogStore } from "@/resources/store/logStore";
 
 const ROLE_UUID = "role-1";
 const ALLOWED_CLASS_UUID = "class-allowed";
@@ -127,6 +128,7 @@ beforeEach(() => {
   mocks.instanceUtility.getAllPortInstances.mockResolvedValue([]);
   mocks.instanceUtility.getAllSceneInstancesFromLocal.mockResolvedValue([]);
   mocks.expressionUtility.attrvalByInst.mockResolvedValue("Referenced Task");
+  useLogStore.setState({ snackbar: { open: false, message: "", severity: "info" } });
   useUiStore.setState({
     dialogs: Object.fromEntries(
       Object.keys(useUiStore.getState().dialogs).map((n) => [n, false]),
@@ -210,6 +212,47 @@ describe("ReferenceAttributeDialog", () => {
     await waitFor(() =>
       expect(mocks.hybridAlgorithmsService.checkHybridAlgorithms).toHaveBeenCalledWith(attributeInstance),
     );
+  });
+
+  // Every metamodel names its elements through the standard Name attribute. A class that
+  // does not use it is a fault of the metamodel: the user is told, and the reference is
+  // left without a name rather than showing the role instance's placeholder.
+  it("reports a referenced class without the standard Name attribute instead of saving a placeholder", async () => {
+    const unnamed = ClassInstance.fromJS({
+      uuid: "ci-target",
+      uuid_class: ALLOWED_CLASS_UUID,
+      name: "Sub-Process",
+      attribute_instance: [{ uuid: "ai-title", uuid_attribute: "some-other-name", value: "Titled", table_attributes: [] }],
+    }) as ClassInstance;
+    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([unnamed]);
+    mocks.instanceUtility.getClassInstance.mockResolvedValue(unnamed);
+    mocks.expressionUtility.attrvalByInst.mockResolvedValue(undefined);
+    mocks.instanceCreationHandler.createRoleInstance.mockImplementation(
+      async (uuid: string) => RoleInstance.fromJS({ uuid, uuid_role: ROLE_UUID, name: "name_placeholder" }) as RoleInstance,
+    );
+    const attributeInstance = referenceAttributeInstance();
+
+    render(<ReferenceAttributeDialog />);
+    openDialogWith(attributeInstance);
+
+    await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
+    // Already while offering it: the picker has no name to label it by.
+    expect(useLogStore.getState().snackbar).toEqual({
+      open: true,
+      severity: "error",
+      message: 'The class "Sub-Process" does not use the standard Name attribute, so its instances have no name to show.',
+    });
+    useLogStore.setState({ snackbar: { open: false, message: "", severity: "info" } });
+
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+    fireEvent.click(await screen.findByRole("option", { name: /ci-target/ }));
+    fireEvent.click(screen.getByRole("button", { name: "add" }));
+
+    await waitFor(() => expect(attributeInstance.role_instance_from).toBeTruthy());
+    expect(attributeInstance.value).toBe("");
+    expect(attributeInstance.role_instance_from.name).toBe("");
+    expect(useLogStore.getState().snackbar.open).toBe(true);
+    expect(useLogStore.getState().snackbar.message).toContain('The class "Sub-Process" does not use the standard Name attribute');
   });
 
   it("unsets the reference: clears role_instance_from, drops the role instance and resets the value", async () => {

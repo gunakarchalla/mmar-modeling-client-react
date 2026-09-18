@@ -111,7 +111,12 @@ export class GlobalSelectedObject {
     this.globalObjectInstance.boxHelper.setFromObject(object);
   }
   removeSelectionBoxHelper() {
-    this.globalObjectInstance.scene.remove(this.globalObjectInstance.boxHelper);
+    // Remove the box from whatever scene actually holds it — NOT from
+    // `globalObject.scene`. A path that swaps `globalObject.scene` before clearing the
+    // selection leaves the box in the previous scene; `scene.remove()` would then miss
+    // it, strand it there, and null out the only reference to it — leaving a red box
+    // that can never be cleared.
+    this.globalObjectInstance.boxHelper?.removeFromParent();
     this.globalObjectInstance.boxHelper = undefined as unknown as THREE.BoxHelper;
   }
 }

@@ -27,6 +27,7 @@ import {
   type InstanceChange,
   type Json,
   type SceneDelta,
+  type SceneAttributeChange,
   type SceneFieldsChange,
 } from "./scene-diff";
 
@@ -465,13 +466,18 @@ export class HistoryService {
    * gets in `applyInstanceChange`: write the value in place, tell collaborators, re-run
    * the vizrep in case the scene type's geometry reads the value.
    */
-  private applySceneAttributes(scene: SceneInstance, attributes: { uuid: string; value: string }[]): void {
+  private applySceneAttributes(scene: SceneInstance, attributes: SceneAttributeChange[]): void {
     for (const attribute of attributes) {
       const attributeInstance = (scene.attribute_instances ?? []).find(
         (entry) => entry.uuid === attribute.uuid,
       );
       if (!attributeInstance) continue;
       attributeInstance.value = attribute.value;
+      // A table's rows and cells, put back in place; the next save replaces the stored ones.
+      if (attribute.table_attributes) {
+        if (!attributeInstance.table_attributes) attributeInstance.table_attributes = [];
+        assignInPlace(attributeInstance.table_attributes, attribute.table_attributes);
+      }
 
       this.broadcast({
         type: "scene_attribute_value",

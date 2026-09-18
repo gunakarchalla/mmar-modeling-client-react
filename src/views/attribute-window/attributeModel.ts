@@ -47,7 +47,7 @@ export interface AttributeGroups {
   currentSceneInstance: SceneInstance | null;
   /** `attributeInstancesNoTable` — plain fields (text / dropdown / slider / upload). */
   plain: EnhancedAttributeInstance[];
-  /** `attributeInstanceTable` — attributes that own table_attributes. */
+  /** `attributeInstanceTable` — attributes whose type has table columns. */
   table: EnhancedAttributeInstance[];
   /** `attributeInstancesReferenceAttribute` — attributes whose type carries a Role. */
   reference: EnhancedAttributeInstance[];
@@ -226,16 +226,16 @@ export async function buildAttributeGroups(): Promise<AttributeGroups> {
     //check if attribute is a reference attribute -> attribute_type.role is set
     const isReferenceAttribute = metaAttribute ? metaAttribute.attribute_type.role != null : false;
 
+    // A table is an attribute whose TYPE has columns, whether or not it holds rows: one
+    // whose rows were all removed is still a table (see Instance_tables in gds).
+    const isTableAttribute = (metaAttribute?.attribute_type.has_table_attribute ?? []).length > 0;
+
     if (isReferenceAttribute) {
       groups.reference.push(enhanced);
-    }
-    //push no table attribute instances to array
-    else if (enhanced.attributeInstance.table_attributes.length == 0) {
-      groups.plain.push(enhanced);
-    }
-    //push table attribute table instances to array
-    else {
+    } else if (isTableAttribute) {
       groups.table.push(enhanced);
+    } else {
+      groups.plain.push(enhanced);
     }
   }
 
