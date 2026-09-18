@@ -46,27 +46,42 @@ describe("attributeValueMatchesRegex", () => {
     expect(attributeValueMatchesRegex("1.5", metaAttribute(INTEGER_REGEX, "Integer"))).toBe(false);
   });
 
-  it("refuses an emptied Float field, because the server does", () => {
-    // The server only skips the test for a value that is null/undefined, not for "".
+  it("holds an unset value to the regex, as the server does", () => {
+    // "" is the value an attribute holds until someone fills it in - there is no
+    // placeholder for an unset value any more - and null is the same value arriving
+    // from an older record. Whether an attribute may be left unset is what its type's
+    // regex says: the Float regex needs a digit, the Integer regex ends in `*`.
     expect(attributeValueMatchesRegex("", metaAttribute(FLOAT_REGEX))).toBe(false);
-    // The Integer regex ends in `*`, so an empty value satisfies that one.
+    expect(attributeValueMatchesRegex(null, metaAttribute(FLOAT_REGEX))).toBe(false);
     expect(attributeValueMatchesRegex("", metaAttribute(INTEGER_REGEX, "Integer"))).toBe(true);
+    expect(attributeValueMatchesRegex(null, metaAttribute(INTEGER_REGEX, "Integer"))).toBe(true);
   });
 
-  it("accepts without testing when there is nothing to test with", () => {
-    // No regex on the attribute type, and no value on the instance: the server's two
-    // accept-without-testing cases.
+  it("accepts without testing when there is no rule to apply", () => {
+    // An attribute type that states no regex constrains nothing, and neither does an
+    // attribute nobody could resolve. `undefined` is not the empty value but a field
+    // that was not sent, which a write keeps as it is stored.
     expect(attributeValueMatchesRegex("anything", metaAttribute(null))).toBe(true);
-    expect(attributeValueMatchesRegex(null, metaAttribute(FLOAT_REGEX))).toBe(true);
-    expect(attributeValueMatchesRegex(undefined, metaAttribute(FLOAT_REGEX))).toBe(true);
     expect(attributeValueMatchesRegex("anything", undefined)).toBe(true);
+    expect(attributeValueMatchesRegex(undefined, metaAttribute(FLOAT_REGEX))).toBe(true);
+  });
+
+  it("matches the whole value, in the case it was written in", () => {
+    // The check used to apply "gmi". "m" anchored per line, so a value with a newline
+    // passed as long as one of its lines did, and "i" made every pattern case-blind.
+    expect(attributeValueMatchesRegex("hello\n12", metaAttribute(FLOAT_REGEX))).toBe(false);
+    expect(attributeValueMatchesRegex("tcp", metaAttribute("^(TCP|UDP)$", "Protocol"))).toBe(false);
+    expect(attributeValueMatchesRegex("TCP", metaAttribute("^(TCP|UDP)$", "Protocol"))).toBe(true);
+    // A pattern an author left the anchors off still describes the whole value.
+    expect(attributeValueMatchesRegex("abc12", metaAttribute("[0-9]+", "Digits"))).toBe(false);
+    expect(attributeValueMatchesRegex("12", metaAttribute("[0-9]+", "Digits"))).toBe(true);
   });
 
   it("accepts when the pattern will not compile, leaving the verdict to the server", () => {
     expect(attributeValueMatchesRegex("anything", metaAttribute("([unclosed"))).toBe(true);
   });
 
-  it("is not confused by the lastIndex of the shared /g regex on repeated calls", () => {
+  it("answers the same way on repeated calls", () => {
     const meta = metaAttribute(FLOAT_REGEX);
     expect(attributeValueMatchesRegex("1", meta)).toBe(true);
     expect(attributeValueMatchesRegex("2", meta)).toBe(true);

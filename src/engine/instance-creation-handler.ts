@@ -113,7 +113,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       column.attribute,
       null as unknown as string,
       null as unknown as string,
-      isNestedTable ? "" : (column.attribute.default_value ?? "not defined"),
+      isNestedTable ? "" : (column.attribute.default_value ?? ""),
     );
   }
 
@@ -176,11 +176,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       // Same value rule as createClassInstance: the meta default for a plain attribute,
       // "" for a table one (its rows are added in the table dialog).
       const value =
-        attribute.attribute_type.has_table_attribute.length == 0
-          ? attribute.default_value
-            ? attribute.default_value
-            : "not defined"
-          : "";
+        attribute.attribute_type.has_table_attribute.length == 0 ? attribute.default_value || "" : "";
 
       created.push(
         await this.createAttributeInstance(
@@ -324,8 +320,9 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
           attribute,
           null as any,
           class_instance.uuid,
-          // if there is a default value in the attribute type, we evaluate the expression in the attribute type
-          attribute.default_value ? attribute.default_value : "not defined",
+          // The attribute's default value, or "" when it states none: an unset value is
+          // empty, and whether that is allowed is what the attribute type's regex says.
+          attribute.default_value || "",
           null as any,
           null as any,
           null as any,
@@ -402,7 +399,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       //call function to instantiate attribute and add to class_instance
       if (attribute.attribute_type.has_table_attribute.length == 0) {
         //call function to instantiate attribute and add to class_instance
-        this.createAttributeInstance(attribute, null as any, relationclass_instance.uuid, attribute.default_value ? attribute.default_value : "not defined", null as any, null as any, null as any, null as any, null as any, null as any);
+        this.createAttributeInstance(attribute, null as any, relationclass_instance.uuid, attribute.default_value || "", null as any, null as any, null as any, null as any, null as any, null as any);
       } else {
         this.createAttributeInstance(attribute, null as any, relationclass_instance.uuid, "", null as any, null as any, null as any, null as any, null as any, null as any);
       }
@@ -495,8 +492,9 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
           attribute,
           null as any,
           null as any,
-          // if there is a default value in the attribute type, we evaluate the expression in the attribute type
-          attribute.default_value ? attribute.default_value : "not defined",
+          // The attribute's default value, or "" when it states none: an unset value is
+          // empty, and whether that is allowed is what the attribute type's regex says.
+          attribute.default_value || "",
           port_instance.uuid,
           null as any,
           null as any,

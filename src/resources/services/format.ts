@@ -4,21 +4,21 @@
 
 /**
  * Parse a stored attribute string into a number for display.
- * Empty / "not defined" / "undefined" values fall back to `defaultValue`
- * (or `fallbackValue` when no default is given), matching NumeriseConverter.toView.
+ *
+ * Anything that is not a number falls back to `defaultValue` (or `fallbackValue` when
+ * no default is given): an attribute nobody has filled in holds "", and older models
+ * carry the "not defined" / "undefined" placeholders that unset values were written as
+ * before. A slider handed NaN renders nothing and cannot be dragged back, so the
+ * fallback is what such a value is worth.
  */
 export function numerise(
   value: string,
   defaultValue?: number,
   fallbackValue?: number,
 ): number {
-  if (value === "not defined" || value === "undefined" || value === "") {
-    return defaultValue ?? (fallbackValue as number);
-  }
-  if (!value) {
-    return defaultValue ?? (fallbackValue as number);
-  }
-  return parseFloat(value);
+  const parsed = parseFloat(value);
+  if (!Number.isFinite(parsed)) return defaultValue ?? (fallbackValue as number);
+  return parsed;
 }
 
 /** Inverse of `numerise` (NumeriseConverter.fromView): number back to string. */

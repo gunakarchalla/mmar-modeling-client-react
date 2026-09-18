@@ -355,8 +355,8 @@ describe("InstanceCreationHandler — tables", () => {
     expect(nested.table_attributes.map((cell) => [cell.uuid_attribute, cell.table_row, cell.table_attribute_reference])).toEqual([
       ["col-deep", 0, nested.uuid],
     ]);
-    // A column without a default gets the placeholder every attribute without one gets.
-    expect(nested.table_attributes[0].value).toBe("not defined");
+    // A column without a default starts empty, like every attribute without one.
+    expect(nested.table_attributes[0].value).toBe("");
   });
 
   it("creates the cells of a further row without numbering or attaching them", async () => {

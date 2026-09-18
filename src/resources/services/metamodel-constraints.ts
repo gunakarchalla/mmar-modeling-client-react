@@ -1,4 +1,4 @@
-import type { Attribute } from "@gds";
+import { value_matches_pattern, type Attribute } from "@gds";
 import { logger } from "./logger";
 
 /**
@@ -30,32 +30,19 @@ export function reportMetamodelViolation(detail?: string): void {
  * Whether `value` satisfies the regular expression of the attribute type the meta
  * attribute belongs to — letters typed into a Float attribute do not.
  *
- * This mirrors the server's `regexExValidator` rule deliberately closely: the same
- * "gmi" flags, the same `String(value).match(...)` test, and the same two cases that
- * are accepted without being tested at all — an attribute type that states no regex,
- * and an instance carrying no value. Anything accepted here and refused there comes
- * back as the 403 described above, so the two must not drift apart.
+ * The verdict itself comes from `value_matches_pattern` in gds, which the server's
+ * `regexExValidator` rule and the metamodeling client apply to the same values, so a
+ * value accepted here cannot be refused there — which would cost the user the whole
+ * scene, as described above. An attribute type that states no regex constrains nothing.
+ *
+ * An EMPTY value is checked like any other: whether an attribute may be left unset is
+ * what its type's regex says.
  */
 export function attributeValueMatchesRegex(
   value: string | null | undefined,
   metaAttribute: Attribute | null | undefined,
 ): boolean {
-  const regexValue = metaAttribute?.attribute_type?.regex_value;
-  if (!regexValue) return true;
-  if (value === null || value === undefined) return true;
-
-  let regex: RegExp;
-  try {
-    // `regex_value` is declared a RegExp in gds but arrives from the API as a string.
-    // The RegExp constructor accepts either, and applies the server's flags to both.
-    regex = new RegExp(regexValue as unknown as string, "gmi");
-  } catch {
-    // A pattern the browser cannot compile is not a constraint this client can
-    // enforce — let the edit through and leave the verdict to the server.
-    return true;
-  }
-
-  return String(value).match(regex) !== null;
+  return value_matches_pattern(value, metaAttribute?.attribute_type?.regex_value);
 }
 
 /** The attribute type's name ("Float"), for the log-window detail line. */
