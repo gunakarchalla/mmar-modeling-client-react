@@ -29,11 +29,10 @@
     "importHelpers": false,
 
     /* Path aliases */
-    "baseUrl": ".",
     "paths": {
       "@gds": ["../mmar-global-data-structure/index.ts"],
       "@gds/*": ["../mmar-global-data-structure/*"],
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src"]
