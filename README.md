@@ -1,7 +1,7 @@
 # mmar-modeling-client-react
 
-The MMAR **modeling** client on **React 18 + TypeScript 5 + Vite 5 + MUI (Material
-UI) 5 + Zustand**, with **three.js** for the 3D/2D/AR world and **yjs** for real-time
+The MMAR **modeling** client on **React 19 + TypeScript 5 + Vite 8 + MUI (Material
+UI) 9 + Zustand 5**, with **three.js** for the 3D/2D/AR world and **yjs** for real-time
 collaboration. It is a sibling of `mmar-metamodeling-client-react` and talks to the
 same `mmar-server` and `mmar-sync-server`.
 
@@ -29,10 +29,10 @@ and the toolbar buttons) — see [Undo/redo](#undoredo).
 
 | Concern        | Choice                                              |
 | -------------- | --------------------------------------------------- |
-| Framework      | React 18 (single-page, **no router**)               |
-| UI components  | MUI 5 + Emotion                                     |
+| Framework      | React 19 (single-page, **no router**)               |
+| UI components  | MUI 9 + Emotion                                     |
 | State          | Zustand                                             |
-| Build / dev    | Vite 5                                              |
+| Build / dev    | Vite 8                                              |
 | Language       | TypeScript 5 (strict)                               |
 | Tests          | Vitest + Testing Library + jsdom                    |
 | 3D / AR        | three.js + troika-three-text + WebXR (`XRButton`)   |
@@ -43,8 +43,8 @@ and the toolbar buttons) — see [Undo/redo](#undoredo).
 
 Notifications are MUI-native: `logStore` + `Snackbar` (`AppSnackbar`). File pickers are
 MUI file inputs, and keyboard shortcuts are a plain `keydown` hook
-(`useKeyboardShortcuts`). Monaco and js-beautify are present to mirror the sibling
-stack but currently unused — this client has no code editor.
+(`useKeyboardShortcuts`). There is no code editor here — vizRep and procedure code is
+authored in `mmar-metamodeling-client-react`, which is where Monaco lives.
 
 ## Architecture
 
@@ -76,7 +76,6 @@ src/
     scenegroup/ model-tree/ palette/ attribute-window/ simulation-window/ user-legend/
     dialogs/                  # every modal (create/save-as/copy/delete/import/share/algorithm/upload/...)
     auth/ common/ hooks/
-  stubs/jsonwebtoken.ts       # browser stub for the Node-only jsonwebtoken (gds User imports it)
 ```
 
 ### Established idioms

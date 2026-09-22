@@ -60,8 +60,6 @@ export class ProcedureUtility {
       if (generalProcedureCode) {
         // run the general procedure
         await this.runProcedureFunction(generalProcedureCode);
-        // after running the general procedure, check for visualization updates
-        //await this.updateChecker.checkForVisualizationUpdate();
       }
     }
 
@@ -73,8 +71,6 @@ export class ProcedureUtility {
       if (specificProcedureCode) {
         // run the specific procedure
         await this.runProcedureFunction(specificProcedureCode);
-        // after running the specific procedure, check for visualization updates
-        //await this.updateChecker.checkForVisualizationUpdate();
       }
     }
   }
